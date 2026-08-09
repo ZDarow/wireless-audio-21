@@ -1,0 +1,22 @@
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+.vscode/extensions.json
+.vscode/settings.json
+
+# Генерируемые файлы конфигурации (из config.env)
+firmware/common/generated/
+config.env
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Сборка и тестовые бинарники
+test/*_bin
+test/*.d
+
+# Системное
+.DS_Store
+*.swp
