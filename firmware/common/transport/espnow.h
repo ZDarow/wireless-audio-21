@@ -24,10 +24,10 @@ public:
     bool begin() {
         if (esp_now_init() != ESP_OK) return false;
 
-        esp_now_register_recv_cb([](const esp_now_recv_info_t* info, const uint8_t* data, int len) {
+        esp_now_register_recv_cb([](const uint8_t* mac, const uint8_t* data, int len) {
             if (g_rxCallback) {
                 MacAddr from;
-                memcpy(from.bytes, info->src_addr, 6);
+                memcpy(from.bytes, mac, 6);
                 g_rxCallback(data, static_cast<size_t>(len), from);
             }
         });

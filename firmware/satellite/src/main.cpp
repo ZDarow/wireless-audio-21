@@ -39,12 +39,12 @@ static volatile bool g_masterOnline = false;
 static uint32_t g_lastRxMs = 0;
 static uint32_t g_packetsRx = 0;
 
-// Сторона сателлита
+// Сторона сателлита: 0 = left, 1 = right (задаётся -DAUDIO_SATELLITE_SIDE).
 #ifndef AUDIO_SATELLITE_SIDE
-#define AUDIO_SATELLITE_SIDE LEFT
+#define AUDIO_SATELLITE_SIDE 0
 #endif
 
-#if AUDIO_SATELLITE_SIDE == RIGHT
+#if AUDIO_SATELLITE_SIDE == 1
 static constexpr uint8_t kMyChannel = kChannelRight;
 #else
 static constexpr uint8_t kMyChannel = kChannelLeft;
@@ -129,7 +129,9 @@ static void handleConsoleCommand(const String& line) {
     if (cmd.startsWith("delay")) {
         int ms = cmd.substring(6).toInt();
         if (ms >= kMinDelayMs && ms <= kMaxDelayMs) {
-            g_cfg.delayLeftMs = ms; // side-зависимо, но храним в delayLeftMs
+            // Храним задержку в поле, соответствующем стороне сателлита.
+            if (g_cfg.side == SatelliteSide::Right) g_cfg.delayRightMs = ms;
+            else g_cfg.delayLeftMs = ms;
             g_delay->setDelayMs(ms);
             Serial.println("ok");
         } else Serial.println("err");
@@ -159,10 +161,14 @@ void setup() {
         g_cfg = defaultConfig();
         g_cfg.role = NodeRole::Satellite;
     }
-    g_cfg.side = (AUDIO_SATELLITE_SIDE == RIGHT) ? SatelliteSide::Right : SatelliteSide::Left;
+    g_cfg.side = (AUDIO_SATELLITE_SIDE == 1) ? SatelliteSide::Right : SatelliteSide::Left;
 
     g_delay = new DelayLine(kMaxDelayMs, g_cfg.sampleRate);
-    g_delay->setDelayMs(g_cfg.delaySubMs);
+    // Стартовая задержка из поля, соответствующего стороне сателлита.
+    uint32_t startDelayMs = (g_cfg.side == SatelliteSide::Right)
+                                ? static_cast<uint32_t>(g_cfg.delayRightMs)
+                                : static_cast<uint32_t>(g_cfg.delayLeftMs);
+    g_delay->setDelayMs(startDelayMs);
 
     g_jitter = new JitterBuffer(g_cfg.sampleRate / 20); // ~50 мс ёмкость
     g_jitter->setTargetMs(15, g_cfg.sampleRate);        // ~15 мс целевой уровень

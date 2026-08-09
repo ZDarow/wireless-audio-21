@@ -26,7 +26,7 @@ public:
         Serial.print('[');
         Serial.print(tag);
         Serial.print("] ");
-        printArgs(std::forward<Args>(args)...);
+        print(std::forward<Args>(args)...);
         Serial.println();
     }
 

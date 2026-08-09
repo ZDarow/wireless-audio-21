@@ -47,7 +47,7 @@ static volatile bool g_leftOnline = false;
 static volatile bool g_rightOnline = false;
 static volatile bool g_a2dpConnected = false;
 
-static ESP32A2DPSink g_a2dp;
+static BluetoothA2DPSink g_a2dp;
 
 // ---------------------------------------------------------------------------
 // I2S выход сабвуфера (моно)
@@ -143,9 +143,9 @@ static void a2dpDataCallback(const uint8_t* data, uint32_t samples) {
     }
 }
 
-static void a2dpConnectionState(bool connected) {
-    g_a2dpConnected = connected;
-    Logger::info("a2dp", connected ? "connected" : "disconnected");
+static void a2dpConnectionState(esp_a2d_connection_state_t state, void*) {
+    g_a2dpConnected = (state == ESP_A2D_CONNECTION_STATE_CONNECTED);
+    Logger::info("a2dp", g_a2dpConnected ? "connected" : "disconnected");
 }
 
 // ---------------------------------------------------------------------------
@@ -305,7 +305,9 @@ void setup() {
     }
 
     g_a2dp.set_auto_reconnect(true);
-    g_a2dp.set_on_data_received(a2dpDataCallback);
+    // i2s_output=false: данные отдаются в наш callback, а не пишутся в I2S
+    // библиотекой (I2S сабвуфера управляется вручную в a2dpDataCallback).
+    g_a2dp.set_stream_reader(a2dpDataCallback, false);
     g_a2dp.set_on_connection_state_changed(a2dpConnectionState);
     g_a2dp.start("Audio21-Master");
 

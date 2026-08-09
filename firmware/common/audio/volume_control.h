@@ -29,21 +29,23 @@ public:
 
     // Обработка одного семпла (моно). Возвращает семпл с применённой громкостью.
     int16_t process(int16_t sample) {
-        // Плавный фейд к целевому значению — убирает щелчки при скачках громкости.
-        if (m_current < m_target) {
-            m_current += m_fadeStep;
-            if (m_current > m_target) m_current = m_target;
-        } else if (m_current > m_target) {
-            m_current -= m_fadeStep;
-            if (m_current < m_target) m_current = m_target;
-        }
-
-        float g = m_muted ? 0.0f : m_current;
+        float g = fade();
         float out = static_cast<float>(sample) * g;
         // Ограничение по int16
         if (out > 32767.0f) out = 32767.0f;
         if (out < -32768.0f) out = -32768.0f;
         return static_cast<int16_t>(out);
+    }
+
+    // Обработка одного семпла в float (-1..1). Возвращает float с громкостью.
+    // Используется DSP-конвейером, где сигнал уже в float.
+    float process(float sample) {
+        float g = fade();
+        float out = sample * g;
+        // Ограничение по диапазону float -1..1
+        if (out > 1.0f) out = 1.0f;
+        if (out < -1.0f) out = -1.0f;
+        return out;
     }
 
     // Обработка стереопары (L, R).
@@ -56,6 +58,18 @@ public:
     void resetToSilence() { m_current = 0.0f; }
 
 private:
+    // Плавный фейд к целевому значению — убирает щелчки при скачках громкости.
+    // Возвращает текущий коэффициент громкости (0..1).
+    float fade() {
+        if (m_current < m_target) {
+            m_current += m_fadeStep;
+            if (m_current > m_target) m_current = m_target;
+        } else if (m_current > m_target) {
+            m_current -= m_fadeStep;
+            if (m_current < m_target) m_current = m_target;
+        }
+        return m_muted ? 0.0f : m_current;
+    }
     // Линейная шкала: 0..100 → 0.0..1.0. Кривая близка к воспринимаемой громкости.
     static float volumeToLinear(int v) {
         if (v <= 0) return 0.0f;

@@ -27,7 +27,7 @@ public:
     // true, когда период истёк; при срабатывании перезапускает отсчёт.
     bool tick() {
         uint32_t now = millis();
-        if (!elapsedSince(m_last) >= m_period) return false;
+        if (elapsedSince(m_last) < m_period) return false;
         m_last = now;
         return true;
     }

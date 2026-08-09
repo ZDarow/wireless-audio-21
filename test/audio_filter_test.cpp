@@ -69,22 +69,23 @@ static void test_crossover_frequency_response() {
 // --- Громкость: шкала 0..100, mute ---
 static void test_volume() {
     VolumeControl vol(0.5f); // быстрый фейд для теста
+    const int16_t kTestSample = 1000;
     vol.setVolume(100);
-    int16_t a = vol.process(1000);
+    int16_t a = vol.process(kTestSample);
     // При первом вызове фейд ещё идёт от 0 к 1.0, но с шагом 0.5 быстро сойдётся.
-    for (int i = 0; i < 10; i++) a = vol.process(1000);
+    for (int i = 0; i < 10; i++) a = vol.process(kTestSample);
     CHECK(a > 900, "volume 100 ≈ passthrough");
 
     vol.setVolume(0);
-    for (int i = 0; i < 10; i++) a = vol.process(1000);
+    for (int i = 0; i < 10; i++) a = vol.process(kTestSample);
     CHECK(a == 0, "volume 0 = тишина");
 
     vol.setVolume(50);
-    for (int i = 0; i < 50; i++) a = vol.process(1000);
+    for (int i = 0; i < 50; i++) a = vol.process(kTestSample);
     CHECK(a > 0 && a < 1000, "volume 50 = промежуточное значение");
 
     vol.setMute(true);
-    a = vol.process(1000);
+    a = vol.process(kTestSample);
     CHECK(a == 0, "mute = тишина");
 }
 
