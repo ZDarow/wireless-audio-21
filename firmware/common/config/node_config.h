@@ -164,9 +164,26 @@ struct NodeConfig {
     }
 };
 
-// Дефолтная конфигурация из макросов
+// Дефолтная конфигурация из макросов (генерируются из config.env).
+// Роль/источник/транспорт берутся из AUDIO_NODE_ROLE_MASTER,
+// AUDIO_SOURCE_MODE_A2DP, AUDIO_TRANSPORT_MODE_ESPNOW.
 inline NodeConfig defaultConfig() {
     NodeConfig cfg;
+#if AUDIO_NODE_ROLE_MASTER
+    cfg.role = NodeRole::Master;
+#else
+    cfg.role = NodeRole::Satellite;
+#endif
+#if AUDIO_SOURCE_MODE_A2DP
+    cfg.source = AudioSource::A2DP;
+#else
+    cfg.source = AudioSource::WiFi;
+#endif
+#if AUDIO_TRANSPORT_MODE_ESPNOW
+    cfg.transport = TransportMode::EspNow;
+#else
+    cfg.transport = TransportMode::Udp;
+#endif
     cfg.clamp();
     return cfg;
 }

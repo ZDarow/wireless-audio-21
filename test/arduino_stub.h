@@ -19,5 +19,23 @@
 typedef uint8_t byte;
 typedef bool boolean;
 
-// Минимальные псевдонимы, которые могут использоваться в заголовках.
-inline unsigned long millis() { return 0; }
+// Переменная времени для тестов timing.h (millis() читает её).
+inline unsigned long g_millis = 0;
+inline unsigned long millis() { return g_millis; }
+
+// Минимальная заглушка Serial для компиляции logger.h.
+struct SerialStub {
+    void print(const char*) {}
+    void print(char) {}
+    void print(int) {}
+    void print(unsigned int) {}
+    void print(long) {}
+    void print(unsigned long) {}
+    void print(float) {}
+    void print(double) {}
+    void println() {}
+    void println(const char*) {}
+    void println(int) {}
+    void println(unsigned long) {}
+};
+inline SerialStub Serial;
