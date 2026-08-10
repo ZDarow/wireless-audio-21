@@ -48,7 +48,7 @@ wireless-audio-21/
 │   └── satellite/    src/main.cpp, include/satellite_config.h
 ├── scripts/                    # generate_config.py, flash_master.sh, flash_satellite.sh
 ├── test/                       # host-тесты (make test)
-└── docs/                       # PLAN.md (план/требования), архитектура
+└── docs/                       # PLAN.md, TASKS.md, architecture.md, hardware.md, wiring.md
 ```
 
 ## Быстрый старт
@@ -92,9 +92,9 @@ http://<IP-мастера>/
 
 ```
 GET  /api/status            # состояние узла (JSON)
-POST /api/volume            # {"volume":60} | {"mute":true}
-POST /api/crossover         # {"hz":90}
-POST /api/delay             # {"channel":"left","ms":10}
+PUT  /api/volume            # {"volume":60} | {"mute":true}
+PUT  /api/crossover         # {"hz":90}
+PUT  /api/delay             # {"channel":"left","ms":10}
 POST /api/transport         # {"mode":"espnow"}
 POST /api/pair              # {"side":"left","mac":"AA:BB:CC:DD:EE:01"}
 POST /api/save              # сохранить в NVS
@@ -121,5 +121,9 @@ reboot
 - Python 3.10+
 - gcc (для host-тестов)
 
-Подробности: [docs/PLAN.md](docs/PLAN.md) — план, требования, архитектура,
-карта расширений (Web UI, OLED, Wi-Fi источник).
+Подробности:
+- [docs/PLAN.md](docs/PLAN.md) — план, требования, карта расширений
+- [docs/architecture.md](docs/architecture.md) — архитектура, потоки данных, REST API
+- [docs/hardware.md](docs/hardware.md) — железо, GPIO, питание
+- [docs/wiring.md](docs/wiring.md) — схемы подключения
+- [docs/TASKS.md](docs/TASKS.md) — файл задач (техдолг, тесты, фичи)
