@@ -1,0 +1,66 @@
+# AGENTS.md — руководство для агентов и разработчиков
+
+Беспроводная аудиосистема 2.1 на ESP32: мастер (сабвуфер) принимает звук по A2DP,
+обрабатывает DSP-конвейером и передаёт на два беспроводных сателлита (ESP-NOW/UDP).
+
+## Команды
+
+- **Host-тесты** (без железа, чистые модули):
+  ```
+  cd test && make test          # Linux/macOS
+  mingw32-make -C test test     # Windows (MinGW), если доступен sh
+  ```
+  Если make/sh недоступны — компилировать вручную:
+  ```
+  g++ -std=c++17 -Wall -Wextra -O2 -I. -I../firmware/common/audio \
+      -I../firmware/common/transport -I../firmware/common/util \
+      -I../firmware/common/config audio_filter_test.cpp -o audio_filter_test_bin.exe -lm
+  ```
+- **Сборка прошивки** (PlatformIO, 3 env):
+  ```
+  pio run -e master_a2dp
+  pio run -e satellite_left
+  pio run -e satellite_right
+  ```
+  PlatformIO может быть не установлен на машине разработчика — проверять код на
+  хосте через host-тесты, сборку оставлять CI.
+- **Генерация конфига**:
+  ```
+  python3 scripts/generate_config.py config.env
+  ```
+  Результат — `firmware/common/generated/generated_config.h` (gitignored).
+
+## Архитектура (кратко)
+
+- Общий код — **header-only** в `firmware/common` (config/audio/transport/ui/util),
+  подключается через `build_flags -I` в `platformio.ini`.
+- Роли (master/satellite) изолируются `build_src_filter` по env, не препроцессором.
+- Поток мастера: A2DP → `PcmPipeline` (tone → limiter → volume → LR4 crossover) →
+  left/right → `DelayLine` → батч 117 семплов → ESP-NOW/UDP; sub → `DelayLine` → I2S.
+- Поток сателлита: RX → `parsePacket` → `JitterBuffer` → `DelayLine` → I2S.
+- Пакет: 16-байт заголовок `AudioPacketHeader` + payload ≤ 234 байт.
+- Управление: serial-консоль, Web UI + REST API (`firmware/master/include/web_server.h`).
+
+## Соглашения
+
+- C++17, header-only модули без зависимостей от Arduino-железа (для host-тестов).
+- Конфигурация — макросы из `generated_config.h` (генерируется), дефолты в
+  `node_config.h`; правки конфига — через `config.env`, не вручную.
+- Вся документация по проекту — в `docs/` (`PLAN.md` — план/требования,
+  `TASKS.md` — задачи/техдолг, `architecture.md`, `hardware.md`, `wiring.md`).
+- Обновлять `docs/TASKS.md` при закрытии/добавлении задач.
+
+## Тестирование
+
+- Чистые DSP/transport/util-модули покрываются host-тестами в `test/`.
+- Ожидается: после изменений в `firmware/common` host-тесты зелёные.
+- Железо-зависимое (I2S, NVS, ESP-NOW, Wi-Fi) покрывается только ручной проверкой.
+
+## Известные проблемы и техдолг
+
+- `master/src/main.cpp`: флаги `g_leftOnline`/`g_rightOnline` нигде не выставляются
+  в true — статус сателлитов всегда «offline» (см. TASKS.md, баг B1).
+- Конфликт пинов в `config.example.h`: `AUDIO_I2S_DATA_OUT=22` и `AUDIO_OLED_SCL=22`.
+- CI (`.github/workflows/ci.yml`) требует активации GitHub Actions; в workflow нет
+  `workflow_dispatch`.
+- Актуальный список задач/техдолга — `docs/TASKS.md` (T8–T10, F12–F16 открыты).
