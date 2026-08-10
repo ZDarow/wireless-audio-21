@@ -30,14 +30,16 @@ public:
 
     // Загрузить конфиг. При отсутствии/несовпадении версии заполняет дефолтами
     // и возвращает false (вызывающий может при желании сохранить дефолты).
+    // Открываем в RW-режиме: на свежем чипе namespace создаётся без
+    // ошибочного лога NVS "nvs_open failed: NOT_FOUND".
     static bool load(NodeConfig& out) {
         Preferences prefs;
-        if (!prefs.begin(kNamespace, true)) {
+        if (!prefs.begin(kNamespace, false)) {
             out = defaultConfig();
             return false;
         }
         uint16_t ver = prefs.getUShort(kKeyVersion, 0);
-        size_t sz = prefs.getBytesLength(kKey);
+        size_t sz = prefs.isKey(kKey) ? prefs.getBytesLength(kKey) : 0;
         if (ver != kVersion || sz != sizeof(NodeConfig)) {
             prefs.end();
             out = defaultConfig();

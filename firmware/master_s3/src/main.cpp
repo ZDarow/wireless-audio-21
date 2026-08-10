@@ -38,27 +38,27 @@ static uint32_t g_packetBytesRx = 0;
 
 static void printDiagnostics() {
     Logger::info("diag", "--- ESP32-S3 master ---");
-    Logger::info("diag", "chip: %s, rev %d, cores %d",
-                 ESP.getChipModel(), (int)ESP.getChipRevision(), (int)ESP.getChipCores());
-    Logger::info("diag", "flash: %u MB", ESP.getFlashChipSize() / (1024 * 1024));
-    Logger::info("diag", "psram: %u MB", ESP.getPsramSize() / (1024 * 1024));
-    Logger::info("diag", "heap free: %lu", (unsigned long)ESP.getFreeHeap());
-    Logger::info("diag", "wifi mode: %s", wifiModeToString(g_cfg.wifiMode));
-    Logger::info("diag", "udp audio port: %u", g_cfg.udpAudioPort);
-    Logger::info("diag", "i2s pins: bck=%u ws=%u data=%u",
-                 g_cfg.i2sBck, g_cfg.i2sWs, g_cfg.i2sDataOut);
-    Logger::info("diag", "left sat MAC: %02X:%02X:%02X:%02X:%02X:%02X",
-                 g_cfg.leftSatMac.bytes[0], g_cfg.leftSatMac.bytes[1],
-                 g_cfg.leftSatMac.bytes[2], g_cfg.leftSatMac.bytes[3],
-                 g_cfg.leftSatMac.bytes[4], g_cfg.leftSatMac.bytes[5]);
-    Logger::info("diag", "right sat MAC: %02X:%02X:%02X:%02X:%02X:%02X",
-                 g_cfg.rightSatMac.bytes[0], g_cfg.rightSatMac.bytes[1],
-                 g_cfg.rightSatMac.bytes[2], g_cfg.rightSatMac.bytes[3],
-                 g_cfg.rightSatMac.bytes[4], g_cfg.rightSatMac.bytes[5]);
-    Logger::info("diag", "transport: %s", transportToString(g_cfg.transport));
-    Logger::info("diag", "crossover: %d Hz", g_cfg.crossoverHz);
-    Logger::info("diag", "delays ms: L=%d R=%d Sub=%d",
-                 g_cfg.delayLeftMs, g_cfg.delayRightMs, g_cfg.delaySubMs);
+    Logger::infof("diag", "chip: %s, rev %d, cores %d",
+                  ESP.getChipModel(), (int)ESP.getChipRevision(), (int)ESP.getChipCores());
+    Logger::infof("diag", "flash: %u MB", ESP.getFlashChipSize() / (1024 * 1024));
+    Logger::infof("diag", "psram: %u MB", ESP.getPsramSize() / (1024 * 1024));
+    Logger::infof("diag", "heap free: %lu", (unsigned long)ESP.getFreeHeap());
+    Logger::infof("diag", "wifi mode: %s", wifiModeToString(g_cfg.wifiMode));
+    Logger::infof("diag", "udp audio port: %u", g_cfg.udpAudioPort);
+    Logger::infof("diag", "i2s pins: bck=%u ws=%u data=%u",
+                  g_cfg.i2sBck, g_cfg.i2sWs, g_cfg.i2sDataOut);
+    Logger::infof("diag", "left sat MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+                  g_cfg.leftSatMac.bytes[0], g_cfg.leftSatMac.bytes[1],
+                  g_cfg.leftSatMac.bytes[2], g_cfg.leftSatMac.bytes[3],
+                  g_cfg.leftSatMac.bytes[4], g_cfg.leftSatMac.bytes[5]);
+    Logger::infof("diag", "right sat MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+                  g_cfg.rightSatMac.bytes[0], g_cfg.rightSatMac.bytes[1],
+                  g_cfg.rightSatMac.bytes[2], g_cfg.rightSatMac.bytes[3],
+                  g_cfg.rightSatMac.bytes[4], g_cfg.rightSatMac.bytes[5]);
+    Logger::infof("diag", "transport: %s", transportToString(g_cfg.transport));
+    Logger::infof("diag", "crossover: %d Hz", g_cfg.crossoverHz);
+    Logger::infof("diag", "delays ms: L=%d R=%d Sub=%d",
+                  g_cfg.delayLeftMs, g_cfg.delayRightMs, g_cfg.delaySubMs);
 
     // Критерий корректности PSRAM (ТЗ §14.3).
     if (ESP.getPsramSize() == 0) {
@@ -82,23 +82,23 @@ static bool initWifi() {
             return false;
         }
         delay(200);
-        Logger::info("wifi", "AP '%s' on channel %d, IP: %s",
-                     g_cfg.wifiSsid, kDefaultWifiChannel,
-                     WiFi.softAPIP().toString().c_str());
+        Logger::infof("wifi", "AP '%s' on channel %d, IP: %s",
+                      g_cfg.wifiSsid, kDefaultWifiChannel,
+                      WiFi.softAPIP().toString().c_str());
         return true;
     }
 
     // STA
     WiFi.mode(WIFI_STA);
     WiFi.begin(g_cfg.wifiSsid, g_cfg.wifiPassword);
-    Logger::info("wifi", "Connecting to '%s'...", g_cfg.wifiSsid);
+    Logger::infof("wifi", "Connecting to '%s'...", g_cfg.wifiSsid);
     int tries = 0;
     while (WiFi.status() != WL_CONNECTED && tries++ < 40) delay(500);
     if (WiFi.status() != WL_CONNECTED) {
         Logger::error("wifi", "connect failed");
         return false;
     }
-    Logger::info("wifi", "connected, IP: %s", WiFi.localIP().toString().c_str());
+    Logger::infof("wifi", "connected, IP: %s", WiFi.localIP().toString().c_str());
     return true;
 }
 
@@ -155,7 +155,7 @@ void setup() {
 
     // UDP-listener аудио от смартфона (Этап 2: приём PCM-пакетов).
     if (g_udp.begin(g_cfg.udpAudioPort)) {
-        Logger::info("master", "UDP audio listener on port %u", g_cfg.udpAudioPort);
+        Logger::infof("master", "UDP audio listener on port %u", g_cfg.udpAudioPort);
     } else {
         Logger::error("master", "UDP begin failed");
     }
