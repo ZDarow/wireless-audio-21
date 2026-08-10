@@ -7,20 +7,22 @@
 
 // --- Роль и режимы ---
 #define AUDIO_NODE_ROLE_MASTER    1   // 1 = мастер, 0 = сателлит
-#define AUDIO_SOURCE_MODE_A2DP    1   // 1 = A2DP, 0 = Wi-Fi
+#define AUDIO_SOURCE_MODE_A2DP    0   // 1 = A2DP, 0 = Wi-Fi (S3: только Wi-Fi)
 #define AUDIO_TRANSPORT_MODE_ESPNOW 1 // 1 = ESP-NOW, 0 = UDP
+#define AUDIO_WIFI_MODE_AP        1   // 1 = AP_DIRECT, 0 = STA
 
 // --- Wi-Fi ---
-#define AUDIO_WIFI_SSID      "MyNetwork"
-#define AUDIO_WIFI_PASSWORD  "MyPassword"
+#define AUDIO_WIFI_SSID      "Audio21-Master"
+#define AUDIO_WIFI_PASSWORD  "audio21master"
 #define AUDIO_HOSTNAME       "audio-master"
+#define AUDIO_UDP_PORT       5004
 
 // --- Сателлиты (MAC) ---
 #define AUDIO_LEFT_SAT_MAC   {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01}
 #define AUDIO_RIGHT_SAT_MAC  {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x02}
 
 // --- Формат PCM ---
-#define AUDIO_SAMPLE_RATE        44100
+#define AUDIO_SAMPLE_RATE        48000
 #define AUDIO_BITS_PER_SAMPLE    16
 #define AUDIO_CHANNELS           2
 

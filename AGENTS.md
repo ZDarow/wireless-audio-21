@@ -18,9 +18,9 @@
   ```
 - **Сборка прошивки** (PlatformIO, 3 env):
   ```
-  pio run -e master_a2dp
-  pio run -e satellite_left
-  pio run -e satellite_right
+  pio run -e master_s3_wifi
+  pio run -e satellite_s3_left
+  pio run -e satellite_s3_right
   ```
   PlatformIO может быть не установлен на машине разработчика — проверять код на
   хосте через host-тесты, сборку оставлять CI.
@@ -35,10 +35,14 @@
 - Общий код — **header-only** в `firmware/common` (config/audio/transport/ui/util),
   подключается через `build_flags -I` в `platformio.ini`.
 - Роли (master/satellite) изолируются `build_src_filter` по env, не препроцессором.
-- Поток мастера: A2DP → `PcmPipeline` (tone → limiter → volume → LR4 crossover) →
-  left/right → `DelayLine` → батч 117 семплов → ESP-NOW/UDP; sub → `DelayLine` → I2S.
+- **Целевая платформа — ESP32-S3** (мастер = сабвуфер). S3 не поддерживает A2DP,
+  поэтому источник аудио — Wi-Fi UDP PCM со смартфона (`firmware/master_s3/`).
+- Поток мастера (план): Wi-Fi UDP → jitter buffer → DSP (tone → limiter → volume →
+  LR4 crossover) → left/right → `DelayLine` → батч 117 семплов → ESP-NOW/UDP;
+  sub → `DelayLine` → I2S.
 - Поток сателлита: RX → `parsePacket` → `JitterBuffer` → `DelayLine` → I2S.
-- Пакет: 16-байт заголовок `AudioPacketHeader` + payload ≤ 234 байт.
+- Пакет мастер→сателлит: 16-байт заголовок `AudioPacketHeader` + payload ≤ 234 байт.
+  Пакет смартфон→мастер — отдельный (magic 0xA210, см. ТЗ §10).
 - Управление: serial-консоль, Web UI + REST API (`firmware/master/include/web_server.h`).
 
 ## Соглашения
@@ -58,9 +62,9 @@
 
 ## Известные проблемы и техдолг
 
-- `master/src/main.cpp`: флаги `g_leftOnline`/`g_rightOnline` нигде не выставляются
-  в true — статус сателлитов всегда «offline» (см. TASKS.md, баг B1).
-- Конфликт пинов в `config.example.h`: `AUDIO_I2S_DATA_OUT=22` и `AUDIO_OLED_SCL=22`.
-- CI (`.github/workflows/ci.yml`) требует активации GitHub Actions; в workflow нет
-  `workflow_dispatch`.
-- Актуальный список задач/техдолга — `docs/TASKS.md` (T8–T10, F12–F16 открыты).
+- Конфликт пинов в `config.example.h`: `AUDIO_I2S_DATA_OUT=22` и `AUDIO_OLED_SCL=22`
+  (актуально при реализации OLED-меню, см. TASKS.md B2).
+- CI (`.github/workflows/ci.yml`) требует активации GitHub Actions; для ручного
+  запуска добавлен `workflow_dispatch` (см. TASKS.md T1).
+- Актуальный список задач/техдолга — `docs/TASKS.md` (T1, T8–T10, F12–F16,
+  F18–F20 открыты; B1 и B8 закрыты).

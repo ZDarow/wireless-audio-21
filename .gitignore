@@ -16,7 +16,7 @@ __pycache__/
 *.py[cod]
 
 # Сборка и тестовые бинарники
-test/*_bin
+test/*_bin*
 test/*.d
 
 # Системное

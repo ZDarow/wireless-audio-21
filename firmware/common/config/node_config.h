@@ -20,6 +20,9 @@
 #ifndef AUDIO_TRANSPORT_MODE_ESPNOW
 #define AUDIO_TRANSPORT_MODE_ESPNOW 1
 #endif
+#ifndef AUDIO_WIFI_MODE_AP
+#define AUDIO_WIFI_MODE_AP 1
+#endif
 
 #ifndef AUDIO_WIFI_SSID
 #define AUDIO_WIFI_SSID "MyNetwork"
@@ -30,9 +33,12 @@
 #ifndef AUDIO_HOSTNAME
 #define AUDIO_HOSTNAME "audio-master"
 #endif
+#ifndef AUDIO_UDP_PORT
+#define AUDIO_UDP_PORT 5004
+#endif
 
 #ifndef AUDIO_SAMPLE_RATE
-#define AUDIO_SAMPLE_RATE 44100
+#define AUDIO_SAMPLE_RATE 48000
 #endif
 #ifndef AUDIO_BITS_PER_SAMPLE
 #define AUDIO_BITS_PER_SAMPLE 16
@@ -81,6 +87,9 @@ enum class TransportMode : uint8_t { EspNow = 0, Udp = 1 };
 enum class NodeRole : uint8_t { Master = 0, Satellite = 1 };
 enum class SatelliteSide : uint8_t { Left = 0, Right = 1 };
 
+// Режим Wi-Fi мастера
+enum class WifiMode : uint8_t { ApDirect = 1, Sta = 0 };
+
 // MAC-адрес (6 байт)
 struct MacAddr {
     uint8_t bytes[6];
@@ -121,6 +130,7 @@ struct NodeConfig {
     // --- Источник и транспорт ---
     AudioSource source = AudioSource::A2DP;
     TransportMode transport = TransportMode::EspNow;
+    WifiMode wifiMode = AUDIO_WIFI_MODE_AP ? WifiMode::ApDirect : WifiMode::Sta;
 
     // --- PCM ---
     uint32_t sampleRate = AUDIO_SAMPLE_RATE;
@@ -139,6 +149,7 @@ struct NodeConfig {
     char wifiSsid[33] = AUDIO_WIFI_SSID;
     char wifiPassword[65] = AUDIO_WIFI_PASSWORD;
     char hostname[33] = AUDIO_HOSTNAME;
+    uint16_t udpAudioPort = AUDIO_UDP_PORT;
 
     // --- Сателлиты ---
     MacAddr leftSatMac = MacAddr{AUDIO_LEFT_SAT_MAC};
@@ -184,6 +195,11 @@ inline NodeConfig defaultConfig() {
 #else
     cfg.transport = TransportMode::Udp;
 #endif
+#if AUDIO_WIFI_MODE_AP
+    cfg.wifiMode = WifiMode::ApDirect;
+#else
+    cfg.wifiMode = WifiMode::Sta;
+#endif
     cfg.clamp();
     return cfg;
 }
@@ -192,5 +208,6 @@ inline NodeConfig defaultConfig() {
 inline const char* sourceToString(AudioSource s) { return s == AudioSource::A2DP ? "a2dp" : "wifi"; }
 inline const char* transportToString(TransportMode t) { return t == TransportMode::EspNow ? "espnow" : "udp"; }
 inline const char* sideToString(SatelliteSide s) { return s == SatelliteSide::Left ? "left" : "right"; }
+inline const char* wifiModeToString(WifiMode m) { return m == WifiMode::ApDirect ? "ap_direct" : "sta"; }
 
 } // namespace audio21

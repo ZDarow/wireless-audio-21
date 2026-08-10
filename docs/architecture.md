@@ -202,22 +202,24 @@ docs/                       # PLAN.md, TASKS.md, architecture.md, hardware.md, w
 
 | Env | Роль | build_src_filter | Особые флаги |
 |---|---|---|---|
-| `master_a2dp` | мастер | `+<master/src>` | A2DP, ESP-NOW, PSRAM, Web UI |
-| `satellite_left` | левый сателлит | `+<satellite/src>` | `-DAUDIO_SATELLITE_SIDE=0` |
-| `satellite_right` | правый сателлит | `+<satellite/src>` | `-DAUDIO_SATELLITE_SIDE=1` |
+| `master_s3_wifi` | мастер (S3) | `+<master_s3/src>` | Wi-Fi UDP источник, ESP-NOW/UDP, PSRAM, 16MB |
+| `satellite_s3_left` | левый сателлит (S3) | `+<satellite/src>` | `-DAUDIO_SATELLITE_SIDE=0` |
+| `satellite_s3_right` | правый сателлит (S3) | `+<satellite/src>` | `-DAUDIO_SATELLITE_SIDE=1` |
 
-- Платформа: `espressif32@6.9.0`, фреймворк Arduino, плата `esp32dev`.
-- Partition: `huge_app.csv` (~3 МБ app, без OTA) — ESP32-A2DP не влезает
-  в дефолтные 1.31 МБ.
-- Библиотеки pschatzmann (ESP32-A2DP, arduino-audio-tools) — git-URL'ами,
-  т.к. отсутствуют в реестре PlatformIO.
+- Платформа: `espressif32@6.9.0`, фреймворк Arduino, плата `esp32-s3-devkitc-1`.
+- Мастер: flash 16 MB (`default_16MB.csv`), `memory_type=qio_opi`, PSRAM
+  (`-DBOARD_HAS_PSRAM`), `CORE_DEBUG_LEVEL=2`.
+- Сателлиты: flash/PSRAM — дефолты платы `esp32-s3-devkitc-1`.
+- Библиотеки: Preferences, WebServer (мастер), ArduinoJson, arduino-audio-tools
+  (git-URL, I2S/аудиопотоки). ESP32-A2DP не используется (S3 без A2DP).
+- Старые env (`master_a2dp`, `satellite_left/right`) сохранены в git-истории
+  для перехода; новые env — единственные в `platformio.ini`.
 
 ## 10. Известные ограничения (MVP)
 
-- A2DP-источник: мастер выступает как Bluetooth-приёмник (sink); телефон
-  подключается к «Audio21-Master».
+- Источник аудио — Wi-Fi UDP PCM со смартфона (мастер — приёмник UDP,
+  magic 0xA210, см. ТЗ §10). A2DP недоступен на ESP32-S3.
 - Синхронизация по `timestampMs` (компенсация дрейфа часов) — этап 4 (F14).
-- Wi-Fi UDP-источник вместо A2DP — этап 4 (F13).
 - OLED-меню + энкодер — этап 4 (F12).
 - Fade-in/out при старте/остановке — этап 4 (F15).
 - mDNS (`http://audio-master.local`) — этап 4 (F16).

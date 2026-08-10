@@ -12,7 +12,7 @@
 
 | ID | Задача | Место | Приоритет | Статус |
 |---|---|---|---|---|
-| T1 | **CI не запускается**: на GitHub 0 runs при активном workflow и включённых Actions. Вероятно, Actions не активированы в настройках репозитория (Settings → Actions → Enable). Плюс в `ci.yml` нет `workflow_dispatch` для ручного запуска | `.github/workflows/ci.yml` | Высокий | ⬜ |
+| T1 | **CI не запускается**: на GitHub 0 runs при активном workflow и включённых Actions. Вероятно, Actions не активированы в настройках репозитория (Settings → Actions → Enable). В `ci.yml` добавлен `workflow_dispatch` | `.github/workflows/ci.yml` | Высокий | ⬜ (workflow_dispatch добавлен) |
 
 ---
 
@@ -59,11 +59,14 @@
 | ID | Задача | Место | Приоритет | Статус |
 |---|---|---|---|---|
 | F12 | OLED-меню (SSD1306, U8g2) + энкодер (KY-040): громкость, кроссовер, задержки, статус сателлитов | `firmware/common/ui/display.h`, `encoder.h` | Средний | ⬜ |
-| F13 | Wi-Fi UDP источник (мастер принимает поток по UDP вместо A2DP) | `firmware/master/src/main.cpp` | Средний | ⬜ |
+| F13 | Wi-Fi UDP источник (мастер принимает поток по UDP вместо A2DP). ESP32-S3 не поддерживает A2DP — Wi-Fi UDP PCM (смартфон → мастер) становится единственным источником | `firmware/master_s3/src/main.cpp` | Средний | ⬜ |
 | F14 | Синхронизация воспроизведения по `timestampMs` в пакете (компенсация дрейфа часов) | `firmware/common/transport/audio_packet.h`, `firmware/satellite/src/main.cpp` | Средний | ⬜ |
 | F15 | Защита от щелчков при включении/остановке: fade-in/out на мастере и сателлитах | `firmware/common/audio/volume_control.h` | Средний | ⬜ |
-| F16 | mDNS: доступ к Web UI по `http://audio-master.local` | `firmware/master/src/main.cpp` | Низкий | ⬜ |
+| F16 | mDNS: доступ к Web UI по `http://audio-master.local` | `firmware/master_s3/src/main.cpp` | Низкий | ⬜ |
 | F17 | Документация: `docs/architecture.md`, `docs/hardware.md`, `docs/wiring.md` | `docs/` | Низкий | ✅ |
+| F18 | ESP32-S3: покомпонентные громкости (master/left/right/sub) + fade-in/out, разное время старта каналов (ТЗ §8.2) | `firmware/common/audio/volume_control.h` | Средний | ⬜ |
+| F19 | ESP32-S3: синхронизация часов сателлитов от мастера по timestamp (PTP-подобная, ТЗ §12) | сателлиты | Средний | ⬜ |
+| F20 | ESP32-S3: режим STA + автонастройка Wi-Fi (blink beacon, ТЗ §6.2), UDP/HTTP-аудио (RTP-совместимый, ТЗ §10) | `firmware/master_s3/src/main.cpp` | Низкий | ⬜ |
 
 ---
 
@@ -91,6 +94,20 @@
 - **B1** — статус сателлитов: `EspNowSentCallback` теперь передаёт MAC пира,
   мастер помечает канал online по успешной доставке; в UDP-режиме discovery
   идёт каждые 3 с и обновляет online; timeout 5 с — offline.
+- **Этап 1 (адаптация ESP32-S3)** — выполнено:
+  - `platformio.ini`: новые env `master_s3_wifi`, `satellite_s3_left`,
+    `satellite_s3_right` (board `esp32-s3-devkitc-1`, 16MB
+    `default_16MB.csv`, `memory_type=qio_opi`, PSRAM `-DBOARD_HAS_PSRAM`).
+  - Конфиг: `AUDIO_WIFI_MODE` (AP_DIRECT/STA), `AUDIO_UDP_PORT` (5004),
+    `WifiMode` в `NodeConfig`, `AUDIO_SAMPLE_RATE` → 48000; генератор теперь
+    выдаёт 25 макросов; `config.example.env`/`config.example.h` обновлены.
+  - `firmware/master_s3/` — загрузка S3, стартовая диагностика §14.2
+    (chip/flash/PSRAM/IP/пины/MAC/транспорт/кроссовер/задержки), Wi-Fi
+    AP_DIRECT (канал 6) или STA, UDP-listener на 5004, serial-консоль
+    (`status`, `save`).
+  - CI: `ci.yml` собирает новые S3 env, добавлен `workflow_dispatch`.
+  - Сборка: 3 S3 env — SUCCESS (master 10.7% flash, сателлиты 22.6%);
+    host-тесты зелёные.
 - Осталось: T8 (host-тест генератора), T9 (round-trip ConfigStorage),
-  T10 (тест broadcast-адресации), F12–F16 (OLED, Wi-Fi источник,
-  синхронизация timestampMs, fade, mDNS) + баги B2–B7.
+  T10 (тест broadcast-адресации), T1 (активация Actions), F12–F16, F18–F20,
+  Этап 2 (Wi-Fi приём PCM: `udp_audio_receiver`, jitter buffer, clock recovery).

@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   build-and-test:
@@ -21,10 +22,10 @@ jobs:
       - name: Host tests (gcc, без железа)
         run: make -C test test
 
-      - name: Build master
-        run: pio run -e master_a2dp
+      - name: Build master (ESP32-S3, Wi-Fi UDP)
+        run: pio run -e master_s3_wifi
 
-      - name: Build satellites
+      - name: Build satellites (ESP32-S3)
         run: |
-          pio run -e satellite_left
-          pio run -e satellite_right
+          pio run -e satellite_s3_left
+          pio run -e satellite_s3_right
