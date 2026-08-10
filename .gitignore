@@ -2,6 +2,7 @@
 .pio/
 .pioenvs/
 .piolibdeps/
+.pio-core-master/
 .vscode/extensions.json
 .vscode/settings.json
 .vscode/c_cpp_properties.json

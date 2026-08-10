@@ -9,11 +9,15 @@
 #define AUDIO_NODE_ROLE_MASTER    1   // 1 = мастер, 0 = сателлит
 #define AUDIO_SOURCE_MODE_A2DP    0   // 1 = A2DP, 0 = Wi-Fi (S3: только Wi-Fi)
 #define AUDIO_TRANSPORT_MODE_ESPNOW 1 // 1 = ESP-NOW, 0 = UDP
-#define AUDIO_WIFI_MODE_AP        1   // 1 = AP_DIRECT, 0 = STA
+#define AUDIO_WIFI_MODE_APSTA     1   // 1 = APSTA (репитер), приоритетнее AP
+#define AUDIO_WIFI_MODE_AP        0   // 1 = AP_DIRECT, 0 = STA
 
 // --- Wi-Fi ---
-#define AUDIO_WIFI_SSID      "Audio21-Master"
-#define AUDIO_WIFI_PASSWORD  "audio21master"
+// В режиме APSTA/STA — домашняя сеть; AP мастера: Audio21-Master / audio21master.
+#define AUDIO_WIFI_AP_SSID   "Audio21-Master"
+#define AUDIO_WIFI_AP_PASSWORD "audio21master"
+#define AUDIO_WIFI_SSID      "MyHomeNetwork"
+#define AUDIO_WIFI_PASSWORD  "MyHomePassword"
 #define AUDIO_HOSTNAME       "audio-master"
 #define AUDIO_UDP_PORT       5004
 

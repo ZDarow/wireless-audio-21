@@ -25,7 +25,9 @@ NUMERIC_KEYS = {
 
 # --- Строковые ключи ---
 STRING_KEYS = {
-    "AUDIO_WIFI_SSID", "AUDIO_WIFI_PASSWORD", "AUDIO_HOSTNAME",
+    "AUDIO_WIFI_SSID", "AUDIO_WIFI_PASSWORD",
+    "AUDIO_WIFI_AP_SSID", "AUDIO_WIFI_AP_PASSWORD",
+    "AUDIO_HOSTNAME",
 }
 
 # --- MAC-адреса ---
@@ -51,6 +53,7 @@ ENUM_KEYS = {
     "AUDIO_WIFI_MODE": {
         "AP_DIRECT": ("AUDIO_WIFI_MODE_AP", "1"),
         "STA": ("AUDIO_WIFI_MODE_AP", "0"),
+        "APSTA": ("AUDIO_WIFI_MODE_APSTA", "1"),
     },
 }
 

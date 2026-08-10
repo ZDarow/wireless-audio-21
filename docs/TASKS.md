@@ -67,6 +67,7 @@
 | F18 | ESP32-S3: покомпонентные громкости (master/left/right/sub) + fade-in/out, разное время старта каналов (ТЗ §8.2) | `firmware/common/audio/volume_control.h` | Средний | ⬜ |
 | F19 | ESP32-S3: синхронизация часов сателлитов от мастера по timestamp (PTP-подобная, ТЗ §12) | сателлиты | Средний | ⬜ |
 | F20 | ESP32-S3: режим STA + автонастройка Wi-Fi (blink beacon, ТЗ §6.2), UDP/HTTP-аудио (RTP-совместимый, ТЗ §10) | `firmware/master_s3/src/main.cpp` | Низкий | ⬜ |
+| F21 | Wi-Fi репитер на мастере (APSTA+NAPT): смартфон → AP мастера → NAT → домашняя сеть (интернет). Требует Arduino core 3.x (pioarduino 55.03.311, lwip с `CONFIG_LWIP_IPV4_NAPT=y`); ограничение: один радиомодуль → канал AP следует за каналом домашней сети | `platformio.ini`, `firmware/master_s3/src/main.cpp`, `firmware/common/config/node_config.h` | Средний | ✅ |
 
 ---
 
@@ -111,3 +112,34 @@
 - Осталось: T8 (host-тест генератора), T9 (round-trip ConfigStorage),
   T10 (тест broadcast-адресации), T1 (активация Actions), F12–F16, F18–F20,
   Этап 2 (Wi-Fi приём PCM: `udp_audio_receiver`, jitter buffer, clock recovery).
+
+## 7. Выполнено (обновление 10.08.2026, вечер)
+
+- **F21 — Wi-Fi репитер (APSTA+NAPT)** — реализовано:
+  - `platformio.ini`: env `master_s3_wifi` переведён на pioarduino-платформу
+    (Arduino core 3.3.11 / IDF 5.5.5, тег `55.03.311`), где lwip собран с
+    `CONFIG_LWIP_IP_FORWARD=y` и `CONFIG_LWIP_IPV4_NAPT=y` — NAPT работает
+    из коробки. Официальные PlatformIO 6.x/7.x (core 2.0.17) NAPT не содержат
+    (проверено по sdkconfig и символам `liblwip.a`). Удалена зависимость
+    `martin-ger/esp32_nat_router` (это IDF-прошивка, не Arduino-библиотека).
+  - Конфиг: добавлены AP-креды мастера `AUDIO_WIFI_AP_SSID`/`AUDIO_WIFI_AP_PASSWORD`
+    (ТЗ §6.3: `Audio21-Master`/`audio21master`); `AUDIO_WIFI_SSID`/`PASSWORD` —
+    домашняя сеть (uplink). `NodeConfig` + генератор (+2 строковых ключа, всего 27).
+  - `main.cpp`: режим `ApSta` — `WIFI_AP_STA`, SoftAP (`Audio21-Master`, канал 6),
+    STA-подключение к домашней сети, затем `esp_netif_napt_enable()` (core 3.x,
+    guard `#if ESP_ARDUINO_VERSION_MAJOR >= 3`); при недоступной домашней сети
+    AP остаётся висеть без интернета. Команда `status` выводит `wifi_ap_ip`.
+  - Сборка: `master_s3_wifi` на core 3.3.11 — SUCCESS (RAM 14.2%, Flash 13.5%);
+    сателлиты (core 2.0.17) — SUCCESS.
+  - **Изоляция core-каталога**: пакет pioarduino `framework-arduinoespressif32`
+    (core 3.x) совпадает по имени с фреймворком официальной платформы
+    `espressif32@6.9.0` (core 2.0.17) для сателлитов — в общем `~/.platformio`
+    сборки перезаписывали друг друга (мастер падал с `FRAMEWORK_DIR=None`).
+    Решено: `platformio.master.ini` с `[platformio] core_dir = .pio-core-master`
+    (gitignored) + `extra_configs = platformio.ini`; CI и локальная сборка
+    мастера идут через `pio run -c platformio.master.ini`.
+  - Проверка на железе (COM10): прошито, boot-лог подтверждает
+    `wifi mode: apsta_repeater`, AP `Audio21-Master` (канал 6, 192.168.4.1),
+    STA-подключение к домашней сети `Cudy` (192.168.10.42),
+    `NAPT enabled — AP clients routed to upstream`.
+    Остаётся финальный ручной тест: смартфон → AP мастера → интернет.

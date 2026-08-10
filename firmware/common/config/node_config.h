@@ -23,12 +23,23 @@
 #ifndef AUDIO_WIFI_MODE_AP
 #define AUDIO_WIFI_MODE_AP 1
 #endif
+#ifndef AUDIO_WIFI_MODE_APSTA
+#define AUDIO_WIFI_MODE_APSTA 0
+#endif
 
 #ifndef AUDIO_WIFI_SSID
 #define AUDIO_WIFI_SSID "MyNetwork"
 #endif
 #ifndef AUDIO_WIFI_PASSWORD
 #define AUDIO_WIFI_PASSWORD "MyPassword"
+#endif
+// AP мастера (ТЗ §6.3: Audio21-Master / audio21master).
+// В режиме APSTA/AP используется этот SSID; AUDIO_WIFI_SSID — домашняя сеть.
+#ifndef AUDIO_WIFI_AP_SSID
+#define AUDIO_WIFI_AP_SSID "Audio21-Master"
+#endif
+#ifndef AUDIO_WIFI_AP_PASSWORD
+#define AUDIO_WIFI_AP_PASSWORD "audio21master"
 #endif
 #ifndef AUDIO_HOSTNAME
 #define AUDIO_HOSTNAME "audio-master"
@@ -88,7 +99,7 @@ enum class NodeRole : uint8_t { Master = 0, Satellite = 1 };
 enum class SatelliteSide : uint8_t { Left = 0, Right = 1 };
 
 // Режим Wi-Fi мастера
-enum class WifiMode : uint8_t { ApDirect = 1, Sta = 0 };
+enum class WifiMode : uint8_t { ApDirect = 1, Sta = 0, ApSta = 2 };
 
 // MAC-адрес (6 байт)
 struct MacAddr {
@@ -130,7 +141,8 @@ struct NodeConfig {
     // --- Источник и транспорт ---
     AudioSource source = AudioSource::A2DP;
     TransportMode transport = TransportMode::EspNow;
-    WifiMode wifiMode = AUDIO_WIFI_MODE_AP ? WifiMode::ApDirect : WifiMode::Sta;
+    WifiMode wifiMode = AUDIO_WIFI_MODE_APSTA ? WifiMode::ApSta
+                       : (AUDIO_WIFI_MODE_AP ? WifiMode::ApDirect : WifiMode::Sta);
 
     // --- PCM ---
     uint32_t sampleRate = AUDIO_SAMPLE_RATE;
@@ -146,8 +158,10 @@ struct NodeConfig {
     int delaySubMs = AUDIO_DELAY_SUB_MS;
 
     // --- Сеть ---
-    char wifiSsid[33] = AUDIO_WIFI_SSID;
+    char wifiSsid[33] = AUDIO_WIFI_SSID;            // STA: домашняя сеть
     char wifiPassword[65] = AUDIO_WIFI_PASSWORD;
+    char wifiApSsid[33] = AUDIO_WIFI_AP_SSID;       // AP мастера
+    char wifiApPassword[65] = AUDIO_WIFI_AP_PASSWORD;
     char hostname[33] = AUDIO_HOSTNAME;
     uint16_t udpAudioPort = AUDIO_UDP_PORT;
 
@@ -195,7 +209,9 @@ inline NodeConfig defaultConfig() {
 #else
     cfg.transport = TransportMode::Udp;
 #endif
-#if AUDIO_WIFI_MODE_AP
+#if AUDIO_WIFI_MODE_APSTA
+    cfg.wifiMode = WifiMode::ApSta;
+#elif AUDIO_WIFI_MODE_AP
     cfg.wifiMode = WifiMode::ApDirect;
 #else
     cfg.wifiMode = WifiMode::Sta;
@@ -208,6 +224,12 @@ inline NodeConfig defaultConfig() {
 inline const char* sourceToString(AudioSource s) { return s == AudioSource::A2DP ? "a2dp" : "wifi"; }
 inline const char* transportToString(TransportMode t) { return t == TransportMode::EspNow ? "espnow" : "udp"; }
 inline const char* sideToString(SatelliteSide s) { return s == SatelliteSide::Left ? "left" : "right"; }
-inline const char* wifiModeToString(WifiMode m) { return m == WifiMode::ApDirect ? "ap_direct" : "sta"; }
+inline const char* wifiModeToString(WifiMode m) {
+    switch (m) {
+        case WifiMode::ApDirect: return "ap_direct";
+        case WifiMode::ApSta: return "apsta_repeater";
+        default: return "sta";
+    }
+}
 
 } // namespace audio21

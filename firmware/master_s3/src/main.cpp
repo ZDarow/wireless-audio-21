@@ -14,6 +14,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
+#include <esp_netif.h>
 #include <esp_system.h>
 
 #include "node_config.h"
@@ -67,8 +68,24 @@ static void printDiagnostics() {
 }
 
 // ---------------------------------------------------------------------------
-// Wi-Fi: AP_DIRECT или STA (ТЗ §6.1)
+// Wi-Fi: AP_DIRECT, STA или APSTA-репитер (ТЗ §6.1)
 // ---------------------------------------------------------------------------
+
+// NAPT — репитер: AP-клиенты (смартфон) получают интернет через STA (uplink).
+// API есть только в Arduino core 3.x (IDF 5.1+), где lwip собран с
+// CONFIG_LWIP_IP_FORWARD=y / CONFIG_LWIP_IPV4_NAPT=y (pioarduino 55.03.311).
+static void enableNapt() {
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+    esp_netif_t* ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    if (ap != nullptr && esp_netif_napt_enable(ap) == ESP_OK) {
+        Logger::info("wifi", "NAPT enabled — AP clients routed to upstream");
+    } else {
+        Logger::error("wifi", "NAPT enable failed (lwip без CONFIG_LWIP_IPV4_NAPT?)");
+    }
+#else
+    Logger::warn("wifi", "NAPT requires Arduino core 3.x — skipping");
+#endif
+}
 
 static bool initWifi() {
     WiFi.disconnect(true);
@@ -76,16 +93,43 @@ static bool initWifi() {
 
     if (g_cfg.wifiMode == WifiMode::ApDirect) {
         WiFi.mode(WIFI_AP);
-        bool ok = WiFi.softAP(g_cfg.wifiSsid, g_cfg.wifiPassword, kDefaultWifiChannel);
+        bool ok = WiFi.softAP(g_cfg.wifiApSsid, g_cfg.wifiApPassword, kDefaultWifiChannel);
         if (!ok) {
             Logger::error("wifi", "softAP failed");
             return false;
         }
         delay(200);
         Logger::infof("wifi", "AP '%s' on channel %d, IP: %s",
-                      g_cfg.wifiSsid, kDefaultWifiChannel,
+                      g_cfg.wifiApSsid, kDefaultWifiChannel,
                       WiFi.softAPIP().toString().c_str());
         return true;
+    }
+
+    if (g_cfg.wifiMode == WifiMode::ApSta) {
+        // Репитер: AP для смартфона + STA (домашняя сеть) + NAPT.
+        WiFi.mode(WIFI_AP_STA);
+        bool ok = WiFi.softAP(g_cfg.wifiApSsid, g_cfg.wifiApPassword, kDefaultWifiChannel);
+        if (!ok) {
+            Logger::error("wifi", "softAP failed");
+            return false;
+        }
+        delay(200);
+        Logger::infof("wifi", "AP '%s' on channel %d, IP: %s",
+                      g_cfg.wifiApSsid, kDefaultWifiChannel,
+                      WiFi.softAPIP().toString().c_str());
+
+        WiFi.begin(g_cfg.wifiSsid, g_cfg.wifiPassword);
+        Logger::infof("wifi", "Connecting to upstream '%s'...", g_cfg.wifiSsid);
+        int tries = 0;
+        while (WiFi.status() != WL_CONNECTED && tries++ < 40) delay(500);
+        if (WiFi.status() == WL_CONNECTED) {
+            Logger::infof("wifi", "upstream connected, IP: %s",
+                          WiFi.localIP().toString().c_str());
+            enableNapt();
+        } else {
+            Logger::warn("wifi", "upstream not connected — AP работает без интернета");
+        }
+        return true; // AP работает в любом случае
     }
 
     // STA
@@ -116,6 +160,9 @@ static void handleConsoleCommand(const String& line) {
         Serial.printf("source: %s\n", sourceToString(g_cfg.source));
         Serial.printf("wifi_mode: %s\n", wifiModeToString(g_cfg.wifiMode));
         Serial.printf("wifi_ip: %s\n", WiFi.localIP().toString().c_str());
+        if (g_cfg.wifiMode == WifiMode::ApDirect || g_cfg.wifiMode == WifiMode::ApSta) {
+            Serial.printf("wifi_ap_ip: %s\n", WiFi.softAPIP().toString().c_str());
+        }
         Serial.printf("udp_port: %u\n", g_cfg.udpAudioPort);
         Serial.printf("packets_rx: %lu\n", (unsigned long)g_packetsRx);
         Serial.printf("bytes_rx: %lu\n", (unsigned long)g_packetBytesRx);
