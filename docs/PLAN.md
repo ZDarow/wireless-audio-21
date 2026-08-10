@@ -86,7 +86,7 @@ wireless-audio-21/
 │   ├── common/                 # header-only, общий код
 │   │   ├── config/  node_config.h, storage.h
 │   │   ├── audio/   crossover.h, delay_line.h, volume_control.h, pcm_pipeline.h
-│   │   ├── transport/ audio_packet.h, espnow.h, udp.h
+│   │   ├── transport/ audio_packet.h, espnow.h, udp_transport.h
 │   │   ├── ui/       display.h, encoder.h
 │   │   └── util/     logger.h, timing.h
 │   ├── master/  include/master_config.h, src/main.cpp
@@ -108,7 +108,7 @@ wireless-audio-21/
 - [x] `common/config`: `node_config.h`, `storage.h`
 - [x] `common/util`: `logger.h`, `timing.h`
 - [x] `common/audio`: `crossover.h`, `delay_line.h`, `volume_control.h`, `pcm_pipeline.h`, `jitter_buffer.h`
-- [x] `common/transport`: `audio_packet.h`, `espnow.h`, `udp.h`
+- [x] `common/transport`: `audio_packet.h`, `espnow.h`, `udp_transport.h`
 - [x] `common/ui`: `display.h`, `encoder.h`
 - [x] `master/main.cpp` (A2DP + DSP + батчевый TX + I2S + консоль)
 - [x] `satellite/main.cpp` (приём + jitter + задержка + I2S)

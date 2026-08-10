@@ -80,7 +80,7 @@ ESP-NOW/UDP RX → parsePacket → фильтр по каналу (left/right)
 - Сателлит регистрирует RX-callback и фильтрует пакеты по каналу.
 - Пакет > 250 байт отклоняется (`ESP_ERR_INVALID_SIZE`).
 
-### UDP (`firmware/common/transport/udp.h`)
+### UDP (`firmware/common/transport/udp_transport.h`)
 
 - Порт по умолчанию: **4210**.
 - **Discovery (спецификация §5.6)**: мастер шлёт broadcast-запрос
@@ -183,7 +183,7 @@ firmware/
 ├── common/                 # header-only, общий код
 │   ├── audio/              # DSP: crossover, volume, pipeline, delay, jitter
 │   ├── config/             # node_config.h, storage.h (NVS)
-│   ├── transport/          # audio_packet.h, espnow.h, udp.h
+│   ├── transport/          # audio_packet.h, espnow.h, udp_transport.h
 │   ├── util/               # logger.h, timing.h
 │   └── generated/          # generated_config.h (не коммитится)
 ├── master/                 # мастер-узел

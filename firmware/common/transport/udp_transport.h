@@ -1,4 +1,4 @@
-// udp.h — UDP транспорт для аудио (мастер TX / сателлит RX).
+// udp_transport.h — UDP транспорт для аудио (мастер TX / сателлит RX).
 // Header-only. Работает поверх Arduino WiFiUDP.
 //
 // Discovery (спецификация §5.6): мастер шлёт broadcast-запрос
