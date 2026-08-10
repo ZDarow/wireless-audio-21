@@ -26,6 +26,7 @@ Smartphone ──A2DP──► ┌───────────────�
 - Пакетный формат: 16-байт заголовок + payload до 234 байт (лимит ESP-NOW)
 - Сателлиты: приём → jitter buffer → задержка → I2S
 - Serial-консоль: `status`, `volume`, `crossover`, `delay`, `pair`, `save`, `reboot`
+- Web UI + REST API (мастер): громкость, кроссовер, задержки, транспорт, pair
 - NVS-хранение настроек (Preferences)
 - Host-тесты чистых модулей (gcc, без железа)
 
@@ -43,7 +44,7 @@ wireless-audio-21/
 │   │   ├── transport/ audio_packet.h, espnow.h, udp.h
 │   │   ├── ui/       display.h, encoder.h
 │   │   └── util/     logger.h, timing.h
-│   ├── master/       src/main.cpp, include/master_config.h
+│   ├── master/       src/main.cpp, include/master_config.h, include/web_server.h
 │   └── satellite/    src/main.cpp, include/satellite_config.h
 ├── scripts/                    # generate_config.py, flash_master.sh, flash_satellite.sh
 ├── test/                       # host-тесты (make test)
@@ -77,7 +78,30 @@ python3 scripts/generate_config.py config.env
 cd test && make test
 ```
 
-### 4. Serial-консоль мастера
+### 4. Web UI (мастер)
+
+При подключённом Wi-Fi мастер поднимает веб-панель управления:
+
+```
+http://<IP-мастера>/
+```
+
+Адрес печатается в serial-консоль при старте (`Web UI: http://192.168.x.x`).
+Доступно: громкость, mute, кроссовер, задержки каналов, транспорт, привязка
+сателлитов, сохранение в NVS, перезагрузка. REST API:
+
+```
+GET  /api/status            # состояние узла (JSON)
+POST /api/volume            # {"volume":60} | {"mute":true}
+POST /api/crossover         # {"hz":90}
+POST /api/delay             # {"channel":"left","ms":10}
+POST /api/transport         # {"mode":"espnow"}
+POST /api/pair              # {"side":"left","mac":"AA:BB:CC:DD:EE:01"}
+POST /api/save              # сохранить в NVS
+POST /api/reboot            # перезагрузка
+```
+
+### 5. Serial-консоль мастера
 
 ```
 status                  # текущее состояние

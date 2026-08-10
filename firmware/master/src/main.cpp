@@ -26,6 +26,7 @@
 #include "udp.h"
 #include "audio_packet.h"
 #include "master_config.h"
+#include "web_server.h"
 
 using namespace audio21;
 
@@ -48,6 +49,13 @@ static volatile bool g_rightOnline = false;
 static volatile bool g_a2dpConnected = false;
 
 static BluetoothA2DPSink g_a2dp;
+
+// Web UI + REST API (мастер). Ссылки на указатели задержек: объект создаётся
+// до new DelayLine в setup(), поэтому храним ссылки на переменные-указатели.
+static MasterWebServer g_webServer(g_cfg, g_pipeline,
+                                   g_delayLeft, g_delayRight, g_delaySub,
+                                   g_espnow,
+                                   g_leftOnline, g_rightOnline, g_a2dpConnected);
 
 // ---------------------------------------------------------------------------
 // I2S выход сабвуфера (моно)
@@ -281,8 +289,15 @@ void setup() {
         Logger::info("master", "I2S sub ready");
     }
 
+    // Wi-Fi: нужен для Web UI; ESP-NOW работает в STA-режиме и без подключения
+    // к точке доступа, поэтому подключаемся всегда (если сеть доступна).
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(g_cfg.wifiSsid, g_cfg.wifiPassword);
+    Logger::info("master", "Connecting Wi-Fi...");
+    int tries = 0;
+    while (WiFi.status() != WL_CONNECTED && tries++ < 40) delay(500);
+
     if (g_cfg.transport == TransportMode::EspNow) {
-        WiFi.mode(WIFI_STA);
         if (g_espnow.begin()) {
             g_espnow.addPeer(g_cfg.leftSatMac);
             g_espnow.addPeer(g_cfg.rightSatMac);
@@ -291,17 +306,20 @@ void setup() {
             Logger::error("master", "ESP-NOW init failed");
         }
     } else {
-        WiFi.mode(WIFI_STA);
-        WiFi.begin(g_cfg.wifiSsid, g_cfg.wifiPassword);
-        Logger::info("master", "Connecting Wi-Fi...");
-        int tries = 0;
-        while (WiFi.status() != WL_CONNECTED && tries++ < 40) delay(500);
         if (WiFi.status() == WL_CONNECTED) {
             g_udp.begin(UdpTransport::kDefaultPort);
-            Logger::info("master", "Wi-Fi connected, IP: %s", WiFi.localIP().toString().c_str());
+            Logger::info("master", "UDP ready, IP: %s", WiFi.localIP().toString().c_str());
         } else {
             Logger::error("master", "Wi-Fi connect failed");
         }
+    }
+
+    // Web UI — только при подключённом Wi-Fi (нужен IP).
+    if (WiFi.status() == WL_CONNECTED) {
+        g_webServer.begin();
+        Logger::info("master", "Web UI: http://%s", WiFi.localIP().toString().c_str());
+    } else {
+        Logger::warn("master", "Wi-Fi not connected, Web UI unavailable");
     }
 
     g_a2dp.set_auto_reconnect(true);
@@ -319,5 +337,14 @@ void loop() {
         String line = Serial.readStringUntil('\n');
         handleConsoleCommand(line);
     }
+
+    // Web UI: обработка запросов и сохранение по кнопке.
+    g_webServer.handleClient();
+    if (g_webServer.saveRequested()) {
+        ConfigStorage::save(g_cfg);
+        g_webServer.clearSaveRequested();
+        Logger::info("master", "config saved via Web UI");
+    }
+
     delay(10);
 }

@@ -55,7 +55,7 @@ Smartphone (A2DP / Wi-Fi)
 | F8 | Serial-консоль (status/volume/crossover/delay/pair/save/reboot) | ✅ каркас |
 | F9 | NVS-хранение настроек | ✅ каркас |
 | F10 | Сателлит: приём, jitter buffer, задержка, I2S | ✅ каркас |
-| F11 | Web UI + REST API | ⬜ следующая итерация |
+| F11 | Web UI + REST API | ✅ реализовано |
 | F12 | OLED + энкодер | ⬜ следующая итерация |
 | F13 | Wi-Fi UDP источник | ⬜ следующая итерация |
 
@@ -126,7 +126,7 @@ wireless-audio-21/
 - [ ] `docs/architecture.md`, `docs/hardware.md`, `docs/wiring.md`
 
 ### Этап 4 — Расширения (следующие итерации)
-- [ ] REST API (ESPAsyncWebServer) + Web UI
+- [x] REST API + Web UI (встроенный WebServer ESP32 + ArduinoJson)
 - [ ] OLED-меню + энкодер
 - [ ] Wi-Fi UDP источник
 - [ ] Синхронизация воспроизведения (timestamp в пакете)
