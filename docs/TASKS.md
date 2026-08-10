@@ -32,7 +32,7 @@
 
 | ID | Проблема | Место | Приоритет | Статус |
 |---|---|---|---|---|
-| B1 | `g_leftOnline`/`g_rightOnline` нигде не выставляются в true: статус сателлитов в `/api/status` и serial всегда «offline». Нет ESP-NOW sent-callback и UDP-сердцебиений | `firmware/master/src/main.cpp:47` | Высокий | ⬜ |
+| B1 | `g_leftOnline`/`g_rightOnline` нигде не выставляются в true: статус сателлитов в `/api/status` и serial всегда «offline». Нет ESP-NOW sent-callback и UDP-сердцебиений | `firmware/master/src/main.cpp:47` | Высокий | ✅ (ESP-NOW sent-callback по MAC + UDP discovery каждые 3 с + timeout 5 с) |
 | B2 | Конфликт пинов в `config.example.h`: `AUDIO_I2S_DATA_OUT=22` и `AUDIO_OLED_SCL=22` (актуально при реализации F12) | `config.example.h` | Средний | ⬜ |
 | B3 | `UdpTransport::broadcast()` считает broadcast-IP как `~localIP` + `bc[3]=255` — корректен только для /24-подсети | `firmware/common/transport/udp_transport.h:53` | Низкий | ⬜ (связано с T10) |
 | B4 | `handleVolume` без поля `volume` в JSON молча ставит громкость 0 вместо ошибки | `firmware/master/include/web_server.h:118` | Низкий | ⬜ |
@@ -88,6 +88,9 @@
   (23 макроса), `udp.h` → `udp_transport.h` (коллизия с системным `Udp.h`),
   `pio run` для всех 3 env — SUCCESS (master 58.4% flash, сателлиты 24.2%);
   в `.gitignore` добавлены `.vscode/c_cpp_properties.json`, `.vscode/launch.json`.
+- **B1** — статус сателлитов: `EspNowSentCallback` теперь передаёт MAC пира,
+  мастер помечает канал online по успешной доставке; в UDP-режиме discovery
+  идёт каждые 3 с и обновляет online; timeout 5 с — offline.
 - Осталось: T8 (host-тест генератора), T9 (round-trip ConfigStorage),
   T10 (тест broadcast-адресации), F12–F16 (OLED, Wi-Fi источник,
-  синхронизация timestampMs, fade, mDNS) + баги B1–B7.
+  синхронизация timestampMs, fade, mDNS) + баги B2–B7.

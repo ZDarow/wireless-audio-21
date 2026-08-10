@@ -46,8 +46,13 @@ static UdpTransport g_udp;
 static uint32_t g_packetId = 0;
 static volatile bool g_leftOnline = false;
 static volatile bool g_rightOnline = false;
+static volatile uint32_t g_lastLeftSeenMs = 0;
+static volatile uint32_t g_lastRightSeenMs = 0;
 static volatile bool g_a2dpConnected = false;
 static uint32_t g_lastDiscoveryMs = 0;
+
+// Таймаут без подтверждения/ответа — сателлит считается оффлайн.
+static constexpr uint32_t kSatelliteTimeoutMs = 5000;
 
 static BluetoothA2DPSink g_a2dp;
 
@@ -302,6 +307,18 @@ void setup() {
         if (g_espnow.begin()) {
             g_espnow.addPeer(g_cfg.leftSatMac);
             g_espnow.addPeer(g_cfg.rightSatMac);
+            // Статус сателлитов: online по успешной доставке пакета конкретному пиру.
+            g_espnow.setSentCallback([](const MacAddr& from, bool success) {
+                if (!success) return;
+                const uint32_t now = millis();
+                if (from == g_cfg.leftSatMac) {
+                    g_leftOnline = true;
+                    g_lastLeftSeenMs = now;
+                } else if (from == g_cfg.rightSatMac) {
+                    g_rightOnline = true;
+                    g_lastRightSeenMs = now;
+                }
+            });
             Logger::info("master", "ESP-NOW ready");
         } else {
             Logger::error("master", "ESP-NOW init failed");
@@ -339,19 +356,34 @@ void loop() {
         handleConsoleCommand(line);
     }
 
-    // UDP-режим: приём discovery-ответов и периодический discovery-запрос,
-    // пока IP сателлитов не известны (далее аудио идёт unicast-ом).
+    // UDP-режим: приём discovery-ответов (online-статус сателлитов) и
+    // периодический discovery-запрос (широковещательно, пока не известны IP,
+    // далее аудио идёт unicast-ом; запросы продолжаются для контроля статуса).
     if (g_cfg.transport == TransportMode::Udp) {
         uint8_t buf[kMaxPacketSize];
         size_t n = g_udp.receive(buf, sizeof(buf));
-        if (n > 0) g_udp.handleDiscovery(buf, n, g_udp.lastFrom());
+        if (n > 0 && g_udp.handleDiscovery(buf, n, g_udp.lastFrom())) {
+            const uint32_t now = millis();
+            if (g_udp.lastDiscoveryChannel() == kChannelLeft) {
+                g_leftOnline = true;
+                g_lastLeftSeenMs = now;
+            } else if (g_udp.lastDiscoveryChannel() == kChannelRight) {
+                g_rightOnline = true;
+                g_lastRightSeenMs = now;
+            }
+        }
 
-        if (millis() - g_lastDiscoveryMs > 3000 &&
-            (!g_udp.hasSatellite(kChannelLeft) || !g_udp.hasSatellite(kChannelRight))) {
+        if (millis() - g_lastDiscoveryMs > 3000) {
             g_udp.sendDiscoveryRequest(UdpTransport::kDefaultPort);
             g_lastDiscoveryMs = millis();
         }
     }
+
+    // Таймаут: без подтверждения доставки (ESP-NOW) или ответа (UDP)
+    // сателлит переходит в offline.
+    const uint32_t nowMs = millis();
+    if (g_leftOnline && nowMs - g_lastLeftSeenMs > kSatelliteTimeoutMs) g_leftOnline = false;
+    if (g_rightOnline && nowMs - g_lastRightSeenMs > kSatelliteTimeoutMs) g_rightOnline = false;
 
     // Web UI: обработка запросов и сохранение по кнопке.
     g_webServer.handleClient();

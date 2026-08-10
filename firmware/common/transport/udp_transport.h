@@ -94,12 +94,16 @@ public:
             return true;
         }
         if (hdr.flags & kFlagDiscoveryResponse) {
+            m_lastDiscChannel = hdr.channel;
             if (hdr.channel == kChannelLeft) m_leftIp = from;
             else if (hdr.channel == kChannelRight) m_rightIp = from;
             return true;
         }
         return false;
     }
+
+    // Канал последнего discovery-ответа (0, если ответа не было).
+    uint8_t lastDiscoveryChannel() const { return m_lastDiscChannel; }
 
     // Сателлит: задать свой канал для ответа на discovery-запросы.
     void setMyChannel(uint8_t channel) { m_myChannel = channel; }
@@ -120,6 +124,7 @@ private:
     IPAddress m_leftIp;   // IP левого сателлита (после discovery)
     IPAddress m_rightIp;  // IP правого сателлита (после discovery)
     uint8_t m_myChannel = 0; // канал сателлита (0 = мастер, не отвечает)
+    uint8_t m_lastDiscChannel = 0; // канал последнего discovery-ответа
 };
 
 } // namespace audio21

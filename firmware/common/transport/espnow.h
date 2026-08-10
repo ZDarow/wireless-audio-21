@@ -15,8 +15,8 @@ namespace audio21 {
 // Callback при получении пакета от мастера (используется сателлитами).
 using EspNowRxCallback = void (*)(const uint8_t* data, size_t size, const MacAddr& from);
 
-// Callback при подтверждении отправки (необязательный).
-using EspNowSentCallback = void (*)(bool success);
+// Callback при подтверждении отправки (необязательный): MAC пира + статус.
+using EspNowSentCallback = void (*)(const MacAddr& from, bool success);
 
 class EspNowTransport {
 public:
@@ -32,8 +32,12 @@ public:
             }
         });
 
-        esp_now_register_send_cb([](const uint8_t*, esp_now_send_status_t status) {
-            if (g_sentCallback) g_sentCallback(status == ESP_NOW_SEND_SUCCESS);
+        esp_now_register_send_cb([](const uint8_t* mac, esp_now_send_status_t status) {
+            if (g_sentCallback) {
+                MacAddr from;
+                memcpy(from.bytes, mac, 6);
+                g_sentCallback(from, status == ESP_NOW_SEND_SUCCESS);
+            }
         });
 
         return true;
