@@ -7,7 +7,7 @@ firmware/common/generated/generated_config.h с #define макросами,
 
 Использование:
     python3 scripts/generate_config.py config.env
-    python3 scripts/generate_config.py config.env --out firmware/common/generated/generated_config.h
+    python3 scripts/generate_config.py config.env firmware/common/generated/generated_config.h
 """
 import argparse
 import os

@@ -129,10 +129,55 @@ static void test_jitter_buffer() {
     // Переполнение не ломает буфер.
     for (int k = 0; k < 3; k++) jb.push(in, 441);
     int16_t last = 0;
-    bool ok = true;
     while (jb.pop(out)) last = out;
-    (void)ok;
     printf("  jitter last=%d\n", last);
+}
+
+// --- Jitter buffer: дефицит (pop из пустого буфера) ---
+static void test_jitter_buffer_underflow() {
+    JitterBuffer jb(100);
+    jb.setTargetLevel(50);
+
+    CHECK(jb.available() == 0, "пустой буфер: 0 семплов");
+    CHECK(jb.deficit() == 50, "дефицит = целевой уровень");
+    CHECK(!jb.ready(), "пустой буфер не готов");
+
+    int16_t out = 12345;
+    CHECK(!jb.pop(out), "pop из пустого буфера -> false");
+    CHECK(out == 12345, "output не изменён при пустом буфере");
+    CHECK(jb.available() == 0, "после pop из пустого — по-прежнему 0");
+
+    // Частичное наполнение: дефицит уменьшается, но буфер ещё не готов.
+    int16_t in[30];
+    memset(in, 0, sizeof(in));
+    jb.push(in, 30);
+    CHECK(jb.available() == 30, "после push 30 семплов");
+    CHECK(jb.deficit() == 20, "дефицит = 50 - 30");
+    CHECK(!jb.ready(), "30 < 50 — не готов");
+}
+
+// --- Jitter buffer: переполнение (overwrite самых старых семплов) ---
+static void test_jitter_buffer_overflow() {
+    JitterBuffer jb(10); // маленькая ёмкость для наглядности
+    jb.setTargetLevel(5);
+
+    // Кладём 20 семплов при ёмкости 10: должны остаться последние 10.
+    int16_t in[20];
+    for (int i = 0; i < 20; i++) in[i] = (int16_t)(i + 1);
+    jb.push(in, 20);
+
+    CHECK(jb.available() == 10, "после переполнения остаётся ровно capacity");
+    CHECK(jb.ready(), "буфер готов (10 >= 5)");
+
+    // Первый выданный семпл — 11-й (первые 10 перезаписаны).
+    int16_t out = 0;
+    CHECK(jb.pop(out) && out == 11, "overwrite: старые семплы отброшены");
+    CHECK(jb.pop(out) && out == 12, "второй семпл после overwrite = 12");
+
+    // Вычитываем всё до конца: 20-й семпл — последний.
+    while (jb.pop(out)) {}
+    CHECK(out == 20, "последний семпл = 20");
+    CHECK(jb.available() == 0, "буфер полностью вычитан");
 }
 
 // --- Pipeline: громкость + кроссовер, выходы не NaN ---
@@ -156,6 +201,8 @@ int main() {
     test_volume();
     test_delay_line();
     test_jitter_buffer();
+    test_jitter_buffer_underflow();
+    test_jitter_buffer_overflow();
     test_pipeline();
 
     if (g_failures) {

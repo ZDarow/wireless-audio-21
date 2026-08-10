@@ -21,7 +21,8 @@ namespace audio21 {
 struct AudioPacketHeader {
     uint16_t magic;          // 0x2151 ("21")
     uint8_t protocolVersion; // 1
-    uint8_t flags;           // 0x01 = EOF, 0x02 = keyframe
+    uint8_t flags;           // 0x01 = EOF, 0x02 = keyframe,
+                             // 0x04 = discovery request, 0x08 = discovery response
     uint32_t timestampMs;    // метка времени источника
     uint32_t packetId;       // монотонный счётчик пакетов
     uint8_t channel;         // 0x01 = left, 0x02 = right
@@ -34,6 +35,12 @@ static_assert(sizeof(AudioPacketHeader) == 16, "AudioPacketHeader must be 16 byt
 // Предельные размеры
 constexpr uint16_t kPacketMagic = 0x2151;
 constexpr uint8_t kProtocolVersion = 1;
+
+// Флаги
+constexpr uint8_t kFlagEof = 0x01;
+constexpr uint8_t kFlagKeyframe = 0x02;
+constexpr uint8_t kFlagDiscoveryRequest = 0x04;  // мастер → сателлиты (broadcast)
+constexpr uint8_t kFlagDiscoveryResponse = 0x08; // сателлит → мастер (unicast)
 
 // Каналы
 constexpr uint8_t kChannelLeft = 0x01;
@@ -55,14 +62,15 @@ constexpr size_t kMaxInt16Samples = kMaxPacketPayload / 2;
 inline size_t buildPacket(uint8_t* dst, size_t dstSize,
                           uint8_t channel, uint8_t sampleFormat,
                           const void* payload, uint16_t payloadLength,
-                          uint32_t timestampMs, uint32_t packetId) {
+                          uint32_t timestampMs, uint32_t packetId,
+                          uint8_t flags = 0) {
     if (dstSize < sizeof(AudioPacketHeader) + payloadLength) return 0;
     if (payloadLength > kMaxPacketPayload) return 0;
 
     AudioPacketHeader h;
     h.magic = kPacketMagic;
     h.protocolVersion = kProtocolVersion;
-    h.flags = 0;
+    h.flags = flags;
     h.timestampMs = timestampMs;
     h.packetId = packetId;
     h.channel = channel;

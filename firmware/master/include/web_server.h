@@ -1,16 +1,16 @@
 // web_server.h — Web UI + REST API мастер-узла.
 //
 // Использует встроенный WebServer ESP32 Arduino (синхронный) + ArduinoJson.
-// Эндпоинты:
+// Эндпоинты (спецификация docs/PLAN.md §6.4):
 //   GET  /                    — панель управления (HTML+JS)
 //   GET  /api/status          — JSON-состояние узла
-//   POST /api/volume          — {"volume":0..100} | {"mute":true|false}
-//   POST /api/crossover       — {"hz":70..120}
-//   POST /api/delay           — {"channel":"left|right|sub","ms":0..200}
-//   POST /api/transport       — {"mode":"espnow"|"udp"}
-//   POST /api/pair            — {"side":"left|right","mac":"AA:BB:CC:DD:EE:01"}
-//   POST /api/save            — сохранить конфиг в NVS
-//   POST /api/reboot          — перезагрузка
+//   PUT  /api/volume          — {"volume":0..100} | {"mute":true|false}
+//   PUT  /api/crossover       — {"hz":70..120}
+//   PUT  /api/delay           — {"channel":"left|right|sub","ms":0..200}
+//   POST /api/transport       — {"mode":"espnow"|"udp"} (действие)
+//   POST /api/pair            — {"side":"left|right","mac":"AA:BB:CC:DD:EE:01"} (действие)
+//   POST /api/save            — сохранить конфиг в NVS (действие)
+//   POST /api/reboot          — перезагрузка (действие)
 //
 // Header-only. Только для мастер-узла (Web UI на сателлитах не нужен).
 #pragma once
@@ -43,9 +43,9 @@ public:
     void begin() {
         m_server.on("/", HTTP_GET, [this]() { handleRoot(); });
         m_server.on("/api/status", HTTP_GET, [this]() { handleStatus(); });
-        m_server.on("/api/volume", HTTP_POST, [this]() { handleVolume(); });
-        m_server.on("/api/crossover", HTTP_POST, [this]() { handleCrossover(); });
-        m_server.on("/api/delay", HTTP_POST, [this]() { handleDelay(); });
+        m_server.on("/api/volume", HTTP_PUT, [this]() { handleVolume(); });
+        m_server.on("/api/crossover", HTTP_PUT, [this]() { handleCrossover(); });
+        m_server.on("/api/delay", HTTP_PUT, [this]() { handleDelay(); });
         m_server.on("/api/transport", HTTP_POST, [this]() { handleTransport(); });
         m_server.on("/api/pair", HTTP_POST, [this]() { handlePair(); });
         m_server.on("/api/save", HTTP_POST, [this]() { handleSave(); });
@@ -97,8 +97,9 @@ private:
         doc["delay_left_ms"] = m_cfg.delayLeftMs;
         doc["delay_right_ms"] = m_cfg.delayRightMs;
         doc["delay_sub_ms"] = m_cfg.delaySubMs;
-        doc["left_online"] = m_leftOnline;
-        doc["right_online"] = m_rightOnline;
+        JsonObject satellites = doc["satellites"].to<JsonObject>();
+        satellites["left"] = m_leftOnline ? "online" : "offline";
+        satellites["right"] = m_rightOnline ? "online" : "offline";
         sendJson(m_server, 200, doc);
     }
 
@@ -294,8 +295,8 @@ const char MasterWebServer::kPageHtml[] = R"rawliteral(
 
 <script>
 const $ = id => document.getElementById(id);
-async function api(path, body) {
-  const opts = body ? { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) } : {};
+async function api(path, body, method) {
+  const opts = body ? { method: method || 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) } : {};
   const r = await fetch(path, opts);
   return r.json();
 }
@@ -312,14 +313,14 @@ async function refresh() {
       'Транспорт: ' + s.transport + '\n' +
       'Кроссовер: ' + s.crossover_hz + ' Гц\n' +
       'Задержки: L ' + s.delay_left_ms + ' / R ' + s.delay_right_ms + ' / Sub ' + s.delay_sub_ms + ' мс\n' +
-      'Сателлиты: L ' + (s.left_online ? 'on' : 'off') + ' | R ' + (s.right_online ? 'on' : 'off');
+      'Сателлиты: L ' + s.satellites.left + ' | R ' + s.satellites.right;
   } catch (e) { $('status').textContent = 'Ошибка связи'; }
 }
-$('volume').oninput = async e => { $('volLabel').textContent = e.target.value; await api('/api/volume', {volume: +e.target.value}); };
-$('muteBtn').onclick = async () => api('/api/volume', {mute:true});
-$('unmuteBtn').onclick = async () => api('/api/volume', {mute:false});
-$('crossover').oninput = async e => { $('xoLabel').textContent = e.target.value; await api('/api/crossover', {hz: +e.target.value}); };
-$('delayBtn').onclick = async () => api('/api/delay', {channel: $('delayChan').value, ms: +$('delayMs').value});
+$('volume').oninput = async e => { $('volLabel').textContent = e.target.value; await api('/api/volume', {volume: +e.target.value}, 'PUT'); };
+$('muteBtn').onclick = async () => api('/api/volume', {mute:true}, 'PUT');
+$('unmuteBtn').onclick = async () => api('/api/volume', {mute:false}, 'PUT');
+$('crossover').oninput = async e => { $('xoLabel').textContent = e.target.value; await api('/api/crossover', {hz: +e.target.value}, 'PUT'); };
+$('delayBtn').onclick = async () => api('/api/delay', {channel: $('delayChan').value, ms: +$('delayMs').value}, 'PUT');
 $('transportBtn').onclick = async () => api('/api/transport', {mode: $('transport').value});
 $('pairBtn').onclick = async () => api('/api/pair', {side: $('pairSide').value, mac: $('pairMac').value.trim()});
 $('saveBtn').onclick = async () => api('/api/save');

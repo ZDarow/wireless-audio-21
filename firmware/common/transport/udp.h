@@ -1,5 +1,10 @@
 // udp.h — UDP транспорт для аудио (мастер TX / сателлит RX).
 // Header-only. Работает поверх Arduino WiFiUDP.
+//
+// Discovery (спецификация §5.6): мастер шлёт broadcast-запрос
+// (kFlagDiscoveryRequest), сателлиты отвечают unicast-ответом
+// (kFlagDiscoveryResponse) со своим каналом; мастер запоминает их IP
+// и далее шлёт аудио unicast-ом (fallback — broadcast, пока IP не известен).
 #pragma once
 
 #include <Arduino.h>
@@ -20,6 +25,8 @@ public:
     static constexpr uint16_t kDefaultPort = 4210;
 
     bool begin(uint16_t localPort = kDefaultPort) {
+        m_leftIp = IPAddress(0, 0, 0, 0);
+        m_rightIp = IPAddress(0, 0, 0, 0);
         return m_udp.begin(localPort);
     }
 
@@ -48,6 +55,61 @@ public:
         return sendTo(bc, port, data, size);
     }
 
+    // Отправка мастером аудио: unicast на запомненный IP сателлита канала,
+    // либо broadcast, пока IP не известен (discovery не завершён).
+    bool sendToChannel(uint8_t channel, uint16_t port, const uint8_t* data, size_t size) {
+        IPAddress ip = (channel == kChannelLeft) ? m_leftIp : m_rightIp;
+        if (ip != IPAddress(0, 0, 0, 0)) return sendTo(ip, port, data, size);
+        return broadcast(port, data, size);
+    }
+
+    // Мастер: broadcast discovery-запрос (сателлиты отвечают unicast-ом).
+    bool sendDiscoveryRequest(uint16_t port) {
+        uint8_t buf[kMaxPacketSize];
+        size_t n = buildPacket(buf, sizeof(buf), 0x00, kSampleFormatInt16,
+                               nullptr, 0, 0, 0, kFlagDiscoveryRequest);
+        return broadcast(port, buf, n);
+    }
+
+    // Сателлит: unicast discovery-ответ со своим каналом.
+    bool sendDiscoveryResponse(IPAddress to, uint16_t port, uint8_t channel) {
+        uint8_t buf[kMaxPacketSize];
+        size_t n = buildPacket(buf, sizeof(buf), channel, kSampleFormatInt16,
+                               nullptr, 0, 0, 0, kFlagDiscoveryResponse);
+        return sendTo(to, port, buf, n);
+    }
+
+    // Обработка discovery-пакета. Возвращает true, если пакет был discovery
+    // (аудио обрабатывать не нужно).
+    //   - мастер: запоминает IP сателлита из response;
+    //   - сателлит: отвечает на request (m_myChannel должен быть задан).
+    bool handleDiscovery(const uint8_t* data, size_t size, IPAddress from) {
+        AudioPacketHeader hdr;
+        const uint8_t* payload;
+        size_t payloadSize;
+        if (!parsePacket(data, size, hdr, payload, payloadSize)) return false;
+
+        if (hdr.flags & kFlagDiscoveryRequest) {
+            if (m_myChannel != 0) sendDiscoveryResponse(from, kDefaultPort, m_myChannel);
+            return true;
+        }
+        if (hdr.flags & kFlagDiscoveryResponse) {
+            if (hdr.channel == kChannelLeft) m_leftIp = from;
+            else if (hdr.channel == kChannelRight) m_rightIp = from;
+            return true;
+        }
+        return false;
+    }
+
+    // Сателлит: задать свой канал для ответа на discovery-запросы.
+    void setMyChannel(uint8_t channel) { m_myChannel = channel; }
+
+    // Мастер: известен ли IP сателлита канала.
+    bool hasSatellite(uint8_t channel) const {
+        IPAddress ip = (channel == kChannelLeft) ? m_leftIp : m_rightIp;
+        return ip != IPAddress(0, 0, 0, 0);
+    }
+
     IPAddress lastFrom() const { return m_lastFrom; }
 
     void stop() { m_udp.stop(); }
@@ -55,6 +117,9 @@ public:
 private:
     WiFiUDP m_udp;
     IPAddress m_lastFrom;
+    IPAddress m_leftIp;   // IP левого сателлита (после discovery)
+    IPAddress m_rightIp;  // IP правого сателлита (после discovery)
+    uint8_t m_myChannel = 0; // канал сателлита (0 = мастер, не отвечает)
 };
 
 } // namespace audio21

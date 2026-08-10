@@ -197,6 +197,7 @@ void setup() {
         while (WiFi.status() != WL_CONNECTED && tries++ < 40) delay(500);
         if (WiFi.status() == WL_CONNECTED) {
             g_udp.begin(UdpTransport::kDefaultPort);
+            g_udp.setMyChannel(kMyChannel);
             Logger::info("satellite", "Wi-Fi connected, IP: %s", WiFi.localIP().toString().c_str());
         } else {
             Logger::error("satellite", "Wi-Fi connect failed");
@@ -207,11 +208,14 @@ void setup() {
 }
 
 void loop() {
-    // UDP-режим: опрашиваем сокет.
+    // UDP-режим: опрашиваем сокет. Discovery-запросы мастера обрабатываем
+    // отдельно (ответ unicast-ом), аудио — через onPacket.
     if (g_cfg.transport == TransportMode::Udp) {
         uint8_t buf[kMaxPacketSize];
         size_t n = g_udp.receive(buf, sizeof(buf));
-        if (n > 0) onPacket(buf, n);
+        if (n > 0 && !g_udp.handleDiscovery(buf, n, g_udp.lastFrom())) {
+            onPacket(buf, n);
+        }
     }
 
     // Следим за таймаутом мастера.

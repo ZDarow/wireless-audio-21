@@ -47,6 +47,7 @@ static uint32_t g_packetId = 0;
 static volatile bool g_leftOnline = false;
 static volatile bool g_rightOnline = false;
 static volatile bool g_a2dpConnected = false;
+static uint32_t g_lastDiscoveryMs = 0;
 
 static BluetoothA2DPSink g_a2dp;
 
@@ -112,7 +113,7 @@ static void flushSatelliteBatches(uint32_t now) {
     if (g_cfg.transport == TransportMode::EspNow) {
         g_espnow.sendTo(g_cfg.leftSatMac, buf, szL);
     } else {
-        g_udp.broadcast(UdpTransport::kDefaultPort, buf, szL);
+        g_udp.sendToChannel(kChannelLeft, UdpTransport::kDefaultPort, buf, szL);
     }
 
     size_t szR = buildPacket(buf, sizeof(buf), kChannelRight, kSampleFormatInt16,
@@ -120,7 +121,7 @@ static void flushSatelliteBatches(uint32_t now) {
     if (g_cfg.transport == TransportMode::EspNow) {
         g_espnow.sendTo(g_cfg.rightSatMac, buf, szR);
     } else {
-        g_udp.broadcast(UdpTransport::kDefaultPort, buf, szR);
+        g_udp.sendToChannel(kChannelRight, UdpTransport::kDefaultPort, buf, szR);
     }
 
     g_batchCount = 0;
@@ -336,6 +337,20 @@ void loop() {
     if (Serial.available()) {
         String line = Serial.readStringUntil('\n');
         handleConsoleCommand(line);
+    }
+
+    // UDP-режим: приём discovery-ответов и периодический discovery-запрос,
+    // пока IP сателлитов не известны (далее аудио идёт unicast-ом).
+    if (g_cfg.transport == TransportMode::Udp) {
+        uint8_t buf[kMaxPacketSize];
+        size_t n = g_udp.receive(buf, sizeof(buf));
+        if (n > 0) g_udp.handleDiscovery(buf, n, g_udp.lastFrom());
+
+        if (millis() - g_lastDiscoveryMs > 3000 &&
+            (!g_udp.hasSatellite(kChannelLeft) || !g_udp.hasSatellite(kChannelRight))) {
+            g_udp.sendDiscoveryRequest(UdpTransport::kDefaultPort);
+            g_lastDiscoveryMs = millis();
+        }
     }
 
     // Web UI: обработка запросов и сохранение по кнопке.

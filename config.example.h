@@ -1,7 +1,8 @@
 // Wireless Audio 2.1 — пример конфигурации (ручной режим)
 // Скопируйте в firmware/common/generated/generated_config.h
 // и отредактируйте. Либо сгенерируйте автоматически:
-//   python3 scripts/generate_config.py --env config.env --out firmware/common/generated/generated_config.h
+//   python3 scripts/generate_config.py config.example.env
+//   python3 scripts/generate_config.py config.env firmware/common/generated/generated_config.h
 #pragma once
 
 // --- Роль и режимы ---
