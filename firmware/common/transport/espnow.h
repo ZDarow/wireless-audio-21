@@ -24,6 +24,16 @@ public:
     bool begin() {
         if (esp_now_init() != ESP_OK) return false;
 
+        // ESP-IDF требует зарегистрированный peer для broadcast-отправки:
+        // без записи FF:FF:FF:FF:FF:FF esp_now_send() возвращает
+        // ESP_ERR_ESPNOW_NOT_FOUND. Пир с channel=0 использует текущий канал.
+        esp_now_peer_info_t bc = {};
+        memset(bc.peer_addr, 0xFF, 6);
+        bc.channel = 0;
+        bc.ifidx = WIFI_IF_STA;
+        bc.encrypt = false;
+        esp_now_add_peer(&bc);
+
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
         // IDF 5.x: esp_now_recv_cb_t — (const esp_now_recv_info_t*, data, len);
         // MAC источника — src_addr.

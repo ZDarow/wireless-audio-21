@@ -47,6 +47,23 @@
 #ifndef AUDIO_UDP_PORT
 #define AUDIO_UDP_PORT 5004
 #endif
+#ifndef AUDIO_ESPNOW_CHANNEL
+#define AUDIO_ESPNOW_CHANNEL 6
+#endif
+
+// Проверка интернета (ТЗ_Веб §7)
+#ifndef AUDIO_NET_CHECK_ENABLED
+#define AUDIO_NET_CHECK_ENABLED 1
+#endif
+#ifndef AUDIO_NET_CHECK_URL
+#define AUDIO_NET_CHECK_URL "http://connectivitycheck.gstatic.com/generate_204"
+#endif
+#ifndef AUDIO_NTP_SERVER
+#define AUDIO_NTP_SERVER "pool.ntp.org"
+#endif
+#ifndef AUDIO_TIMEZONE
+#define AUDIO_TIMEZONE "UTC0"
+#endif
 
 #ifndef AUDIO_SAMPLE_RATE
 #define AUDIO_SAMPLE_RATE 48000
@@ -71,14 +88,15 @@
 #define AUDIO_DELAY_SUB_MS 0
 #endif
 
+// ESP32-S3: GPIO22-25 невалидны (внутренний SPI-флеш) — дефолты 4/5/6.
 #ifndef AUDIO_I2S_BCK
-#define AUDIO_I2S_BCK 26
+#define AUDIO_I2S_BCK 4
 #endif
 #ifndef AUDIO_I2S_WS
-#define AUDIO_I2S_WS 25
+#define AUDIO_I2S_WS 5
 #endif
 #ifndef AUDIO_I2S_DATA_OUT
-#define AUDIO_I2S_DATA_OUT 22
+#define AUDIO_I2S_DATA_OUT 6
 #endif
 
 #ifndef AUDIO_LEFT_SAT_MAC
@@ -164,6 +182,23 @@ struct NodeConfig {
     char wifiApPassword[65] = AUDIO_WIFI_AP_PASSWORD;
     char hostname[33] = AUDIO_HOSTNAME;
     uint16_t udpAudioPort = AUDIO_UDP_PORT;
+
+    // --- Проверка интернета (ТЗ_Веб §7) ---
+    bool netCheckEnabled = AUDIO_NET_CHECK_ENABLED;
+    uint16_t netCheckIntervalSec = 30;              // интервал проверки, с
+    uint16_t netCheckTimeoutMs = 5000;              // таймаут проверки, мс
+    char netCheckUrl[96] = AUDIO_NET_CHECK_URL;     // endpoint проверки
+
+    // --- NTP (ТЗ_Веб §7.5) ---
+    bool ntpEnabled = true;
+    char ntpServer[64] = AUDIO_NTP_SERVER;
+    char timezone[24] = AUDIO_TIMEZONE;
+
+    // --- Безопасность (ТЗ_Веб §18) ---
+    // SHA-256(password + salt) администратора, hex-строка (64 символа).
+    // Пустая строка = пароль не задан (первый запуск → /admin/setup).
+    char adminPasswordHash[65] = "";
+    bool authEnabled = false;   // пароль задан → требуется вход
 
     // --- Сателлиты ---
     MacAddr leftSatMac = MacAddr{AUDIO_LEFT_SAT_MAC};

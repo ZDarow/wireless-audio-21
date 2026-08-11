@@ -1,86 +1,178 @@
 # REST API мастер-узла — примеры запросов (расширение REST Client, humao.rest-client)
 #
 # Подключитесь к Web UI мастера: http://<IP-мастера>/ (адрес в serial при старте).
-# Замените {{baseUrl}} на реальный IP. Спецификация: docs/PLAN.md §6.4.
+# Замените {{baseUrl}} на реальный IP (192.168.10.42 — STA, 192.168.4.1 — AP).
+# Спецификация: docs/PLAN.md §6.4, docs/ТЗ_Веб.md.
+#
+# АВТОРИЗАЦИЯ И CSRF:
+#  1. POST /api/login (пароль администратора) → Set-Cookie: session=… сохраняется
+#     автоматически REST Client-ом.
+#  2. GET /api/status → из ответа возьмите system.csrf и подставьте в
+#     {{csrfToken}} ниже.
+#  3. Все мутирующие запросы требуют заголовок X-CSRF-Token: {{csrfToken}}
+#     (иначе 401 {"ok":false,"error":"csrf"}).
+#  После ребута/перезагрузки сессия сбрасывается — нужен повторный логин.
 
-@baseUrl = http://192.168.4.1
+@baseUrl = http://192.168.10.42
+@csrfToken = 0000000000000000000000000000000000000000000000000000000000000000
+
+### Вход администратора (пароль задаётся при первом запуске)
+POST {{baseUrl}}/api/login
+Content-Type: application/json
+
+{"password": "0000"}
+
+### Выход (сбрасывает сессию)
+POST {{baseUrl}}/api/logout
+Content-Type: application/json
+X-CSRF-Token: {{csrfToken}}
+
+{}
 
 ### Панель управления (HTML)
 GET {{baseUrl}}/
 Accept: text/html
 
-### Состояние узла (JSON)
+### Состояние узла (JSON; system.csrf — токен для мутирующих запросов)
 GET {{baseUrl}}/api/status
 Accept: application/json
 
-### Громкость 60 (PUT)
+### Диагностика (chip/flash/PSRAM/wifi/UDP)
+GET {{baseUrl}}/api/diagnostics
+Accept: application/json
+
+### Логи (последние 64)
+GET {{baseUrl}}/api/logs?limit=64
+Accept: application/json
+
+### Wi-Fi: статус подключения
+GET {{baseUrl}}/api/wifi/status
+Accept: application/json
+
+### Wi-Fi: список сохранённых профилей
+GET {{baseUrl}}/api/wifi/profiles
+Accept: application/json
+
+### Wi-Fi: скан сетей (кеш, сканируется до старта AP)
+GET {{baseUrl}}/api/wifi/scan
+Accept: application/json
+
+### Wi-Fi: подключение к сети (сохранить + перезагрузить)
+POST {{baseUrl}}/api/wifi/connect
+Content-Type: application/json
+X-CSRF-Token: {{csrfToken}}
+
+{"ssid": "Cudy", "password": "1234567890", "hidden": false, "save": true, "auto_reconnect": true}
+
+### Интернет: статус проверки (ТЗ_Веб §7)
+GET {{baseUrl}}/api/net/internet
+Accept: application/json
+
+### Интернет: принудительная проверка
+POST {{baseUrl}}/api/net/check
+Content-Type: application/json
+X-CSRF-Token: {{csrfToken}}
+
+{}
+
+### Громкость 60 (PUT; поля: volume 0..100, mute bool)
 PUT {{baseUrl}}/api/volume
 Content-Type: application/json
+X-CSRF-Token: {{csrfToken}}
 
 {"volume": 60}
 
-### Mute (PUT)
-PUT {{baseUrl}}/api/volume
+### Mute (POST /api/mute)
+POST {{baseUrl}}/api/mute
 Content-Type: application/json
+X-CSRF-Token: {{csrfToken}}
 
 {"mute": true}
 
-### Unmute (PUT)
-PUT {{baseUrl}}/api/volume
+### Unmute (POST /api/mute)
+POST {{baseUrl}}/api/mute
 Content-Type: application/json
+X-CSRF-Token: {{csrfToken}}
 
 {"mute": false}
 
 ### Ошибка: ни volume, ни mute (ожидается 400 missing volume|mute)
 PUT {{baseUrl}}/api/volume
 Content-Type: application/json
+X-CSRF-Token: {{csrfToken}}
 
 {}
 
 ### Ошибка: volume вне диапазона (ожидается 400)
 PUT {{baseUrl}}/api/volume
 Content-Type: application/json
+X-CSRF-Token: {{csrfToken}}
 
 {"volume": 150}
 
-### Кроссовер 90 Гц (PUT)
+### Кроссовер 90 Гц (PUT; поле crossover_hz, 70..120)
 PUT {{baseUrl}}/api/crossover
 Content-Type: application/json
+X-CSRF-Token: {{csrfToken}}
 
-{"hz": 90}
+{"crossover_hz": 90}
 
-### Задержка левого канала 10 мс (PUT)
+### Задержка левого канала 10 мс (PUT; каналы left/right/sub, 0..200 мс)
 PUT {{baseUrl}}/api/delay
 Content-Type: application/json
+X-CSRF-Token: {{csrfToken}}
 
-{"channel": "left", "ms": 10}
+{"channel": "left", "delay_ms": 10}
 
 ### Транспорт UDP (POST — действие)
 POST {{baseUrl}}/api/transport
 Content-Type: application/json
+X-CSRF-Token: {{csrfToken}}
 
 {"mode": "udp"}
 
 ### Транспорт ESP-NOW (POST)
 POST {{baseUrl}}/api/transport
 Content-Type: application/json
+X-CSRF-Token: {{csrfToken}}
 
 {"mode": "espnow"}
 
 ### Привязка левого сателлита (POST)
 POST {{baseUrl}}/api/pair
 Content-Type: application/json
+X-CSRF-Token: {{csrfToken}}
 
-{"side": "left", "mac": "AA:BB:CC:DD:EE:01"}
+{"side": "left", "mac": "20:6E:F1:D6:03:F0"}
 
-### Сохранить в NVS (POST)
+### Сохранить конфиг в NVS (POST)
 POST {{baseUrl}}/api/save
 Content-Type: application/json
+X-CSRF-Token: {{csrfToken}}
 
 {}
 
 ### Перезагрузка (POST)
-POST {{baseUrl}}/api/reboot
+POST {{baseUrl}}/api/system/reboot
 Content-Type: application/json
+X-CSRF-Token: {{csrfToken}}
 
 {}
+
+### Factory reset (POST — стирает NVS и Wi-Fi профили, ребут)
+POST {{baseUrl}}/api/system/factory_reset
+Content-Type: application/json
+X-CSRF-Token: {{csrfToken}}
+
+{}
+
+### Экспорт конфига (JSON, для импорта/бэкапа)
+GET {{baseUrl}}/api/system/config/export
+Accept: application/json
+
+### Импорт конфига (POST; см. export — полный JSON или {config: {...}})
+POST {{baseUrl}}/api/system/config/import
+Content-Type: application/json
+X-CSRF-Token: {{csrfToken}}
+
+{"config": {"hostname": "audio-master", "net_check_url": "http://connectivitycheck.gstatic.com/generate_204"}}

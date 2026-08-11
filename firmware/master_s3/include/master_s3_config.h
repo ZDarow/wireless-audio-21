@@ -5,9 +5,10 @@
 
 namespace audio21 {
 
-// Фиксированный Wi-Fi канал (ТЗ §6.3: channel = 6, bandwidth = 20 MHz).
-// На этом же канале должны работать сателлиты.
-constexpr uint8_t kDefaultWifiChannel = 6;
+// Канал Wi-Fi/ESP-NOW из конфига (config.env → AUDIO_ESPNOW_CHANNEL).
+// На этом же канале должны работать сателлиты. В APSTA канал AP следует за
+// STA-каналом домашней сети, поэтому в config.env задаётся канал роутера.
+constexpr uint8_t kDefaultWifiChannel = AUDIO_ESPNOW_CHANNEL;
 
 // Пин-дефолты I2S мастера ESP32-S3 (переопределяются через config.env).
 // Текущие значения взяты из конфигурации узла (node_config.h).

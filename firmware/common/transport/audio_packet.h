@@ -58,6 +58,13 @@ constexpr size_t kMaxPacketSize = sizeof(AudioPacketHeader) + kMaxPacketPayload;
 // Максимальное число семплов int16 в одном пакете
 constexpr size_t kMaxInt16Samples = kMaxPacketPayload / 2;
 
+// Heartbeat (связь без аудио-пакетов): сателлит шлёт discovery-response
+// каждые kHeartbeatIntervalMs, мастер считает его online в течение
+// kSatelliteTimeoutMs после последнего heartbeat. Общие для мастера и
+// сателлитов (интервал < таймаут).
+constexpr uint32_t kHeartbeatIntervalMs = 2000;
+constexpr uint32_t kSatelliteTimeoutMs = 6000;
+
 // Сборка пакета.
 inline size_t buildPacket(uint8_t* dst, size_t dstSize,
                           uint8_t channel, uint8_t sampleFormat,

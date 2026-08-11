@@ -33,12 +33,12 @@
 | ID | Проблема | Место | Приоритет | Статус |
 |---|---|---|---|---|
 | B1 | `g_leftOnline`/`g_rightOnline` нигде не выставляются в true: статус сателлитов в `/api/status` и serial всегда «offline». Нет ESP-NOW sent-callback и UDP-сердцебиений | `firmware/master/src/main.cpp:47` | Высокий | ✅ (ESP-NOW sent-callback по MAC + UDP discovery каждые 3 с + timeout 5 с) |
-| B2 | Конфликт пинов в `config.example.h`: `AUDIO_I2S_DATA_OUT=22` и `AUDIO_OLED_SCL=22` (актуально при реализации F12) | `config.example.h` | Средний | ✅ (OLED SCL → 23) |
+| B2 | Конфликт пинов в `config.example.h`: `AUDIO_I2S_DATA_OUT=22` и `AUDIO_OLED_SCL=22` (актуально при реализации F12) | `config.example.h` | Средний | ✅ (OLED SCL → 18 — валидный пин S3, 23 невалиден; см. B17) |
 | B3 | `UdpTransport::broadcast()` считает broadcast-IP как `~localIP` + `bc[3]=255` — корректен только для /24-подсети | `firmware/common/transport/udp_transport.h:53` | Низкий | ✅ (broadcast по маске подсети, `broadcast_ip.h`) |
-| B4 | `handleVolume` без поля `volume` в JSON молча ставит громкость 0 вместо ошибки | `firmware/master/include/web_server.h:118` | Низкий | ✅ (ошибка `missing volume|mute`) |
+| B4 | `handleVolume` без поля `volume` в JSON молча ставит громкость 0 вместо ошибки | `firmware/master/include/web_server.h:528` | Низкий | ✅ (ошибка `missing volume|mute`) |
 | B5 | `generate_config.py:133` повторно вызывает `expand(env)` при выводе счётчика макросов (косметика) | `scripts/generate_config.py` | Низкий | ✅ (результат переиспользуется) |
-| B6 | Риск нестабильности A2DP + Wi-Fi STA coexistence на ESP32 (нужна проверка на железе) | мастер | Риск | ⬜ |
-| B7 | Partition `huge_app.csv` без OTA — осознанное MVP-решение, блокирует будущий OTA | `platformio.ini:25` | Замечание | ⬜ |
+| B6 | Риск нестабильности A2DP + Wi-Fi STA coexistence на ESP32 (нужна проверка на железе) | мастер | Риск | ⬜ (актуально только для legacy `master_a2dp` — см. C0.2) |
+| B7 | Partition `huge_app.csv` без OTA — осознанное MVP-решение, блокирует будущий OTA (legacy `master_a2dp`; у `master_s3_wifi` — `default_16MB.csv` с OTA) | `platformio.ini:30` | Замечание | ⬜ (см. C0.2) |
 | B8 | Имя `udp.h` в case-insensitive ФС (Windows) конфликтует с системным `Udp.h` из Arduino (включается `WiFiUdp.h`) — сборка падала. Файл переименован в `udp_transport.h` | `firmware/common/transport/udp_transport.h` | Высокий | ✅ (переименование + сборка 3 env SUCCESS) |
 | B9 | **APSTA-репитер (core 3.x): мастер не отвечает на AP-интерфейсе** — клиент за AP получает IP (DHCP), интернет через NAPT работает (ping 8.8.8.8, HTTP/HTTPS 200), но unicast на AP-IP не обрабатывается: ping/ARP `192.168.4.1` с клиента — 100% loss, Web UI недоступен по `192.168.4.1` (доступен только через STA-IP `192.168.1.129`). Диагностика `net` с мастера: `ping ap_gw` FAIL при живом AP-интерфейсе. Похоже на ограничение APSTA в Arduino core 3.x / IDF 5.5 (AP netif не принимает пакеты на свой IP, если активен STA) | `firmware/master_s3/src/main.cpp`, Wi-Fi APSTA | Средний | ✅ (dual WebServer: отдельный экземпляр на `softAPIP():80` для AP-клиентов + на `localIP():80` для STA; captive portal `DNSServer "*"→softAPIP()` + probe-роуты `/generate_204`, `/hotspot-detect.html`, `/ncsi.txt`, `/connecttest.txt`, `/fwlink`; скан сетей выполняется ДО старта AP и кешируется (`scanWifiBeforeAp`), т.к. `WiFi.scanNetworks()` при активном Soft-AP отключает радио и роняет соединение телефона в момент POST с кредами. Остаётся ручная проверка на железе: Web UI по `192.168.4.1` и автооткрытие страницы настройки) |
 | B10 | **IPv6 не форвардится через NAPT** — DNS возвращает AAAA-записи, клиенты за AP мастера пытаются идти по IPv6 и «зависают» (curl без `-4` = FAIL, HTTP 000), хотя IPv4 полностью работает. Нужно: не отдавать IPv6-маршрут/RA на AP (проверить, что отключено) или документировать требование IPv4 | мастер (APSTA) | Низкий | ⬜ (осознанное ограничение: NAPT в lwIP — только IPv4, IPv6-форвардинг не реализован; требование «клиент использует IPv4» зафиксировано в `docs/PLAN.md`; проверено: IPv4-путь работает полностью) |
@@ -172,6 +172,32 @@
     сателлиты S3 (core 2.0.17) — SUCCESS; `master_a2dp` — SUCCESS;
     host-тесты (`make test`) — все зелёные.
 
+- **Авторизация + CSRF (ТЗ_Веб §18) — реализовано и проверено на железе (COM10)**:
+  - Мутирующие эндпоинты (volume/crossover/delay/mute/transport/pair/save/reboot/
+    factory_reset/wifi/connect/…/import/update) требуют `X-CSRF-Token` (`csrfOk()`),
+    без сессии/токена — 401 `{"ok":false,"error":"csrf"}`.
+  - Сессия — в RAM (`m_sessionActive` + случайный токен), cookie `session=…`;
+    после ребута сессия сбрасывается (`/api/status` → `authed:false`, подтверждено
+    на железе через логин → reboot → повторный запрос без cookie).
+  - Аномалия «`authed:true` сразу после ребута»: причина — браузерный кеш
+    `GET /api/status` (ответ без `Cache-Control`), SPA получала пред-ребутный ответ.
+    Исправлено: `sendJson()` добавляет `Cache-Control: no-store` (проверено:
+    заголовок присутствует, после ребута `authed:false`).
+  - Критично для cookie-auth: кастомные заголовки регистрируются через
+    `collectHeaders({"Cookie","X-CSRF-Token"},2)` ДО `begin()` — иначе
+    `close()` в конструкторе WebServer сбрасывает список заголовков до одного
+    `Authorization` (баг WebServer core 3.x, `WebServer.cpp:588/344`).
+  - End-to-end (пароль `0000`): login 200 + Set-Cookie; PUT volume с токеном 200;
+    crossover/delay/mute/save OK; reboot 200; после перезагрузки настройки
+    сохранились (auto-save перед ребутом); logout очищает сессию.
+  - **Полный SPA-сценарий прогоняется через Playwright (headless chromium) против
+    железа (192.168.10.42) — 12/12 PASS**: загрузка SPA, показ логин-баннера без
+    сессии, login скрывает баннер, dashboard (system=OK), слайдеры audio/delays
+    с применением через PUT + CSRF без 401, hostname/version/logs загружаются,
+    poll каждые 2с не даёт 401, logout возвращает баннер. После прогона настройки
+    восстановлены (volume 72, sub delay 20 мс).
+
+
 ---
 
 ## 9. Аудит архитектуры (11.08.2026) — план рефакторинга
@@ -184,9 +210,9 @@
 
 | ID | Крит. | Задача | Место | Статус |
 |---|---|---|---|---|
-| B11 | 🔴 | **Data race DSP-состояния**: `a2dpDataCallback` (задача A2DP) читает `m_target`/`m_crossoverHz`/`m_delaySamples`, а loop (Web UI/консоль) пишет их через `setVolume`/`setCrossoverHz`/`setDelayMs` без синхронизации. Нужен `portMUX_TYPE`/мьютекс вокруг сеттеров и `process()`; `g_cfg.transport` тоже меняется из двух задач | `master/src/main.cpp`, `web_server.h`, `pcm_pipeline.h`, `delay_line.h` | ⬜ |
-| B12 | 🔴 | **Неадаптация к sample rate A2DP**: pipeline/DelayLine сконфигурированы на `cfg.sampleRate` (48000), A2DP-источник часто отдаёт 44100 → неверный кроссовер/задержки. Получать реальную частоту из A2DP и переконфигурировать | `master/src/main.cpp` | ⬜ |
-| T11 | 🔴 | **Невоспроизводимая сборка**: git-зависимости `arduino-audio-tools` и `ESP32-A2DP` без фиксации SHA/тега. Зафиксировать ревизии или удалить неиспользуемые | `platformio.ini:67-68,117` | ⬜ |
+| B11 | 🔴 | **Data race DSP-состояния**: `a2dpDataCallback` (задача A2DP) читает `m_target`/`m_crossoverHz`/`m_delaySamples`, а loop (Web UI/консоль) пишет их через `setVolume`/`setCrossoverHz`/`setDelayMs` без синхронизации. Нужен `portMUX_TYPE`/мьютекс вокруг сеттеров и `process()`; `g_cfg.transport` тоже меняется из двух задач | `master/src/main.cpp`, `web_server.h`, `pcm_pipeline.h`, `delay_line.h` | ⬜ (legacy `master` — см. C0.2) |
+| B12 | 🔴 | **Неадаптация к sample rate A2DP**: pipeline/DelayLine сконфигурированы на `cfg.sampleRate` (48000), A2DP-источник часто отдаёт 44100 → неверный кроссовер/задержки. Получать реальную частоту из A2DP и переконфигурировать | `master/src/main.cpp` | ⬜ (legacy `master` — см. C0.2) |
+| T11 | 🔴 | **Невоспроизводимая сборка**: git-зависимости `arduino-audio-tools` и `ESP32-A2DP` без фиксации SHA/тега. Зафиксировать ревизии или удалить неиспользуемые | `platformio.ini:68-69,121` | ⬜ |
 
 ### 9.2 Баг-лист аудита
 
@@ -195,20 +221,163 @@
 | B13 | 🟠 | `JitterBuffer`: дефолт `m_targetLevel = 0` → `ready()` всегда true без конфигурации (щелчки/прерывания). Задать дефолт или требовать конфигурацию + тест | `firmware/common/audio/jitter_buffer.h` | ⬜ |
 | B14 | 🟠 | Сателлит пишет в неинициализированный I2S при провале `initI2S` (риск зависания `i2s_write`). Нужен guard «I2S готов» | `firmware/satellite/src/main.cpp` | ⬜ |
 | B15 | 🟡 | Лимитер стоит ДО volume — нет финальной защиты от клиппинга на выходе; перенести лимитер после volume | `firmware/common/audio/pcm_pipeline.h` | ⬜ |
-| B16 | 🟡 | Контракт A2DP-входа (S16_LE stereo, `samples` = стерео-фреймы) не зафиксирован в коде | `firmware/master/src/main.cpp` | ⬜ |
+| B16 | 🟡 | Контракт A2DP-входа (S16_LE stereo, `samples` = стерео-фреймы) не зафиксирован в коде | `firmware/master/src/main.cpp` | ⬜ (legacy `master` — см. C0.2) |
+| B17 | 🟠 | **Дефолтные I2S-пины недействительны на ESP32-S3**: `SOC_GPIO_VALID_GPIO_MASK` исключает GPIO22–25 (внутренние SPI-флеша), а `AUDIO_I2S_WS=25`/`AUDIO_I2S_DATA_OUT=22` (и 26/25/22 в `docs/wiring.md`, `docs/hardware.md`) → `initI2S` на сателлите S3 падает с `i2s_set_pin: ws_io_num invalid` (проверено на железе, COM4). Требуются валидные S3-пины + синхронизация дока | `config.env`, `firmware/common/config/node_config.h:88-96`, `docs/wiring.md`, `docs/hardware.md` | ✅ (пины I2S → **4/5/6** (BCK/WS/DATA), OLED SCL 22→**18** (23 тоже невалиден на S3); обновлены `config.env`, `config.example.env`, `config.example.h`, `node_config.h`, `docs/wiring.md`, `docs/hardware.md`; `generated_config.h` перегенерирован; сателлит перепрошит на COM4 — boot-лог: `I2S ready`, `ESP-NOW ready`) |
+| B18 | 🟠 | **Согласование RF-канала сателлита**: сателлит (ESP-NOW STA без ассоциации) по умолчанию слушает канал 1, мастер AP — канал 6 → пакеты не доходят. Исправлено хардкодом `esp_wifi_set_channel(6)` в `firmware/satellite/src/main.cpp` (**проверено на железе**: `wifi_channel: 6`, heartbeat принимается мастером). **Связь «без аудио-пакетов»**: мастер шлёт discovery-запрос broadcast каждые 2 с (`kFlagDiscoveryRequest`), сателлит запоминает MAC мастера (`addPeer` + unicast) и шлёт heartbeat (`kFlagDiscoveryResponse`) каждые 2 с; мастер помечает канал online по приёму heartbeat, таймаут 6 с → offline. Причина неработающего broadcast: `esp_now_send` возвращает `ESP_ERR_ESPNOW_NOT_FOUND` без зарегистрированного пира `FF:FF:FF:FF:FF:FF` — добавлен broadcast-пир в `EspNowTransport::begin()` (иначе и heartbeat, и discovery не уходили). Проверено на железе: `satellites.left=online` без аудио-потока; после удержания сателлита в reset 9 с → `left=offline`, после перезагрузки → `online`. Остаётся: автоопределение канала мастера в APSTA (канал AP следует за домашней сетью, F21) — макрос `AUDIO_ESPNOW_CHANNEL` уже добавлен в `config.env` | `firmware/common/transport/espnow.h`, `firmware/satellite/src/main.cpp`, `firmware/master_s3/src/main.cpp`, `config.env` | ✅ (см. выше; остаток — автоопределение канала в APSTA) |
 
 ### 9.3 Техдолг аудита (рефакторинг)
 
 | ID | Крит. | Задача | Место | Статус |
 |---|---|---|---|---|
 | T12 | 🟠 | Удалить мёртвый код: `master_config.h`, `satellite_config.h` (`MasterPins`/`SatellitePins`/`masterPins`/`satellitePins`/`masterI2SDataOut` не используются), неиспользуемые `ui/display.h`/`ui/encoder.h` (без U8g2 в lib_deps), `audio-tools` из lib_deps `master_s3_wifi` (не используется) | `firmware/master/include`, `firmware/satellite/include`, `firmware/common/ui`, `platformio.ini` | ⬜ |
-| T13 | 🟠 | Удалить мёртвые `build_flags -DAUDIO_NODE_ROLE=MASTER/-DAUDIO_SOURCE_MODE=A2DP/-DAUDIO_TRANSPORT_MODE=ESPNOW/-DAUDIO_NODE_ROLE=SATELLITE` (код читает `*_MASTER`/`*_A2DP` из generated_config.h). Единственный источник — `config.env` | `platformio.ini:58-60,77,86` | ⬜ |
+| T13 | 🟠 | Удалить мёртвые `build_flags -DAUDIO_NODE_ROLE=MASTER/-DAUDIO_SOURCE_MODE=A2DP/-DAUDIO_TRANSPORT_MODE=ESPNOW/-DAUDIO_NODE_ROLE=SATELLITE` (код читает `*_MASTER`/`*_A2DP` из generated_config.h). Единственный источник — `config.env` | `platformio.ini:59-61,78,87` | ⬜ |
 | T14 | 🟠 | Дублирование I2S-обвязки (`initI2S`/`writeSample` vs `initI2SSub`/`writeSubSample`) — вынести в `firmware/common/audio/i2s_output.h` с guard-ами core 2.x/3.x | `master/src/main.cpp`, `satellite/src/main.cpp` | ⬜ |
 | T15 | 🟠 | Ввести транспорт-интерфейс (`ITransport` с `sendTo/sendToChannel/broadcast`): убрать ветвления `if (transport == EspNow/Udp)` из `flushSatelliteBatches`/setup/loop (OCP) | `firmware/common/transport`, `master/src/main.cpp`, `satellite/src/main.cpp` | ⬜ |
 | T16 | 🟠 | `web_server.h` лежит в `master/include`, используется `master_s3` — перенести в `firmware/common/web/`; разбить на web-core + опциональные audio-хендлеры; сгруппировать 9 параметров конструктора в `struct AudioContext` (ISP) | `firmware/master/include/web_server.h`, `platformio.ini` | ⬜ |
 | T17 | 🟡 | Serial-консоль дублируется в 3 main.cpp — выделить общий парсер команд в `firmware/common/console.h` | `firmware/*/src/main.cpp` | ⬜ |
 | T18 | 🟡 | CI: зафиксировать версию PlatformIO (`pipx install platformio==6.1.19`), добавить кэширование `~/.platformio` и `.pio-core-master` | `.github/workflows/ci.yml` | ⬜ |
 | T19 | 🟡 | Миграция сателлитов на Arduino core 3.x (`driver/i2s_std.h`) → единый core-каталог, удаление `platformio.master.ini` (снимает конфликт фреймворков, legacy I2S в IDF 5.x deprecated) | `platformio.ini`, `platformio.master.ini`, `satellite/src/main.cpp` | ⬜ |
-| T20 | 🟡 | Синхронизировать документацию: `architecture.md` §9 («старые env в истории» — неверно, они в файле), §10 (mDNS реализован — F16), структура §8 без `master_s3`; `hardware.md` §5 (OLED SCL=22 → 23, противоречит config); `flash_master.sh`/`README.md` ведут на `master_a2dp` вместо `master_s3_wifi` | `docs/`, `scripts/flash_master.sh`, `README.md` | ⬜ |
+| T20 | 🟡 | Синхронизировать документацию: `architecture.md` §9 («старые env в истории» — неверно, они в файле), §10 (mDNS реализован — F16), структура §8 без `master_s3`; `flash_master.sh`/`README.md` ведут на `master_a2dp` вместо `master_s3_wifi` (`hardware.md`/`wiring.md` уже синхронизированы — B17) | `docs/`, `scripts/flash_master.sh`, `README.md` | ⬜ |
 | T21 | 🟡 | `test/Arduino.h` перекрывает системное имя — вынести заглушки в `test/stubs/` с явным `-I` | `test/` | ⬜ |
-| T22 | 🟢 | Убрать `WebServer`/`Preferences` из `lib_deps` (встроены в фреймворк, PIO их не тянет отдельно — запись избыточна) | `platformio.ini:65,115` | ⬜ |
+| T22 | 🟢 | Убрать `WebServer`/`Preferences` из `lib_deps` (встроены в фреймворк, PIO их не тянет отдельно — запись избыточна) | `platformio.ini:37,66,116` | ⬜ |
+
+### 9.4 Code review незакоммиченных изменений (11.08.2026) — закрыто
+
+| ID | Крит. | Проблема ревью | Исправление | Статус |
+|---|---|---|---|---|
+| R1 | 🔴 | `/api/admin/setup` — сброс пароля без авторизации (backdoor) | Reject при `authEnabled==true` (`web_server.h:handleAdminSetup`) | ✅ |
+| R2 | 🔴 | `/api/update` — reboot даже при неудачном `end(true)`; авторизация только по глобальному флагу | Cookie+CSRF auth (`csrfOk && isAuthed`), `Update.abort()` при ошибке, `Update.end(false)` + reboot только после валидного образа; флаг `m_updateActive` | ✅ |
+| R3 | 🟠 | `auth.h:159` — `rand()` без `srand` | `esp_fill_random` (ESP32) / `rand()` fallback для host-тестов | ✅ |
+| R4 | 🟠 | `web_server.h:1184` — XSS через `innerHTML` с SSID | `createTextNode`/`textContent` (профили и скан) | ✅ |
+| R5 | 🟠 | CSRF-токен на неавторизованном `/api/status`; `csrfOk` не привязан к cookie | Токен только при `isAuthed(s)`; `csrfOk` требует совпадение cookie; `isAuthed` больше не доверяет глобальному `m_sessionActive` | ✅ |
+| R6 | 🟠 | `storage.h` — `kVersion=2` без миграции → тихий сброс настроек | Миграции v1→v2 и v2→v3 (зеркала структур, сохранение полей, запись обратно); v3: удалены write-only `staticIp*`/`wifiAutoReconnect` | ✅ |
+| R7 | 🟠 | `main.cpp:567` — reconnect `WiFi.mode(WIFI_STA)` убивает AP без fallback | Сохранение AP (ApSta/ApDirect), неблокирующий таймаут `kReconnectTimeoutMs`, fallback на setup AP | ✅ |
+| R8 | 🟠 | `satellite/main.cpp:249` — хардкод канала 6 | Макрос `AUDIO_ESPNOW_CHANNEL` (config.env → generated_config.h), мастер `kDefaultWifiChannel` тоже из него | ✅ |
+| R9 | 🟠 | `satellite/main.cpp:139` — мёртвая UDP-ветка heartbeat (мастер не слушает порт) | Удалена; heartbeat только по ESP-NOW | ✅ |
+| R10 | 🟠 | Экспорт 12 полей vs импорт 4 (потеря данных) | Симметричный export/import (включая net-check, NTP, MAC), импорт с `clamp()` + auth | ✅ |
+| R11 | 🟠 | `wifi/connect` теряет static-IP профиль | Полный профиль как в `/api/wifi/save` (ip_mode/ip/netmask/gateway/dns/priority) | ✅ |
+| R12 | 🟠 | `main.cpp:553` — блокирующий internet check в loop | Отдельная FreeRTOS-задача `internetCheckTask` (stack 4 КБ, приоритет 1); loop только логирует смену статуса | ✅ |
+| R13 | 🟢 | Discovery broadcast каждые 2 с постоянно | Только пока хоть один сателлит offline | ✅ |
+| R14 | 🟢 | Дублирование констант heartbeat/timeout | Общие `kHeartbeatIntervalMs`/`kSatelliteTimeoutMs` в `audio_packet.h` | ✅ |
+| R15 | 🟢 | Мёртвый код: `requireAuth`, `setInternetHttpFn`, `m_sessionStartMs`, `staticIpEnabled`, `wifiAutoReconnect` | Удалены | ✅ |
+
+---
+
+## 10. План устранения расхождений по ТЗ (аудит 11.08.2026)
+
+> План-график по итогам проверки проекта на соответствие `ТЗ.md` и `ТЗ_Веб.md`.
+> Легенда приоритетов: 🔴 критично (блокирует звук/приёмку), 🟠 высоко,
+> 🟡 средне, 🟢 низко (чистка). Формат: `C<этап>.<задача>` — расхождения,
+> связка с B/F/T-номерами указана в колонке «Связь».
+>
+> **Подробные технические карточки каждой задачи (проблема, план, код-скетчи,
+> файлы, критерии, тесты, оценки) — в [`TASKS_DETAILED.md`](TASKS_DETAILED.md).**
+
+### Этап 0. Решения по конфликтам ТЗ (полдня)
+
+| ID | Расхождение | Действие | Приоритет | Статус |
+|---|---|---|---|---|
+| C0.1 | SSID режима настройки: ТЗ.md §6.3 `Audio21-Master` vs ТЗ_Веб §3.2 `Audio21-Setup` | Согласовать: оставить `Audio21-Master` (базовое ТЗ) и зафиксировать в ТЗ_Веб, либо ввести `AUDIO_WIFI_SETUP_SSID` для режима настройки | 🟠 | ⬜ |
+| C0.2 | Legacy env `master_a2dp` использует `BluetoothA2DPSink` (запрещён §8.3) | Решить: удалить env + `firmware/master/` или пометить «отладочный стенд, вне поставки»; при удалении перенести `web_server.h` в `common/web` (T16) | 🟠 | ⬜ |
+| C0.3 | Веб-часть реализована раньше аудиоядра | Принять как факт, приоритизировать аудиоядро (Этапы 1–3) | — | ✅ |
+
+### Этап 1. 🔴 Приём аудио по UDP + вывод на сабвуфер (ТЗ §18, Этап 2) — ~1 неделя
+
+| ID | Задача | Место | Связь | Критерий готовности | Статус |
+|---|---|---|---|---|---|
+| C1.1 | `udp_audio_receiver`: разбор пакета по §9.1 (magic `0xA210`, version, flags, `sequence`, `timestamp_samples`, `sample_rate`, `channels`, `bits_per_sample`, `payload_length`) | `firmware/common/transport/udp_audio_packet.h`, `common/audio/udp_audio_receiver.h` (новые) | T13/F13 | Разбор валидных/невалидных пакетов; host-тест | ✅ (11.08.2026: `udp_audio_packet.h` + host-тест в `transport_packet_test.cpp`; класс `udp_audio_receiver` — C1.2) |
+| C1.2 | Проверка `sequence`, concealment, ramp-out, mute при отсутствии потока >3 с (§9.3) | `udp_audio_receiver` | §9.3 | Пропуск пакетов → тишина/плавное затухание; тест | ⬜ |
+| C1.3 | Jitter buffer мастера **в PSRAM**, 20–60 мс (§7.6, §16.2) | `common/audio/jitter_buffer.h` | B13 | Буфер в PSRAM, ready()/deficit работают | ⬜ |
+| C1.4 | I2S-выход мастера (пины 4/5/6), вынести в общий `common/audio/i2s_output.h` | `master_s3/src/main.cpp`, `common/audio/i2s_output.h` (новый) | T14 | Звук со смартфона через PCM5102A (**критерий §18 Этап 2**) | ⬜ |
+| C1.5 | Заменить «счётчик байт» в loop() на реальный приём | `master_s3/src/main.cpp:535-541` | §18 Этап 2 | Пакеты не отбрасываются | ⬜ |
+
+### Этап 2. 🔴 DSP + кроссовер на S3-мастере (ТЗ §18, Этап 3) + 🟠 громкости — ~1 неделя
+
+| ID | Задача | Место | Связь | Критерий готовности | Статус |
+|---|---|---|---|---|---|
+| C2.1 | Подключить `PcmPipeline` (volume → tone → limiter → LR4 → L/R/Sub) к `master_s3` | `master_s3/src/main.cpp` | F13 | Сабвуфер играет только НЧ (**критерий §18 Этап 3**) | ⬜ |
+| C2.2 | `sub_volume` + `left_volume`/`right_volume` (мин. набор §7.5) | `NodeConfig`, `web_server.h`, SPA | F18 | В `/api/status` и UI — 4 громкости | ⬜ |
+| C2.3 | Delay lines L/R/Sub на мастере S3 (0–200 мс, NVS) | `master_s3/src/main.cpp` | §7.4 | Задержки применяются без ребута | ⬜ |
+| C2.4 | Подключить аудио-хендлеры Web UI к реальному pipeline (сейчас — только конфиг) | `web_server.h` | §16 | Слайдеры реально меняют звук | ⬜ |
+
+### Этап 3. 🔴 Аудио-TX на сателлиты + 🟠 синхронизация (ТЗ §18, Этап 4–5) — ~1.5 недели
+
+| ID | Задача | Место | Связь | Критерий готовности | Статус |
+|---|---|---|---|---|---|
+| C3.1 | Батчевый ESP-NOW/UDP TX аудио с мастера S3 (сейчас только heartbeat) | `master_s3/src/main.cpp` | F13 | Л/П сателлиты играют свои каналы (**критерий §18 Этап 4**) | ⬜ |
+| C3.2 | `render_timestamp` в пакетах (§10.1) + clock recovery на мастере | `audio_packet.h`, `master_s3/src/main.cpp` | F14, F19, §11 | Метки времени заполняются и используются | ⬜ |
+| C3.3 | Сателлит: ждать `JitterBuffer::ready()`; целевой уровень **20/40/80 мс** (сейчас 15/50 мс) | `satellite/src/main.cpp` | §10.3 | Нет щелчков на старте; буфер держит уровень | ⬜ |
+| C3.4 | Дрейф-коррекция на сателлите | `satellite/src/main.cpp` | F14, §10.3 | Нет накопления/истощения буфера за 30 мин | ⬜ |
+| C3.5 | `volume_control` на сателлите (§8.6) + fade-in/out | `satellite/src/main.cpp` | F15, F18 | Громкость сателлита регулируется, без щелчков | ⬜ |
+
+### Этап 4. 🟠 OLED + энкодер (ТЗ §12.1–12.2, Этап 6) — ~1 неделя
+
+| ID | Задача | Место | Связь | Критерий готовности | Статус |
+|---|---|---|---|---|---|
+| C4.1 | OLED SSD1306 + U8g2 (`display_ui`): громкость, источник, статусы, кроссовер, задержки | `common/ui/display.h`, `lib_deps` | F12, §12.2 | §12.2 отображается | ⬜ |
+| C4.2 | Энкодер KY-040 (`encoder_ui`): короткое/длинное нажатие, меню | `common/ui/encoder.h`, `master_s3/src/main.cpp` | F12, §12.1 | Функции §12.1 работают | ⬜ |
+| C4.3 | Подключить в `master_s3` (в `master_a2dp` опционально) | `master_s3/src/main.cpp` | §12 | Управление с дисплея работает | ⬜ |
+
+### Этап 5. 🟠 Веб-доработки по ТЗ_Веб — ~1 неделя
+
+| ID | Задача | Место | Связь | Критерий готовности | Статус |
+|---|---|---|---|---|---|
+| C5.1 | Применение статического IP из профиля (`WiFi.config`) | `master_s3/src/main.cpp` | ТЗ_Веб §6.3, §21.2 | Профиль со static IP получает заданный адрес | ⬜ |
+| C5.2 | Session timeout (ввести `m_sessionStartMs`, проверять в `isAuthed`/`handleClient`) | `web_server.h` | ТЗ_Веб §11.4, §23.1 | Сессия гаснет через 3600 с | ⬜ |
+| C5.3 | Rate limit для `/api/login` и scan | `web_server.h` | ТЗ_Веб §23.1 | Блокировка после N неудач | ⬜ |
+| C5.4 | Лог-буфер 16–64 KB + фильтры `level`/`module` в `/api/logs` | `logs.h`, `web_server.h` | ТЗ_Веб §13.4, §17.5 | §13.4, §17.5 | ⬜ |
+| C5.5 | `cpu_load_percent` в `/api/status`; время/NTP/SSID/RSSI/MAC на Dashboard | `web_server.h`, SPA | ТЗ_Веб §5.2, §24.1 | §5.2, §24.1 | ⬜ |
+| C5.6 | Прогресс-бар OTA | SPA | ТЗ_Веб §12.3–12.4 | Прогресс виден | ⬜ |
+| C5.7 | Ограничение доступа локальной подсетью (§23.2); MAC-фильтр/проверка источника UDP (§17) | `web_server.h`, `udp_audio_receiver` | ТЗ_Веб §23.2, ТЗ §17 | Неавторизованный/внешний доступ блокируется | ⬜ |
+
+### Этап 6. 🟡 Надёжность и чистка — ~1 неделя
+
+| ID | Задача | Место | Связь | Критерий готовности | Статус |
+|---|---|---|---|---|---|
+| C6.1 | Watchdog для основных задач | `master_s3/src/main.cpp`, `satellite/src/main.cpp` | §16.3 | Перезапуск задачи при зависании | ⬜ |
+| C6.2 | Авто-переподключение Wi-Fi при обрыве в рантайме | `master_s3/src/main.cpp` | §16.3, ТЗ_Веб §21 | Восстановление после потери сети | ⬜ |
+| C6.3 | PSRAM-аллокация больших буферов; лог min free heap | `delay_line.h`, `jitter_buffer.h`, diagnostics | §16.2 | Буферы в PSRAM, метрики в `/api/diagnostics` | ⬜ |
+| C6.4 | Скрипты прошивки → S3 env; перенос `web_server.h` в `common/web` | `scripts/flash_*.sh`, `platformio.ini` | T16, T20 | `flash_master.sh` прошивает `master_s3_wifi` | ⬜ |
+| C6.5 | Чистка: мёртвый код (T12–T15), лишние `-D` (T13), лишние `lib_deps` (T22) | `firmware/`, `platformio.ini` | T12–T15, T22 | Сборка без предупреждений, flash < 50% | ⬜ |
+| C6.6 | Документация: `README`, `architecture.md`, `hardware.md` | `docs/`, `README.md` | T20 | Документация = фактическое состояние | ⬜ |
+| C6.7 | `audio-tools` в `master_s3` (не используется) | `platformio.ini:121` | T12 | Убрать или использовать | ⬜ |
+
+### Сводный график (старт 11.08.2026)
+
+| Неделя | Даты | Этап | Ключевой результат |
+|---|---|---|---|
+| 0 | 11.08 | Решения C0.1–C0.3 | Нет конфликтов ТЗ, судьба legacy env определена |
+| 1 | 11–16.08 | **Этап 1** | Звук со смартфона через UDP → сабвуфер (критерий §18 Этап 2) |
+| 2 | 18–23.08 | **Этап 2** | Кроссовер/громкости/задержки работают на мастере S3 |
+| 3 | 25–29.08 | **Этап 3** | Сателлиты играют свои каналы синхронно |
+| 4 | 01–05.09 | **Этап 4** | OLED + энкодер |
+| 5 | 08–12.09 | **Этап 5** | Статический IP, session timeout, rate limit, лог-фильтры, CPU load, OTA-прогресс |
+| 6 | 15–19.09 | **Этап 6** | Watchdog, авто-реконнект, PSRAM, чистка, документация, приёмка §19 |
+
+Итого: ~6 недель при полной занятости. Этап 1 — критический путь; Этапы 5–6
+не зависят от аудиоядра и могут идти параллельно.
+
+### Рекомендуемая последовательность
+
+1. **Этап 1** (C1.1 → C1.2 → C1.4): парсер UDP-пакета + I2S — перевод проекта из «каркаса» в работающую систему.
+2. Параллельно (не ждёт аудио): **C5.2, C5.3, C5.4** — session timeout, rate limit, лог-буфер.
+3. После Этапов 1–3 — **Этап 4** (OLED/энкодер) и **Этап 6** (надёжность + приёмка §19).
+
+---
+
+## 11. Выполнено (обновление 11.08.2026)
+
+- **C1.1 — `udp_audio_packet.h` (пакет смартфон → мастер, §9.1/§9.2)** — реализовано:
+  - `firmware/common/transport/udp_audio_packet.h` (header-only, без Arduino):
+    `UdpAudioHeader` (18 байт, packed, little-endian), `kUdpMagic=0xA210`,
+    `kUdpProtocolVersion=1`, флаги `kUdpFlagEndOfStream`/`kUdpFlagKeyframe`,
+    `kUdpMaxPayload=1200` (MTU-safe, §9.2), `buildUdpPacket`/`parseUdpPacket`
+    (валидация magic/version/длины payload).
+  - Host-тест в `test/transport_packet_test.cpp`: сборка/разбор стерео
+    48 кГц/16 бит, пустой payload (heartbeat), битый magic, короткий буфер,
+    длина payload больше буфера.
+  - Проверено: 3 host-бинаря зелёные (g++/MinGW). `make -C test test` на
+    Windows требует sh — вручную бинарники прогнаны; `make test` на Linux/macOS
+    будет зелёным.
+  - Осталось по C1.1-блок: класс `udp_audio_receiver` (state, concealment,
+    ramp-out, standby) — C1.2.

@@ -10,6 +10,7 @@
 #include <WiFi.h>
 #include <driver/i2s.h>
 #include <esp_system.h>
+#include <esp_wifi.h>
 
 #include "node_config.h"
 #include "storage.h"
@@ -38,6 +39,11 @@ static UdpTransport g_udp;
 static volatile bool g_masterOnline = false;
 static uint32_t g_lastRxMs = 0;
 static uint32_t g_packetsRx = 0;
+static uint32_t g_lastHeartbeatMs = 0;
+static uint32_t g_heartbeatsSent = 0;
+
+// Период heartbeat (discovery-response) мастеру — статус online даже без аудио.
+// Общая константа в audio_packet.h (интервал < таймаут мастера).
 
 // Сторона сателлита: 0 = left, 1 = right (задаётся -DAUDIO_SATELLITE_SIDE).
 #ifndef AUDIO_SATELLITE_SIDE
@@ -49,6 +55,11 @@ static constexpr uint8_t kMyChannel = kChannelRight;
 #else
 static constexpr uint8_t kMyChannel = kChannelLeft;
 #endif
+
+// RF-канал приёма: сателлит работает без ассоциации с AP (ESP-NOW STA),
+// Wi-Fi по умолчанию встаёт на канал 1 — переводим на канал мастера
+// (AUDIO_ESPNOW_CHANNEL из config.env).
+static constexpr uint8_t kEspNowChannel = AUDIO_ESPNOW_CHANNEL;
 
 // ---------------------------------------------------------------------------
 // I2S выход сателлита (моно)
@@ -108,6 +119,44 @@ static void onPacket(const uint8_t* data, size_t size) {
 }
 
 // ---------------------------------------------------------------------------
+// Heartbeat мастеру: discovery-response (broadcast) — мастер помечает online.
+// Если известен MAC мастера (после его discovery-запроса) — шлём unicast-ом.
+// ---------------------------------------------------------------------------
+static MacAddr g_masterMac;
+static bool g_hasMasterMac = false;
+
+static void sendHeartbeat() {
+    // Heartbeat возможен только по ESP-NOW: мастер не слушает UDP-порт
+    // heartbeat (его UDP-listener — аудио от смартфона на 5004).
+    if (g_cfg.transport != TransportMode::EspNow) return;
+    uint8_t buf[kMaxPacketSize];
+    size_t n = buildPacket(buf, sizeof(buf), kMyChannel, kSampleFormatInt16,
+                           nullptr, 0, (uint32_t)millis(), 0, kFlagDiscoveryResponse);
+    esp_err_t err;
+    if (g_hasMasterMac) {
+        err = g_espnow.sendTo(g_masterMac, buf, n);
+    } else {
+        err = g_espnow.broadcast(buf, n);
+    }
+    if (err == ESP_OK) {
+        g_heartbeatsSent++;
+    } else if (err != ESP_ERR_ESPNOW_FULL) {
+        Logger::errorf("satellite", "heartbeat send failed: 0x%X", (unsigned)err);
+    }
+}
+
+// Discovery-запрос мастера (broadcast): запоминаем MAC мастера, регистрируем
+// пир и отвечаем unicast-ом (связь «без аудио-пакетов» — присутствие).
+static void onDiscoveryRequest(const uint8_t* data, size_t size, const MacAddr& from) {
+    if (g_cfg.transport != TransportMode::EspNow) return;
+    g_masterMac = from;
+    g_hasMasterMac = true;
+    g_espnow.addPeer(g_masterMac);
+    sendHeartbeat();
+    (void)data; (void)size;
+}
+
+// ---------------------------------------------------------------------------
 // Serial-консоль
 // ---------------------------------------------------------------------------
 
@@ -119,8 +168,22 @@ static void handleConsoleCommand(const String& line) {
     if (cmd == "status") {
         Serial.printf("role: satellite (%s)\n", sideToString(g_cfg.side));
         Serial.printf("transport: %s\n", transportToString(g_cfg.transport));
+        uint8_t ch = 0; wifi_second_chan_t sec = WIFI_SECOND_CHAN_NONE;
+        esp_wifi_get_channel(&ch, &sec);
+        Serial.printf("wifi_channel: %u\n", (unsigned)ch);
         Serial.printf("master_online: %s\n", g_masterOnline ? "yes" : "no");
         Serial.printf("packets_rx: %lu\n", (unsigned long)g_packetsRx);
+        Serial.printf("heartbeats_sent: %lu\n", (unsigned long)g_heartbeatsSent);
+        Serial.printf("master_mac: ");
+        if (g_hasMasterMac) {
+            for (int i = 0; i < 6; i++) {
+                if (i) Serial.print(":");
+                Serial.printf("%02X", g_masterMac.bytes[i]);
+            }
+            Serial.println();
+        } else {
+            Serial.println("unknown");
+        }
         Serial.printf("jitter_available: %u\n", g_jitter->available());
         Serial.printf("delay_ms: %u\n", g_delay->delayMs());
         return;
@@ -181,8 +244,18 @@ void setup() {
 
     if (g_cfg.transport == TransportMode::EspNow) {
         WiFi.mode(WIFI_STA);
+        WiFi.setSleep(false); // power save выключает приём ESP-NOW
+        esp_wifi_set_channel(kEspNowChannel, WIFI_SECOND_CHAN_NONE);
         if (g_espnow.begin()) {
-            g_espnow.setRxCallback([](const uint8_t* d, size_t s, const MacAddr&) {
+            g_espnow.setRxCallback([](const uint8_t* d, size_t s, const MacAddr& from) {
+                AudioPacketHeader hdr;
+                const uint8_t* payload;
+                size_t payloadSize;
+                if (parsePacket(d, s, hdr, payload, payloadSize) &&
+                    (hdr.flags & kFlagDiscoveryRequest)) {
+                    onDiscoveryRequest(d, s, from);
+                    return;
+                }
                 onPacket(d, s);
             });
             Logger::info("satellite", "ESP-NOW ready");
@@ -208,6 +281,13 @@ void setup() {
 }
 
 void loop() {
+    // Heartbeat мастеру (discovery-response broadcast) — присутствие без аудио.
+    uint32_t nowMs = millis();
+    if (nowMs - g_lastHeartbeatMs >= kHeartbeatIntervalMs) {
+        g_lastHeartbeatMs = nowMs;
+        sendHeartbeat();
+    }
+
     // UDP-режим: опрашиваем сокет. Discovery-запросы мастера обрабатываем
     // отдельно (ответ unicast-ом), аудио — через onPacket.
     if (g_cfg.transport == TransportMode::Udp) {

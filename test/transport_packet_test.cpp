@@ -5,6 +5,7 @@
 #include "arduino_stub.h"
 #include "audio_packet.h"
 #include "broadcast_ip.h"
+#include "udp_audio_packet.h"
 
 using namespace audio21;
 
@@ -90,6 +91,63 @@ int main() {
     computeBroadcastAddress(ipA, mask32, bc);
     CHECK(bc[0] == 192 && bc[1] == 168 && bc[2] == 1 && bc[3] == 5,
           "broadcast /32 = сам IP");
+
+    // ------------------------------------------------------------------
+    // UDP-пакет смартфон → мастер (§9.1).
+    // ------------------------------------------------------------------
+    CHECK(sizeof(UdpAudioHeader) == 18, "UDP заголовок = 18 байт");
+    CHECK(kUdpMaxPayload == 1200, "макс. UDP payload = 1200 байт (MTU-safe)");
+    CHECK(kUdpMagic == 0xA210, "UDP magic = 0xA210");
+
+    // Сборка стерео-пакета 48кГц/16бит (§9.2): 4 сэмпла × 2 канала.
+    uint8_t ubuf[kUdpPacketSize];
+    int16_t upcm[8] = {100, -200, 300, -400, 500, -600, 700, -800};
+    size_t usz = buildUdpPacket(ubuf, sizeof(ubuf), 42, 96000, 48000, 2, 16,
+                                upcm, sizeof(upcm), kUdpFlagKeyframe);
+    CHECK(usz == 18 + 16, "размер UDP-пакета = 18 + 16 байт");
+
+    // Разбор.
+    UdpAudioHeader uhdr;
+    const uint8_t* upayload;
+    size_t upayloadSize;
+    CHECK(parseUdpPacket(ubuf, usz, uhdr, upayload, upayloadSize), "UDP-пакет парсится");
+    CHECK(uhdr.magic == kUdpMagic, "UDP magic корректен");
+    CHECK(uhdr.protocolVersion == kUdpProtocolVersion, "UDP версия корректна");
+    CHECK((uhdr.flags & kUdpFlagKeyframe) != 0, "флаг keyframe сохранён");
+    CHECK(uhdr.sequence == 42, "sequence корректен");
+    CHECK(uhdr.timestampSamples == 96000, "timestamp_samples корректен");
+    CHECK(uhdr.sampleRate == 48000, "sample_rate корректен");
+    CHECK(uhdr.channels == 2, "channels = 2");
+    CHECK(uhdr.bitsPerSample == 16, "bits_per_sample = 16");
+    CHECK(upayloadSize == 16, "UDP payload = 16 байт");
+    CHECK(memcmp(upayload, upcm, sizeof(upcm)) == 0, "UDP payload совпадает");
+
+    // Пустой payload (heartbeat / end-of-stream с флагом).
+    usz = buildUdpPacket(ubuf, sizeof(ubuf), 43, 0, 48000, 2, 16,
+                         nullptr, 0, kUdpFlagEndOfStream);
+    CHECK(usz == 18, "UDP-пакет без payload = 18 байт");
+    CHECK(parseUdpPacket(ubuf, usz, uhdr, upayload, upayloadSize), "пустой UDP-пакет парсится");
+    CHECK((uhdr.flags & kUdpFlagEndOfStream) != 0, "флаг end-of-stream сохранён");
+    CHECK(upayloadSize == 0, "UDP payload = 0 байт");
+
+    // Граничные случаи.
+    uint8_t utiny[10];
+    CHECK(buildUdpPacket(utiny, sizeof(utiny), 0, 0, 48000, 2, 16, upcm, 16, 0) == 0,
+          "маленький буфер → UDP-сборка не удаётся");
+    CHECK(buildUdpPacket(ubuf, sizeof(ubuf), 0, 0, 48000, 2, 16, nullptr, 1201, 0) == 0,
+          "payload > 1200 → UDP-сборка не удаётся");
+
+    // Испорченный magic → парсинг отклоняется.
+    ubuf[0] = 0x00;
+    CHECK(!parseUdpPacket(ubuf, usz, uhdr, upayload, upayloadSize), "битый UDP magic отклоняется");
+
+    // Слишком короткий буфер → отклоняется.
+    CHECK(!parseUdpPacket(ubuf, 10, uhdr, upayload, upayloadSize), "короткий UDP-буфер отклоняется");
+
+    // Заявленная длина payload больше фактического буфера → отклоняется.
+    usz = buildUdpPacket(ubuf, sizeof(ubuf), 0, 0, 48000, 2, 16, upcm, 16, 0);
+    CHECK(parseUdpPacket(ubuf, sizeof(UdpAudioHeader) + 8, uhdr, upayload, upayloadSize) == false,
+          "payload длиннее буфера → отклоняется");
 
     if (g_failures) {
         printf("ИТОГ: %d ПРОВАЛОВ\n", g_failures);

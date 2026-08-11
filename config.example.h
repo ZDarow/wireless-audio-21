@@ -37,14 +37,15 @@
 #define AUDIO_DELAY_SUB_MS       0
 
 // --- GPIO I2S ---
-#define AUDIO_I2S_BCK            26
-#define AUDIO_I2S_WS             25
-#define AUDIO_I2S_DATA_OUT       22
+// ESP32-S3: GPIO22-25 невалидны (внутренний SPI-флеш) — используем 4/5/6.
+#define AUDIO_I2S_BCK            4
+#define AUDIO_I2S_WS             5
+#define AUDIO_I2S_DATA_OUT       6
 
 // --- OLED ---
-// SCL на 23: не конфликтует с I2S DATA_OUT (22).
+// SCL на 18: валидный пин S3, не конфликтует с I2S.
 #define AUDIO_OLED_SDA           21
-#define AUDIO_OLED_SCL           23
+#define AUDIO_OLED_SCL           18
 
 // --- Энкодер ---
 #define AUDIO_ENC_A              32

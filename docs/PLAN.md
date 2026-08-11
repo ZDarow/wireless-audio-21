@@ -70,7 +70,7 @@ Smartphone (A2DP / Wi-Fi)
 
 - Мастер: ESP32-WROVER-E (PSRAM для A2DP) / ESP32-S3-N16R8 (Wi-Fi).
 - Сателлиты: ESP32-WROOM-32E / ESP32-S3.
-- DAC: PCM5102A (I2S), усилитель: TPA3116D2 (саб) / PAM8403 (сателлиты).
+- DAC: PCM5102A (I2S), усилитель: TPA3110 XH-A232 (аналоговый вход, 12–24 В).
 - OLED SSD1306 + энкодер KY-040 (мастер).
 
 ---
