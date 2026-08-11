@@ -171,3 +171,44 @@
   - Сборка: `master_s3_wifi` (core 3.3.11) — SUCCESS (RAM 15.1%, Flash 15.3%);
     сателлиты S3 (core 2.0.17) — SUCCESS; `master_a2dp` — SUCCESS;
     host-тесты (`make test`) — все зелёные.
+
+---
+
+## 9. Аудит архитектуры (11.08.2026) — план рефакторинга
+
+> Комплексный аудит (архитектура, SOLID, связность, алгоритмы, состояние,
+> манифесты, структура). Код не менялся — зафиксированы только задачи.
+> Критичность: 🔴 критично, 🟠 высоко, 🟡 средне, 🟢 низко.
+
+### 9.1 Блокеры / критические
+
+| ID | Крит. | Задача | Место | Статус |
+|---|---|---|---|---|
+| B11 | 🔴 | **Data race DSP-состояния**: `a2dpDataCallback` (задача A2DP) читает `m_target`/`m_crossoverHz`/`m_delaySamples`, а loop (Web UI/консоль) пишет их через `setVolume`/`setCrossoverHz`/`setDelayMs` без синхронизации. Нужен `portMUX_TYPE`/мьютекс вокруг сеттеров и `process()`; `g_cfg.transport` тоже меняется из двух задач | `master/src/main.cpp`, `web_server.h`, `pcm_pipeline.h`, `delay_line.h` | ⬜ |
+| B12 | 🔴 | **Неадаптация к sample rate A2DP**: pipeline/DelayLine сконфигурированы на `cfg.sampleRate` (48000), A2DP-источник часто отдаёт 44100 → неверный кроссовер/задержки. Получать реальную частоту из A2DP и переконфигурировать | `master/src/main.cpp` | ⬜ |
+| T11 | 🔴 | **Невоспроизводимая сборка**: git-зависимости `arduino-audio-tools` и `ESP32-A2DP` без фиксации SHA/тега. Зафиксировать ревизии или удалить неиспользуемые | `platformio.ini:67-68,117` | ⬜ |
+
+### 9.2 Баг-лист аудита
+
+| ID | Крит. | Проблема | Место | Статус |
+|---|---|---|---|---|
+| B13 | 🟠 | `JitterBuffer`: дефолт `m_targetLevel = 0` → `ready()` всегда true без конфигурации (щелчки/прерывания). Задать дефолт или требовать конфигурацию + тест | `firmware/common/audio/jitter_buffer.h` | ⬜ |
+| B14 | 🟠 | Сателлит пишет в неинициализированный I2S при провале `initI2S` (риск зависания `i2s_write`). Нужен guard «I2S готов» | `firmware/satellite/src/main.cpp` | ⬜ |
+| B15 | 🟡 | Лимитер стоит ДО volume — нет финальной защиты от клиппинга на выходе; перенести лимитер после volume | `firmware/common/audio/pcm_pipeline.h` | ⬜ |
+| B16 | 🟡 | Контракт A2DP-входа (S16_LE stereo, `samples` = стерео-фреймы) не зафиксирован в коде | `firmware/master/src/main.cpp` | ⬜ |
+
+### 9.3 Техдолг аудита (рефакторинг)
+
+| ID | Крит. | Задача | Место | Статус |
+|---|---|---|---|---|
+| T12 | 🟠 | Удалить мёртвый код: `master_config.h`, `satellite_config.h` (`MasterPins`/`SatellitePins`/`masterPins`/`satellitePins`/`masterI2SDataOut` не используются), неиспользуемые `ui/display.h`/`ui/encoder.h` (без U8g2 в lib_deps), `audio-tools` из lib_deps `master_s3_wifi` (не используется) | `firmware/master/include`, `firmware/satellite/include`, `firmware/common/ui`, `platformio.ini` | ⬜ |
+| T13 | 🟠 | Удалить мёртвые `build_flags -DAUDIO_NODE_ROLE=MASTER/-DAUDIO_SOURCE_MODE=A2DP/-DAUDIO_TRANSPORT_MODE=ESPNOW/-DAUDIO_NODE_ROLE=SATELLITE` (код читает `*_MASTER`/`*_A2DP` из generated_config.h). Единственный источник — `config.env` | `platformio.ini:58-60,77,86` | ⬜ |
+| T14 | 🟠 | Дублирование I2S-обвязки (`initI2S`/`writeSample` vs `initI2SSub`/`writeSubSample`) — вынести в `firmware/common/audio/i2s_output.h` с guard-ами core 2.x/3.x | `master/src/main.cpp`, `satellite/src/main.cpp` | ⬜ |
+| T15 | 🟠 | Ввести транспорт-интерфейс (`ITransport` с `sendTo/sendToChannel/broadcast`): убрать ветвления `if (transport == EspNow/Udp)` из `flushSatelliteBatches`/setup/loop (OCP) | `firmware/common/transport`, `master/src/main.cpp`, `satellite/src/main.cpp` | ⬜ |
+| T16 | 🟠 | `web_server.h` лежит в `master/include`, используется `master_s3` — перенести в `firmware/common/web/`; разбить на web-core + опциональные audio-хендлеры; сгруппировать 9 параметров конструктора в `struct AudioContext` (ISP) | `firmware/master/include/web_server.h`, `platformio.ini` | ⬜ |
+| T17 | 🟡 | Serial-консоль дублируется в 3 main.cpp — выделить общий парсер команд в `firmware/common/console.h` | `firmware/*/src/main.cpp` | ⬜ |
+| T18 | 🟡 | CI: зафиксировать версию PlatformIO (`pipx install platformio==6.1.19`), добавить кэширование `~/.platformio` и `.pio-core-master` | `.github/workflows/ci.yml` | ⬜ |
+| T19 | 🟡 | Миграция сателлитов на Arduino core 3.x (`driver/i2s_std.h`) → единый core-каталог, удаление `platformio.master.ini` (снимает конфликт фреймворков, legacy I2S в IDF 5.x deprecated) | `platformio.ini`, `platformio.master.ini`, `satellite/src/main.cpp` | ⬜ |
+| T20 | 🟡 | Синхронизировать документацию: `architecture.md` §9 («старые env в истории» — неверно, они в файле), §10 (mDNS реализован — F16), структура §8 без `master_s3`; `hardware.md` §5 (OLED SCL=22 → 23, противоречит config); `flash_master.sh`/`README.md` ведут на `master_a2dp` вместо `master_s3_wifi` | `docs/`, `scripts/flash_master.sh`, `README.md` | ⬜ |
+| T21 | 🟡 | `test/Arduino.h` перекрывает системное имя — вынести заглушки в `test/stubs/` с явным `-I` | `test/` | ⬜ |
+| T22 | 🟢 | Убрать `WebServer`/`Preferences` из `lib_deps` (встроены в фреймворк, PIO их не тянет отдельно — запись избыточна) | `platformio.ini:65,115` | ⬜ |
