@@ -84,6 +84,7 @@ cd test && make test
 
 ```
 http://<IP-мастера>/
+http://audio-master.local/   # mDNS (если клиент поддерживает)
 ```
 
 Адрес печатается в serial-консоль при старте (`Web UI: http://192.168.x.x`).

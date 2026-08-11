@@ -14,6 +14,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
+#include <ESPmDNS.h>
 #include <esp_netif.h>
 #include <esp_system.h>
 
@@ -198,6 +199,14 @@ void setup() {
 
     if (!initWifi()) {
         Logger::error("master", "Wi-Fi init failed");
+    }
+
+    // mDNS (F16): доступ по http://<hostname>.local (дефолт audio-master.local).
+    if (MDNS.begin(g_cfg.hostname)) {
+        Logger::infof("master", "mDNS: http://%s.local", g_cfg.hostname);
+        MDNS.addService("http", "tcp", 80);
+    } else {
+        Logger::warn("master", "mDNS init failed");
     }
 
     // UDP-listener аудио от смартфона (Этап 2: приём PCM-пакетов).

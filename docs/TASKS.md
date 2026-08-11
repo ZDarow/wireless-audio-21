@@ -62,7 +62,7 @@
 | F13 | Wi-Fi UDP источник (мастер принимает поток по UDP вместо A2DP). ESP32-S3 не поддерживает A2DP — Wi-Fi UDP PCM (смартфон → мастер) становится единственным источником | `firmware/master_s3/src/main.cpp` | Средний | ⬜ |
 | F14 | Синхронизация воспроизведения по `timestampMs` в пакете (компенсация дрейфа часов) | `firmware/common/transport/audio_packet.h`, `firmware/satellite/src/main.cpp` | Средний | ⬜ |
 | F15 | Защита от щелчков при включении/остановке: fade-in/out на мастере и сателлитах | `firmware/common/audio/volume_control.h` | Средний | ⬜ |
-| F16 | mDNS: доступ к Web UI по `http://audio-master.local` | `firmware/master_s3/src/main.cpp` | Низкий | ⬜ |
+| F16 | mDNS: доступ к Web UI по `http://audio-master.local` | `firmware/master_s3/src/main.cpp` | Низкий | ✅ |
 | F17 | Документация: `docs/architecture.md`, `docs/hardware.md`, `docs/wiring.md` | `docs/` | Низкий | ✅ |
 | F18 | ESP32-S3: покомпонентные громкости (master/left/right/sub) + fade-in/out, разное время старта каналов (ТЗ §8.2) | `firmware/common/audio/volume_control.h` | Средний | ⬜ |
 | F19 | ESP32-S3: синхронизация часов сателлитов от мастера по timestamp (PTP-подобная, ТЗ §12) | сателлиты | Средний | ⬜ |
