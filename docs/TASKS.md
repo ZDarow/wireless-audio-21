@@ -40,6 +40,8 @@
 | B6 | Риск нестабильности A2DP + Wi-Fi STA coexistence на ESP32 (нужна проверка на железе) | мастер | Риск | ⬜ |
 | B7 | Partition `huge_app.csv` без OTA — осознанное MVP-решение, блокирует будущий OTA | `platformio.ini:25` | Замечание | ⬜ |
 | B8 | Имя `udp.h` в case-insensitive ФС (Windows) конфликтует с системным `Udp.h` из Arduino (включается `WiFiUdp.h`) — сборка падала. Файл переименован в `udp_transport.h` | `firmware/common/transport/udp_transport.h` | Высокий | ✅ (переименование + сборка 3 env SUCCESS) |
+| B9 | **APSTA-репитер (core 3.x): мастер не отвечает на AP-интерфейсе** — клиент за AP получает IP (DHCP), интернет через NAPT работает (ping 8.8.8.8, HTTP/HTTPS 200), но unicast на AP-IP не обрабатывается: ping/ARP `192.168.4.1` с клиента — 100% loss, Web UI недоступен по `192.168.4.1` (доступен только через STA-IP `192.168.1.129`). Диагностика `net` с мастера: `ping ap_gw` FAIL при живом AP-интерфейсе. Похоже на ограничение APSTA в Arduino core 3.x / IDF 5.5 (AP netif не принимает пакеты на свой IP, если активен STA) | `firmware/master_s3/src/main.cpp`, Wi-Fi APSTA | Средний | ⬜ |
+| B10 | **IPv6 не форвардится через NAPT** — DNS возвращает AAAA-записи, клиенты за AP мастера пытаются идти по IPv6 и «зависают» (curl без `-4` = FAIL, HTTP 000), хотя IPv4 полностью работает. Нужно: не отдавать IPv6-маршрут/RA на AP (проверить, что отключено) или документировать требование IPv4 | мастер (APSTA) | Низкий | ⬜ |
 
 ---
 
@@ -66,7 +68,7 @@
 | F17 | Документация: `docs/architecture.md`, `docs/hardware.md`, `docs/wiring.md` | `docs/` | Низкий | ✅ |
 | F18 | ESP32-S3: покомпонентные громкости (master/left/right/sub) + fade-in/out, разное время старта каналов (ТЗ §8.2) | `firmware/common/audio/volume_control.h` | Средний | ⬜ |
 | F19 | ESP32-S3: синхронизация часов сателлитов от мастера по timestamp (PTP-подобная, ТЗ §12) | сателлиты | Средний | ⬜ |
-| F20 | ESP32-S3: режим STA + автонастройка Wi-Fi (blink beacon, ТЗ §6.2), UDP/HTTP-аудио (RTP-совместимый, ТЗ §10) | `firmware/master_s3/src/main.cpp` | Низкий | ⬜ |
+| F20 | ESP32-S3: режим STA + автонастройка Wi-Fi (blink beacon, ТЗ §6.2), UDP/HTTP-аудио (RTP-совместимый, ТЗ §10) | `firmware/master_s3/src/main.cpp` | Низкий | ✅ (настройка Wi-Fi через Web UI: `/api/wifi/scan` + `/api/wifi`, при неудачном STA — AP настройки + `http://192.168.4.1`) |
 | F21 | Wi-Fi репитер на мастере (APSTA+NAPT): смартфон → AP мастера → NAT → домашняя сеть (интернет). Требует Arduino core 3.x (pioarduino 55.03.311, lwip с `CONFIG_LWIP_IPV4_NAPT=y`); ограничение: один радиомодуль → канал AP следует за каналом домашней сети | `platformio.ini`, `firmware/master_s3/src/main.cpp`, `firmware/common/config/node_config.h` | Средний | ✅ |
 
 ---
@@ -142,3 +144,30 @@
     STA-подключение к домашней сети `Cudy` (192.168.10.42),
     `NAPT enabled — AP clients routed to upstream`.
     Остаётся финальный ручной тест: смартфон → AP мастера → интернет.
+
+## 8. Выполнено (обновление 11.08.2026)
+
+- **F20 — ручная настройка Wi-Fi со смартфона через Web UI** — реализовано:
+  - `web_server.h`: добавлены эндпоинты `GET /api/wifi/scan` (список найденных
+    сетей: SSID/RSSI/enc) и `POST /api/wifi` (`{"ssid","password"}` → сохранить
+    в NVS + reboot). В HTML-панель добавлена карточка «Wi-Fi подключение»
+    (сканирование, клик по сети, пароль, «Сохранить и перезагрузить»);
+    `/api/status` отдаёт `wifi_mode`/`wifi_ssid`/`wifi_ip`/`wifi_ap_ip`.
+  - `web_server.h`: аудио-зависимости (`PcmPipeline`, `DelayLine`, `EspNowTransport`,
+    статусы) стали опциональными (указатели, дефолт `nullptr`) — мастер ESP32-S3
+    (этап 1, без аудио-конвейера) использует тот же Web UI для настройки Wi-Fi
+    и диагностики; аудио-эндпоинты возвращают `unavailable`.
+  - `master_s3/src/main.cpp`: подключён `MasterWebServer`; при неудачном
+    STA-подключении (сеть не найдена/неверный пароль) мастер поднимает AP
+    настройки и запускает Web UI на `http://192.168.4.1` (`setup_mode`);
+    добавлена serial-команда `wifi <ssid> <password>`.
+  - `espnow.h`: совместимость с IDF 5.x (core 3.x) — сигнатуры
+    `esp_now_recv_cb_t`/`esp_now_send_cb_t` изменились (MAC через
+    `esp_now_recv_info_t::src_addr` / `wifi_tx_info_t::des_addr`);
+    добавлены ветки `#if ESP_ARDUINO_VERSION_MAJOR >= 3`. Без этого `espnow.h`
+    (подтягивается через `web_server.h`) не собирался в master_s3_wifi.
+  - `platformio.ini`: env `master_s3_wifi` получил `-I firmware/master/include`
+    (для `web_server.h`).
+  - Сборка: `master_s3_wifi` (core 3.3.11) — SUCCESS (RAM 15.1%, Flash 15.3%);
+    сателлиты S3 (core 2.0.17) — SUCCESS; `master_a2dp` — SUCCESS;
+    host-тесты (`make test`) — все зелёные.

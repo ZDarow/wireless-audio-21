@@ -24,6 +24,27 @@ public:
     bool begin() {
         if (esp_now_init() != ESP_OK) return false;
 
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+        // IDF 5.x: esp_now_recv_cb_t — (const esp_now_recv_info_t*, data, len);
+        // MAC источника — src_addr.
+        esp_now_register_recv_cb([](const esp_now_recv_info_t* info, const uint8_t* data, int len) {
+            if (g_rxCallback) {
+                MacAddr from;
+                memcpy(from.bytes, info->src_addr, 6);
+                g_rxCallback(data, static_cast<size_t>(len), from);
+            }
+        });
+        // IDF 5.x: esp_now_send_cb_t — (const wifi_tx_info_t*, status);
+        // MAC получателя — des_addr.
+        esp_now_register_send_cb([](const wifi_tx_info_t* info, esp_now_send_status_t status) {
+            if (g_sentCallback) {
+                MacAddr from;
+                memcpy(from.bytes, info->des_addr, 6);
+                g_sentCallback(from, status == ESP_NOW_SEND_SUCCESS);
+            }
+        });
+#else
+        // core 2.x: esp_now_recv_cb_t — (mac, data, len).
         esp_now_register_recv_cb([](const uint8_t* mac, const uint8_t* data, int len) {
             if (g_rxCallback) {
                 MacAddr from;
@@ -31,7 +52,7 @@ public:
                 g_rxCallback(data, static_cast<size_t>(len), from);
             }
         });
-
+        // core 2.x: esp_now_send_cb_t — (mac, status).
         esp_now_register_send_cb([](const uint8_t* mac, esp_now_send_status_t status) {
             if (g_sentCallback) {
                 MacAddr from;
@@ -39,6 +60,7 @@ public:
                 g_sentCallback(from, status == ESP_NOW_SEND_SUCCESS);
             }
         });
+#endif
 
         return true;
     }

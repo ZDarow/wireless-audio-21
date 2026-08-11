@@ -4,8 +4,15 @@
 // поэтому источник аудио — Wi-Fi UDP PCM со смартфона.
 //
 // Этап 1 (текущий): загрузка платы, стартовая диагностика (chip/flash/PSRAM),
-// Wi-Fi (AP_DIRECT или STA), UDP-listener на AUDIO_UDP_PORT, serial-консоль.
-// Аудио-конвейер (jitter buffer, DSP, TX на сателлиты) — Этап 2+.
+// Wi-Fi (AP_DIRECT, STA или APSTA-репитер), Web UI + REST API (включая
+// настройку Wi-Fi подключения со смартфона), UDP-listener на AUDIO_UDP_PORT,
+// serial-консоль. Аудио-конвейер (jitter buffer, DSP, TX на сателлиты) —
+// Этап 2+.
+//
+// Настройка Wi-Fi: если STA-подключение к домашней сети не удалось (сеть не
+// найдена, неверный пароль), мастер поднимает AP настройки и запускает Web UI
+// на http://192.168.4.1 — со смартфона выбирается сеть, вводятся SSID/пароль,
+// креды сохраняются в NVS и мастер перезагружается в STA/APSTA-режиме.
 //
 // Стартовая диагностика (ТЗ §14.2):
 //   chip model, flash size, PSRAM size, Wi-Fi mode, IP, UDP audio port,
@@ -17,11 +24,14 @@
 #include <ESPmDNS.h>
 #include <esp_netif.h>
 #include <esp_system.h>
+#include <ping/ping_sock.h>
+#include <freertos/semphr.h>
 
 #include "node_config.h"
 #include "storage.h"
 #include "logger.h"
 #include "master_s3_config.h"
+#include "web_server.h"
 
 using namespace audio21;
 
@@ -33,6 +43,14 @@ static NodeConfig g_cfg;
 static WiFiUDP g_udp;
 static uint32_t g_packetsRx = 0;
 static uint32_t g_packetBytesRx = 0;
+
+// Web UI + REST API. Аудио-конвейер (pipeline/delay/espnow) в Этапе 1 не
+// реализован — передаём nullptr: аудио-эндпоинты вернут "unavailable",
+// доступны настройка Wi-Fi, статус и reboot.
+static MasterWebServer g_webServer(g_cfg);
+
+// Режим настройки Wi-Fi: STA не подключился → мастер поднял AP настройки.
+static bool g_setupMode = false;
 
 // ---------------------------------------------------------------------------
 // Стартовая диагностика (ТЗ §14.2)
@@ -88,6 +106,22 @@ static void enableNapt() {
 #endif
 }
 
+// Поднять AP настройки (используется при неудачном STA-подключении).
+static bool startSetupAp() {
+    if (WiFi.getMode() == WIFI_AP) return true; // AP уже поднят (ApSta)
+    WiFi.mode(WIFI_AP_STA);
+    bool ok = WiFi.softAP(g_cfg.wifiApSsid, g_cfg.wifiApPassword, kDefaultWifiChannel);
+    if (!ok) {
+        Logger::error("wifi", "setup softAP failed");
+        return false;
+    }
+    delay(200);
+    Logger::infof("wifi", "setup AP '%s' on channel %d, IP: %s",
+                  g_cfg.wifiApSsid, kDefaultWifiChannel,
+                  WiFi.softAPIP().toString().c_str());
+    return true;
+}
+
 static bool initWifi() {
     WiFi.disconnect(true);
     WiFi.setSleep(false); // отключить power save для аудиоузлов (ТЗ §16.3)
@@ -128,7 +162,13 @@ static bool initWifi() {
                           WiFi.localIP().toString().c_str());
             enableNapt();
         } else {
-            Logger::warn("wifi", "upstream not connected — AP работает без интернета");
+            // Домашняя сеть недоступна — AP остаётся, включаем режим настройки.
+            // Отключаем авто-реконнект STA: постоянные попытки подключения
+            // мешают сканированию сетей в Web UI и нагружают радиомодуль.
+            WiFi.setAutoReconnect(false);
+            WiFi.disconnect(false, true);
+            Logger::warn("wifi", "upstream not connected — setup mode (Web UI on AP)");
+            g_setupMode = true;
         }
         return true; // AP работает в любом случае
     }
@@ -140,8 +180,14 @@ static bool initWifi() {
     int tries = 0;
     while (WiFi.status() != WL_CONNECTED && tries++ < 40) delay(500);
     if (WiFi.status() != WL_CONNECTED) {
-        Logger::error("wifi", "connect failed");
-        return false;
+        // Не удалось подключиться к домашней сети — поднимаем AP настройки,
+        // чтобы пользователь мог задать SSID/пароль через Web UI.
+        // Отключаем авто-реконнект STA (мешает скану сетей в Web UI).
+        WiFi.setAutoReconnect(false);
+        WiFi.disconnect(false, true);
+        Logger::warn("wifi", "connect failed — switching to setup AP");
+        g_setupMode = true;
+        return startSetupAp();
     }
     Logger::infof("wifi", "connected, IP: %s", WiFi.localIP().toString().c_str());
     return true;
@@ -150,6 +196,42 @@ static bool initWifi() {
 // ---------------------------------------------------------------------------
 // Serial-консоль
 // ---------------------------------------------------------------------------
+
+// Блокирующий ping через esp_ping (IDF 5.x). Используется командой `net`
+// для диагностики доступа в сеть с самого мастера.
+static SemaphoreHandle_t g_pingDone = nullptr;
+static uint32_t g_pingRecv = 0;
+
+static void onPingEnd(esp_ping_handle_t h, void* /*arg*/) {
+    uint32_t recv = 0;
+    esp_ping_get_profile(h, ESP_PING_PROF_REPLY, &recv, sizeof(recv));
+    g_pingRecv = recv;
+    esp_ping_delete_session(h);
+    if (g_pingDone) xSemaphoreGive(g_pingDone);
+}
+
+static bool pingHost(const IPAddress& ip, uint32_t count, uint32_t timeoutMs) {
+    if (!g_pingDone) g_pingDone = xSemaphoreCreateBinary();
+    esp_ping_config_t cfg = ESP_PING_DEFAULT_CONFIG();
+    cfg.count = count;
+    cfg.timeout_ms = timeoutMs;
+    cfg.interval_ms = 300;
+    cfg.target_addr.type = IPADDR_TYPE_V4;
+    cfg.target_addr.u_addr.ip4.addr = (uint32_t)ip;
+    esp_ping_callbacks_t cbs = {};
+    cbs.on_ping_end = onPingEnd;
+    esp_ping_handle_t h;
+    if (esp_ping_new_session(&cfg, &cbs, &h) != ESP_OK) return false;
+    xSemaphoreTake(g_pingDone, 0); // сброс семафора
+    g_pingRecv = 0;
+    esp_ping_start(h);
+    uint32_t waitMs = count * (timeoutMs + 300) + 500;
+    if (xSemaphoreTake(g_pingDone, pdMS_TO_TICKS(waitMs)) == pdTRUE) {
+        return g_pingRecv > 0;
+    }
+    esp_ping_delete_session(h);
+    return false;
+}
 
 static void handleConsoleCommand(const String& line) {
     String cmd = line;
@@ -160,10 +242,12 @@ static void handleConsoleCommand(const String& line) {
         Serial.println("role: master (s3)");
         Serial.printf("source: %s\n", sourceToString(g_cfg.source));
         Serial.printf("wifi_mode: %s\n", wifiModeToString(g_cfg.wifiMode));
+        Serial.printf("wifi_ssid: %s\n", g_cfg.wifiSsid);
         Serial.printf("wifi_ip: %s\n", WiFi.localIP().toString().c_str());
-        if (g_cfg.wifiMode == WifiMode::ApDirect || g_cfg.wifiMode == WifiMode::ApSta) {
+        if (g_cfg.wifiMode == WifiMode::ApDirect || g_cfg.wifiMode == WifiMode::ApSta || g_setupMode) {
             Serial.printf("wifi_ap_ip: %s\n", WiFi.softAPIP().toString().c_str());
         }
+        Serial.printf("setup_mode: %s\n", g_setupMode ? "yes" : "no");
         Serial.printf("udp_port: %u\n", g_cfg.udpAudioPort);
         Serial.printf("packets_rx: %lu\n", (unsigned long)g_packetsRx);
         Serial.printf("bytes_rx: %lu\n", (unsigned long)g_packetBytesRx);
@@ -171,9 +255,70 @@ static void handleConsoleCommand(const String& line) {
         return;
     }
 
+    // Ручная настройка Wi-Fi через консоль: `wifi <ssid> <password>`
+    if (cmd.startsWith("wifi ")) {
+        String rest = cmd.substring(5);
+        rest.trim();
+        int sp = rest.indexOf(' ');
+        if (sp <= 0) { Serial.println("usage: wifi <ssid> <password>"); return; }
+        String ssid = rest.substring(0, sp);
+        String pass = rest.substring(sp + 1);
+        ssid.trim();
+        pass.trim();
+        if (ssid.length() == 0 || ssid.length() >= sizeof(g_cfg.wifiSsid)) { Serial.println("err: bad ssid"); return; }
+        if (pass.length() >= sizeof(g_cfg.wifiPassword)) { Serial.println("err: bad password"); return; }
+        strlcpy(g_cfg.wifiSsid, ssid.c_str(), sizeof(g_cfg.wifiSsid));
+        strlcpy(g_cfg.wifiPassword, pass.c_str(), sizeof(g_cfg.wifiPassword));
+        ConfigStorage::save(g_cfg);
+        Serial.println("saved, rebooting...");
+        delay(200);
+        ESP.restart();
+        return;
+    }
+
+    if (cmd == "net") {
+        Serial.printf("sta_ip: %s\n", WiFi.localIP().toString().c_str());
+        Serial.printf("ap_ip: %s\n", WiFi.softAPIP().toString().c_str());
+        Serial.printf("ap_stations: %u\n", WiFi.softAPgetStationNum());
+        Serial.printf("gateway: %s\n", WiFi.gatewayIP().toString().c_str());
+        Serial.printf("netmask: %s\n", WiFi.subnetMask().toString().c_str());
+        Serial.printf("dns: %s\n", WiFi.dnsIP().toString().c_str());
+        // Проверка AP-интерфейса: пинг первого клиента (192.168.4.x)
+        {
+            esp_netif_ip_info_t ip;
+            esp_netif_t* ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+            if (ap && esp_netif_get_ip_info(ap, &ip) == ESP_OK) {
+                IPAddress apIp(ip.ip.addr);
+                Serial.printf("ap_netif: %s\n", apIp.toString().c_str());
+                IPAddress apGw(ip.gw.addr);
+                Serial.printf("ping ap_gw: %s\n", pingHost(apGw, 2, 1500) ? "OK" : "FAIL");
+            } else {
+                Serial.println("ap_netif: not found");
+            }
+        }
+        Serial.printf("ping gateway: %s\n", pingHost(WiFi.gatewayIP(), 3, 2000) ? "OK" : "FAIL");
+        Serial.printf("ping 8.8.8.8: %s\n", pingHost(IPAddress(8, 8, 8, 8), 3, 2000) ? "OK" : "FAIL");
+        Serial.printf("ping 1.1.1.1: %s\n", pingHost(IPAddress(1, 1, 1, 1), 3, 2000) ? "OK" : "FAIL");
+        return;
+    }
+
     if (cmd == "save") {
         ConfigStorage::save(g_cfg);
         Serial.println("ok");
+        return;
+    }
+
+    if (cmd == "erase") {
+        ConfigStorage::erase();
+        Serial.println("config erased, rebooting...");
+        delay(200);
+        ESP.restart();
+        return;
+    }
+
+    if (cmd == "reboot") {
+        Serial.println("rebooting");
+        ESP.restart();
         return;
     }
 
@@ -202,11 +347,19 @@ void setup() {
     }
 
     // mDNS (F16): доступ по http://<hostname>.local (дефолт audio-master.local).
-    if (MDNS.begin(g_cfg.hostname)) {
+    // В режиме настройки mDNS на AP не работает — Web UI доступен по IP.
+    if (!g_setupMode && MDNS.begin(g_cfg.hostname)) {
         Logger::infof("master", "mDNS: http://%s.local", g_cfg.hostname);
         MDNS.addService("http", "tcp", 80);
+    }
+
+    // Web UI: в режиме настройки — на AP (http://192.168.4.1), иначе — по IP/mDNS.
+    g_webServer.begin();
+    if (g_setupMode) {
+        Logger::infof("master", "Wi-Fi setup: connect to AP '%s', open http://192.168.4.1",
+                      g_cfg.wifiApSsid);
     } else {
-        Logger::warn("master", "mDNS init failed");
+        Logger::infof("master", "Web UI: http://%s", WiFi.localIP().toString().c_str());
     }
 
     // UDP-listener аудио от смартфона (Этап 2: приём PCM-пакетов).
@@ -232,6 +385,14 @@ void loop() {
     if (Serial.available()) {
         String line = Serial.readStringUntil('\n');
         handleConsoleCommand(line);
+    }
+
+    // Web UI: обработка запросов и сохранение конфига по кнопке.
+    g_webServer.handleClient();
+    if (g_webServer.saveRequested()) {
+        ConfigStorage::save(g_cfg);
+        g_webServer.clearSaveRequested();
+        Logger::info("master", "config saved via Web UI");
     }
 
     delay(10);

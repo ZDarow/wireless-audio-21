@@ -56,12 +56,12 @@ static constexpr uint32_t kSatelliteTimeoutMs = 5000;
 
 static BluetoothA2DPSink g_a2dp;
 
-// Web UI + REST API (мастер). Ссылки на указатели задержек: объект создаётся
-// до new DelayLine в setup(), поэтому храним ссылки на переменные-указатели.
-static MasterWebServer g_webServer(g_cfg, g_pipeline,
-                                   g_delayLeft, g_delayRight, g_delaySub,
-                                   g_espnow,
-                                   g_leftOnline, g_rightOnline, g_a2dpConnected);
+// Web UI + REST API (мастер). Указатели на задержки: объект создаётся
+// до new DelayLine в setup(), поэтому храним адреса переменных-указателей.
+static MasterWebServer g_webServer(g_cfg, &g_pipeline,
+                                   &g_delayLeft, &g_delayRight, &g_delaySub,
+                                   &g_espnow,
+                                   &g_leftOnline, &g_rightOnline, &g_a2dpConnected);
 
 // ---------------------------------------------------------------------------
 // I2S выход сабвуфера (моно)
