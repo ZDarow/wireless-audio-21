@@ -1,39 +1,28 @@
 {
     "recommendations": [
-        // ---- Embedded / PlatformIO (основной стек) ----
-        "pioarduino.pioarduino-ide",
-        "ms-vscode.cpptools",
         "Jason2866.esp-decoder",
-        "ms-vscode.hexeditor",
-        "ms-vscode.vscode-serial-monitor",
-
-        // ---- Python (скрипты и тесты) ----
+        "charliermarsh.ruff",
+        "eamodio.gitlens",
+        "foxundermoon.shell-format",
+        "github.vscode-github-actions",
+        "hediet.vscode-drawio",
+        "humao.rest-client",
+        "ms-python.black-formatter",
         "ms-python.python",
         "ms-python.vscode-pylance",
-        "ms-python.black-formatter",
-        "charliermarsh.ruff",
-
-        // ---- Bash (скрипты прошивки) ----
-        "timonwong.shellcheck",
-        "foxundermoon.shell-format",
-
-        // ---- Документация ----
-        "yzhang.markdown-all-in-one",
-        "hediet.vscode-drawio",
-        "streetsidesoftware.code-spell-checker",
-
-        // ---- Git и CI ----
-        "eamodio.gitlens",
+        "ms-vscode.cpptools",
+        "ms-vscode.hexeditor",
+        "ms-vscode.vscode-serial-monitor",
+        "pioarduino.pioarduino-ide",
         "redhat.vscode-yaml",
-        "github.vscode-github-actions",
-
-        // ---- REST API (Web UI мастера) ----
-        "humao.rest-client"
+        "streetsidesoftware.code-spell-checker",
+        "timonwong.shellcheck",
+        "yzhang.markdown-all-in-one"
     ],
     "unwantedRecommendations": [
-        "ms-vscode.cpptools-extension-pack",
-        "platformio.platformio-ide",
         "espressif.esp-idf-extension",
-        "marus25.cortex-debug"
+        "marus25.cortex-debug",
+        "ms-vscode.cpptools-extension-pack",
+        "platformio.platformio-ide"
     ]
 }
