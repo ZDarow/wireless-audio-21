@@ -89,7 +89,7 @@ CI: `.github/workflows/ci.yml` (собирает master_s3_wifi + сателли
 | C0.1 | SSID режима настройки | 🟠 | ⬜ | решение |
 | C0.2 | Судьба legacy env `master_a2dp` | 🟠 | ⬜ | решение |
 | C1.1 | `udp_audio_packet.h` по §9.1 | 🔴 | ✅ | пакет |
-| C1.2 | Контроль sequence / concealment / standby | 🔴 | ⬜ | пакет |
+| C1.2 | Контроль sequence / concealment / standby | 🔴 | ✅ | пакет |
 | C1.3 | Jitter buffer мастера в PSRAM | 🔴 | ⬜ | пакет |
 | C1.4 | I2S-выход мастера (4/5/6) | 🔴 | ⬜ | пакет |
 | C1.5 | Приём вместо отбрасывания | 🔴 | ⬜ | пакет |
@@ -149,14 +149,16 @@ CI: `.github/workflows/ci.yml` (собирает master_s3_wifi + сателли
 
 ### Этап 1 — 🔴 Приём UDP-аудио + I2S-вывод на сабвуфер
 
-#### C1.1 — `udp_audio_packet.h`: парсер пакета смартфона (§9.1)
+#### C1.1 — `udp_audio_packet.h`: парсер пакета смартфона (§9.1) — ✅
 
 - **Проблема:** протокола смартфон→мастер в коде нет. `master_s3/src/main.cpp:535-541` только считает байты и выбрасывает их (UDP-listener — `main.cpp:523-528`).
 - **Требование:** §9.1 — структура пакета (magic `0xA210`), §9.2 — параметры (48 кГц, 2 канала, 16 бит, 5 мс ≈ 960 байт, MTU < 1200).
-- **План:**
-  1. Создать `firmware/common/transport/udp_audio_packet.h` (header-only).
-  2. Структура `UdpAudioHeader` (18 байт, little-endian) + `buildUdpPacket`/`parseUdpPacket`.
-  3. Host-тест в `test/transport_packet_test.cpp`.
+- **Реализовано (11.08.2026):** `firmware/common/transport/udp_audio_packet.h` (header-only, без Arduino):
+  `UdpAudioHeader` (18 байт, packed, little-endian), `kUdpMagic=0xA210`, `kUdpProtocolVersion=1`,
+  флаги `kUdpFlagEndOfStream`/`kUdpFlagKeyframe`, `kUdpMaxPayload=1200` (MTU-safe, §9.2),
+  `buildUdpPacket`/`parseUdpPacket` (валидация magic/version/длины payload).
+  Host-тест в `test/transport_packet_test.cpp`: сборка/разбор стерео 48 кГц/16 бит,
+  пустой payload (heartbeat), битый magic, короткий буфер, длина payload больше буфера.
 - **Код-скетч:**
   ```cpp
   // §9.1: offset 0..17
@@ -180,28 +182,20 @@ CI: `.github/workflows/ci.yml` (собирает master_s3_wifi + сателли
 - **Критерий:** `make -C test test` зелёный; валидный/невалидный пакет разбираются корректно.
 - **Оценка:** 3 ч.
 
-#### C1.2 — Контроль `sequence`, concealment, ramp-out, standby (§9.3)
+#### C1.2 — Контроль `sequence`, concealment, ramp-out, standby (§9.3) — ✅
 
 - **Проблема:** потери пакетов сейчас игнорируются.
 - **Требование:** §9.3: `>50 мс` — concealment/interpolation, `>200 мс` — ramp to mute, `>3 с` — standby.
-- **План:**
-  1. Создать `firmware/common/audio/udp_audio_receiver.h`: состояние приёма.
-  2. При разрыве `sequence` — считаем время потери (`samplesLost = seqDelta * msPerPacket`).
-  3. Пока <50 мс — повтор последнего фрейма (concealment); 50–200 мс — плавное затухание; >3 с без потока — тишина/standby.
-  4. Host-тест.
-- **Код-скетч:**
-  ```cpp
-  enum class StreamState { Active, Conceal, RampOut, Standby };
-  class UdpAudioReceiver {
-  public:
-      StreamState feed(uint32_t seq, uint32_t ts, const int16_t* pcm, size_t n);
-      // при разрыве: conceal-пакет в jitter buffer с понижающейся амплитудой
-  };
-  ```
-- **Файлы:** `common/audio/udp_audio_receiver.h` (новый), `test/audio_filter_test.cpp` или новый `udp_audio_receiver_test.cpp`.
+- **Реализовано (11.08.2026):** `firmware/common/audio/udp_audio_receiver.h` (header-only, без Arduino):
+  `StreamState` (Active/Conceal/RampOut/Standby), `feed(seq, ts, pcm, n, nowMs)` с детекцией
+  пропуска по `sequence` (аккуратно к wrap 2^32; дубликаты/переупорядочивание не считаются
+  потерями), `tick(nowMs)` — эскалация по времени от последнего валидного пакета,
+  `concealGain()` — 1.0 → плавно 0.0 (50→200 мс), 0 при ramp-to-mute/standby,
+  счётчики `packetsRx`/`packetsLost`.
+  Host-тест `test/udp_audio_receiver_test.cpp` (добавлен в `test/Makefile`): 0,1,3 → conceal;
+  потеря 100 мс → conceal, gain ≈ 1/3; 210 мс → RampOut; 3,2 с → Standby; восстановление;
+  wrap sequence; без пакетов с момента старта → standby.
 - **Зависимости:** C1.1.
-- **Критерий:** юнит-тест: последовательности 0,1,3 → conceal; разрыв >200 мс → RampOut; пауза 3,2 с → Standby.
-- **Оценка:** 4 ч.
 
 #### C1.3 — Jitter buffer мастера в PSRAM (20–60 мс)
 

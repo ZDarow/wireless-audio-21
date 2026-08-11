@@ -285,8 +285,8 @@
 
 | ID | Задача | Место | Связь | Критерий готовности | Статус |
 |---|---|---|---|---|---|
-| C1.1 | `udp_audio_receiver`: разбор пакета по §9.1 (magic `0xA210`, version, flags, `sequence`, `timestamp_samples`, `sample_rate`, `channels`, `bits_per_sample`, `payload_length`) | `firmware/common/transport/udp_audio_packet.h`, `common/audio/udp_audio_receiver.h` (новые) | T13/F13 | Разбор валидных/невалидных пакетов; host-тест | ✅ (11.08.2026: `udp_audio_packet.h` + host-тест в `transport_packet_test.cpp`; класс `udp_audio_receiver` — C1.2) |
-| C1.2 | Проверка `sequence`, concealment, ramp-out, mute при отсутствии потока >3 с (§9.3) | `udp_audio_receiver` | §9.3 | Пропуск пакетов → тишина/плавное затухание; тест | ⬜ |
+| C1.1 | `udp_audio_receiver`: разбор пакета по §9.1 (magic `0xA210`, version, flags, `sequence`, `timestamp_samples`, `sample_rate`, `channels`, `bits_per_sample`, `payload_length`) | `firmware/common/transport/udp_audio_packet.h`, `common/audio/udp_audio_receiver.h` (новые) | T13/F13 | Разбор валидных/невалидных пакетов; host-тест | ✅ (11.08.2026: `udp_audio_packet.h` + host-тест в `transport_packet_test.cpp`; `udp_audio_receiver.h` — закрыт как C1.2) |
+| C1.2 | Проверка `sequence`, concealment, ramp-out, mute при отсутствии потока >3 с (§9.3) | `udp_audio_receiver` | §9.3 | Пропуск пакетов → тишина/плавное затухание; тест | ✅ (11.08.2026: `common/audio/udp_audio_receiver.h` + host-тест; см. «Выполнено») |
 | C1.3 | Jitter buffer мастера **в PSRAM**, 20–60 мс (§7.6, §16.2) | `common/audio/jitter_buffer.h` | B13 | Буфер в PSRAM, ready()/deficit работают | ⬜ |
 | C1.4 | I2S-выход мастера (пины 4/5/6), вынести в общий `common/audio/i2s_output.h` | `master_s3/src/main.cpp`, `common/audio/i2s_output.h` (новый) | T14 | Звук со смартфона через PCM5102A (**критерий §18 Этап 2**) | ⬜ |
 | C1.5 | Заменить «счётчик байт» в loop() на реальный приём | `master_s3/src/main.cpp:535-541` | §18 Этап 2 | Пакеты не отбрасываются | ⬜ |
@@ -376,8 +376,18 @@
   - Host-тест в `test/transport_packet_test.cpp`: сборка/разбор стерео
     48 кГц/16 бит, пустой payload (heartbeat), битый magic, короткий буфер,
     длина payload больше буфера.
-  - Проверено: 3 host-бинаря зелёные (g++/MinGW). `make -C test test` на
+  - Проверено: 4 host-бинаря зелёные (g++/MinGW). `make -C test test` на
     Windows требует sh — вручную бинарники прогнаны; `make test` на Linux/macOS
     будет зелёным.
-  - Осталось по C1.1-блок: класс `udp_audio_receiver` (state, concealment,
-    ramp-out, standby) — C1.2.
+
+- **C1.2 — `udp_audio_receiver.h` (sequence, concealment, ramp-out, standby, §9.3)** — реализовано:
+  - `firmware/common/audio/udp_audio_receiver.h` (header-only, без Arduino):
+    `StreamState` (Active/Conceal/RampOut/Standby), пороги §9.3
+    (50 мс / 200 мс / 3 с), `feed(seq, ts, pcm, n, nowMs)` с детекцией
+    пропусков по sequence (включая wrap 2^32), `tick(nowMs)` — эскалация
+    по времени от последнего валидного пакета, `concealGain()` — плавное
+    затухание 50→200 мс, счётчики `packetsRx`/`packetsLost`.
+  - Host-тест `test/udp_audio_receiver_test.cpp`: последовательность 0,1,3 →
+    conceal; потеря 100 мс → conceal с gain ≈ 1/3; 210 мс → ramp to mute;
+    3.2 с → standby; восстановление после standby; дубликаты/переупорядочивание
+    не считаются потерями; wrap sequence; добавлен в `test/Makefile`.
