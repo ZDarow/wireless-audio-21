@@ -3,11 +3,12 @@
 // Адаптация под ESP32-S3 (см. docs/PLAN.md и ТЗ): S3 не поддерживает A2DP,
 // поэтому источник аудио — Wi-Fi UDP PCM со смартфона.
 //
-// Этап 1 (текущий): загрузка платы, стартовая диагностика (chip/flash/PSRAM),
+// Этап 2 (текущий): загрузка платы, стартовая диагностика (chip/flash/PSRAM),
 // Wi-Fi (AP_DIRECT, STA или APSTA-репитер), Web UI + REST API (включая
 // настройку Wi-Fi подключения со смартфона), UDP-listener на AUDIO_UDP_PORT,
-// serial-консоль. Аудио-конвейер (jitter buffer, DSP, TX на сателлиты) —
-// Этап 2+.
+// serial-консоль, аудио-конвейер: UDP → jitter buffer (PSRAM) → DSP
+// (volume → tone → limiter → LR4 crossover) → sub → DelayLine → I2S.
+// TX на сателлиты (left/right HPF-каналы) — Этап 3.
 //
 // Настройка Wi-Fi: если STA-подключение к домашней сети не удалось (сеть не
 // найдена, неверный пароль), мастер поднимает AP настройки и запускает Web UI
@@ -41,23 +42,36 @@
 #include "udp_audio_packet.h"
 #include "udp_audio_receiver.h"
 #include "jitter_buffer.h"
+#include "pcm_pipeline.h"
+#include "delay_line.h"
 #include "i2s_output.h"
 
 using namespace audio21;
 
 // ---------------------------------------------------------------------------
 // Аудио-конвейер мастера (Этап 2, §9/§18): UDP-пакет со смартфона →
-// UdpAudioReceiver (sequence/concealment) → JitterBuffer (PSRAM) → I2S (sub).
-// Стерео PCM складывается в моно (сабвуфер), задержки/DSP — Этап 3.
+// UdpAudioReceiver (sequence/concealment) → JitterBuffer (PSRAM) → DSP
+// (volume → tone → limiter → LR4 crossover) → sub → DelayLine → I2S.
+// left/right (HPF) — для сателлитов, TX — Этап 3.
 // ---------------------------------------------------------------------------
 
 // Буфер PCM для приёма: максимальный UDP-пакет §9.2 (< MTU).
 static uint8_t g_udpBuf[sizeof(UdpAudioHeader) + kUdpMaxPayload];
 static UdpAudioReceiver g_audioRecv;
-// JitterBuffer в PSRAM: 20–60 мс при 48 кГц (§7.6, §16.2 — B13). Моно.
+// JitterBuffer в PSRAM: 20–60 мс при 48 кГц (§7.6, §16.2 — B13). Моно (sub).
 static constexpr uint32_t kMasterJitterCapacity = 60 * 48000 / 1000;
 static JitterBuffer* g_jitter = nullptr;   // ps_malloc в setup
 static volatile bool g_audioActive = false; // статус для Web UI
+
+// DSP-конвейер (C2.1): volume → tone → limiter → LR4 crossover → L/R/Sub.
+static PcmPipeline g_pipeline;
+
+// Линии задержки L/R/Sub (C2.3): ёмкость kMaxDelayMs, буферы в PSRAM.
+// Указатели передаются в MasterWebServer — настройки /api/delay применяются
+// к живым объектам, а не только к конфигу.
+static DelayLine* g_delayLeft = nullptr;
+static DelayLine* g_delayRight = nullptr;
+static DelayLine* g_delaySub = nullptr;
 
 // ---------------------------------------------------------------------------
 // Глобальное состояние
@@ -88,10 +102,11 @@ static uint32_t g_leftLastSeenMs = 0;
 static uint32_t g_rightLastSeenMs = 0;
 static uint32_t g_heartbeatsRx = 0;
 
-// Web UI + REST API. Аудио-конвейер (pipeline/delay/espnow) в Этапе 1 не
-// реализован — передаём nullptr: аудио-эндпоинты применяют настройки к
-// конфигу, доступны настройка Wi-Fi, интернета, диагностика и reboot.
-static MasterWebServer g_webServer(g_cfg, nullptr, nullptr, nullptr, nullptr,
+// Web UI + REST API. Аудио-конвейер (pipeline/delay/espnow) подключён:
+// /api/volume, /api/mute, /api/crossover и /api/delay применяют настройки
+// к живым объектам DSP (C2.1–C2.4), а не только к конфигу.
+static MasterWebServer g_webServer(g_cfg, &g_pipeline,
+                                   &g_delayLeft, &g_delayRight, &g_delaySub,
                                    &g_espnow, &g_leftOnline, &g_rightOnline);// Режим настройки Wi-Fi: STA не подключился → мастер поднял AP настройки.
 static bool g_setupMode = false;
 
@@ -243,12 +258,12 @@ static void enableNapt() {
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
     esp_netif_t* ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
     if (ap != nullptr && esp_netif_napt_enable(ap) == ESP_OK) {
-        Logger::info("wifi", "NAPT enabled вЂ” AP clients routed to upstream");
+        Logger::info("wifi", "NAPT enabled — AP clients routed to upstream");
     } else {
         Logger::error("wifi", "NAPT enable failed (lwip без CONFIG_LWIP_IPV4_NAPT?)");
     }
 #else
-    Logger::warn("wifi", "NAPT requires Arduino core 3.x вЂ” skipping");
+    Logger::warn("wifi", "NAPT requires Arduino core 3.x — skipping");
 #endif
 }
 
@@ -316,7 +331,7 @@ static bool initWifi() {
             // мешают сканированию сетей в Web UI и нагружают радиомодуль.
             WiFi.setAutoReconnect(false);
             WiFi.disconnect(false, true);
-            Logger::warn("wifi", "upstream not connected вЂ” setup mode (Web UI on AP)");
+            Logger::warn("wifi", "upstream not connected — setup mode (Web UI on AP)");
             g_setupMode = true;
         }
         return true; // AP работает в любом случае
@@ -334,7 +349,7 @@ static bool initWifi() {
         // Отключаем авто-реконнект STA (мешает скану сетей в Web UI).
         WiFi.setAutoReconnect(false);
         WiFi.disconnect(false, true);
-        Logger::warn("wifi", "connect failed вЂ” switching to setup AP");
+        Logger::warn("wifi", "connect failed — switching to setup AP");
         g_setupMode = true;
         return startSetupAp();
     }
@@ -401,6 +416,10 @@ static void handleConsoleCommand(const String& line) {
         Serial.printf("packets_rx: %lu\n", (unsigned long)g_packetsRx);
         Serial.printf("bytes_rx: %lu\n", (unsigned long)g_packetBytesRx);
         Serial.printf("i2s: %s\n", g_i2sOn ? "on" : "off");
+        Serial.printf("dsp: volume=%d mute=%s crossover=%d Hz\n",
+                      g_cfg.masterVolume, g_cfg.mute ? "on" : "off", g_cfg.crossoverHz);
+        Serial.printf("delays: L=%d R=%d Sub=%d ms\n",
+                      g_cfg.delayLeftMs, g_cfg.delayRightMs, g_cfg.delaySubMs);
         Serial.printf("sats: L=%s R=%s heartbeats=%lu\n",
                       g_leftOnline ? "online" : "offline",
                       g_rightOnline ? "online" : "offline",
@@ -504,6 +523,20 @@ static void handleConsoleCommand(const String& line) {
 // Setup / Loop
 // ---------------------------------------------------------------------------
 
+// Создать DelayLine с буфером в PSRAM (C2.3). Возвращает nullptr при нехватке
+// памяти — в этом случае задержка канала не применяется (web-хендлеры
+// /api/delay работают только с конфигом).
+static DelayLine* createDelayLinePsram(uint32_t capacityMs, uint32_t sampleRate) {
+    uint32_t samples = (capacityMs * sampleRate) / 1000;
+    if (samples < 1) samples = 1;
+    int16_t* buf = static_cast<int16_t*>(ps_malloc(samples * sizeof(int16_t)));
+    if (!buf) {
+        Logger::error("audio", "DelayLine PSRAM alloc failed");
+        return nullptr;
+    }
+    return new DelayLine(capacityMs, sampleRate, buf);
+}
+
 void setup() {
     Serial.begin(115200);
     delay(200);
@@ -602,6 +635,29 @@ void setup() {
     // Приёмник UDP-аудио (C1.2): 5 мс/пакет при 48 кГц стерео 16 бит (§9.3).
     g_audioRecv.configure(g_cfg.sampleRate, 5.0f);
 
+    // DSP-конвейер (C2.1): volume → tone → limiter → LR4 crossover.
+    // Настройки из конфига; далее меняются через Web UI /api/volume,
+    // /api/mute, /api/crossover (применяются к живым объектам).
+    g_pipeline.configure(g_cfg.sampleRate);
+    g_pipeline.setVolume(g_cfg.masterVolume);
+    g_pipeline.setMute(g_cfg.mute);
+    g_pipeline.setCrossoverHz(g_cfg.crossoverHz);
+    Logger::infof("audio", "DSP: volume=%d mute=%s crossover=%d Hz",
+                  g_cfg.masterVolume, g_cfg.mute ? "on" : "off", g_cfg.crossoverHz);
+
+    // Линии задержки L/R/Sub в PSRAM (C2.3): ёмкость kMaxDelayMs (200 мс),
+    // текущие задержки — из конфига (ТЗ §6.9). Настраиваются через /api/delay.
+    g_delayLeft = createDelayLinePsram(kMaxDelayMs, g_cfg.sampleRate);
+    g_delayRight = createDelayLinePsram(kMaxDelayMs, g_cfg.sampleRate);
+    g_delaySub = createDelayLinePsram(kMaxDelayMs, g_cfg.sampleRate);
+    if (g_delayLeft) g_delayLeft->setDelayMs(static_cast<uint32_t>(g_cfg.delayLeftMs));
+    if (g_delayRight) g_delayRight->setDelayMs(static_cast<uint32_t>(g_cfg.delayRightMs));
+    if (g_delaySub) g_delaySub->setDelayMs(static_cast<uint32_t>(g_cfg.delaySubMs));
+    Logger::infof("audio", "DelayLines (PSRAM): L=%d R=%d Sub=%d ms",
+                  g_delayLeft ? g_cfg.delayLeftMs : -1,
+                  g_delayRight ? g_cfg.delayRightMs : -1,
+                  g_delaySub ? g_cfg.delaySubMs : -1);
+
     Logger::info("master", "Ready. Type 'status' for info.");
 }
 
@@ -644,8 +700,9 @@ static void audioOutTick() {
 }
 
 void loop() {
-    // Приём UDP-аудио со смартфона (C1.5, §9): разбор пакета → UdpAudioReceiver
-    // (sequence/concealment) → JitterBuffer (PSRAM) → I2S (sub). Стерео→моно.
+    // Приём UDP-аудио со смартфона (C2.1, §9): разбор пакета → UdpAudioReceiver
+    // (sequence/concealment) → DSP (volume → tone → limiter → LR4 crossover) →
+    // sub → DelayLine → JitterBuffer (PSRAM) → I2S. left/right (HPF) — Этап 3.
     int packetSize = g_udp.parsePacket();
     if (packetSize > 0) {
         int n = g_udp.read(g_udpBuf, sizeof(g_udpBuf));
@@ -656,19 +713,29 @@ void loop() {
         const uint8_t* payload;
         size_t payloadSize;
         if (n > 0 && parseUdpPacket(g_udpBuf, static_cast<size_t>(n), hdr, payload, payloadSize)) {
-            // Стерео PCM → моно (сабвуфер): усредняем пары {L, R}.
             size_t nSamples = payloadSize / sizeof(int16_t);
             const int16_t* pcm = reinterpret_cast<const int16_t*>(payload);
-            static int16_t s_mono[sizeof(g_udpBuf) / sizeof(int16_t)];
-            for (size_t i = 0, o = 0; i + 1 < nSamples; i += 2, o++) {
-                s_mono[o] = static_cast<int16_t>((static_cast<int32_t>(pcm[i]) + pcm[i + 1]) / 2);
-            }
             size_t nMono = nSamples / 2;
 
+            // Сначала feed(): обновляет состояние потока, чтобы concealGain()
+            // ниже вернул актуальный множитель маскирования потерь.
             StreamState st = g_audioRecv.feed(hdr.sequence, hdr.timestampSamples,
-                                              s_mono, nMono, millis());
+                                              pcm, nSamples, millis());
             if (st == StreamState::Active || st == StreamState::Conceal) {
-                g_jitter->push(s_mono, nMono);
+                // DSP: стерео → sub (моно-микс → LPF). При потерях — плавное
+                // затухание (concealGain), затем задержка сабвуфера.
+                float gain = g_audioRecv.concealGain();
+                static int16_t s_mono[sizeof(g_udpBuf) / sizeof(int16_t)];
+                for (size_t i = 0, o = 0; i + 1 < nSamples; i += 2, o++) {
+                    PipelineOutput out = g_pipeline.process(pcm[i], pcm[i + 1]);
+                    float sub = out.sub * gain;
+                    if (sub > 1.0f) sub = 1.0f;
+                    else if (sub < -1.0f) sub = -1.0f;
+                    int16_t s = static_cast<int16_t>(sub * 32767.0f);
+                    if (g_delaySub) s = g_delaySub->process(s);
+                    s_mono[o] = s;
+                }
+                if (g_jitter) g_jitter->push(s_mono, nMono);
             }
             g_audioActive = (st != StreamState::Standby);
         }
@@ -750,11 +817,11 @@ void loop() {
             WiFi.setAutoReconnect(false);
             WiFi.disconnect(false, true);
             if (g_cfg.wifiMode != WifiMode::ApDirect) {
-                Logger::warn("wifi", "reconnect failed вЂ” setup AP");
+                Logger::warn("wifi", "reconnect failed — setup AP");
                 g_setupMode = true;
                 startSetupAp();
             } else {
-                Logger::warn("wifi", "reconnect failed вЂ” AP remains, setup mode");
+                Logger::warn("wifi", "reconnect failed — AP remains, setup mode");
                 g_setupMode = true;
             }
         }

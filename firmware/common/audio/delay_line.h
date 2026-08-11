@@ -12,15 +12,24 @@ class DelayLine {
 public:
     // capacityMs — максимальная задержка в мс (буфер выделяется под неё).
     // sampleRate — частота дискретизации.
-    DelayLine(uint32_t capacityMs, uint32_t sampleRate)
+    // externalBuffer — опциональный внешний буфер (например, из PSRAM через
+    // ps_malloc): если задан, DelayLine НЕ владеет им и не освобождает его;
+    // иначе буфер выделяется внутри (new) и освобождается в деструкторе.
+    DelayLine(uint32_t capacityMs, uint32_t sampleRate, int16_t* externalBuffer = nullptr)
         : m_capacityMs(capacityMs), m_sampleRate(sampleRate) {
         m_capacitySamples = (capacityMs * sampleRate) / 1000;
         if (m_capacitySamples < 1) m_capacitySamples = 1;
-        m_buffer = new int16_t[m_capacitySamples];
+        if (externalBuffer) {
+            m_buffer = externalBuffer;
+            m_ownsBuffer = false;
+        } else {
+            m_buffer = new int16_t[m_capacitySamples];
+            m_ownsBuffer = true;
+        }
         clear();
     }
 
-    ~DelayLine() { delete[] m_buffer; }
+    ~DelayLine() { if (m_ownsBuffer) delete[] m_buffer; }
 
     // Задать задержку в мс (0..capacityMs). Пересчитывается в сэмплы.
     void setDelayMs(uint32_t ms) {
@@ -56,6 +65,7 @@ public:
 
 private:
     int16_t* m_buffer;
+    bool m_ownsBuffer = true;
     uint32_t m_capacitySamples;
     uint32_t m_capacityMs;
     uint32_t m_sampleRate;

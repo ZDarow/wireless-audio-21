@@ -295,10 +295,10 @@
 
 | ID | Задача | Место | Связь | Критерий готовности | Статус |
 |---|---|---|---|---|---|
-| C2.1 | Подключить `PcmPipeline` (volume → tone → limiter → LR4 → L/R/Sub) к `master_s3` | `master_s3/src/main.cpp` | F13 | Сабвуфер играет только НЧ (**критерий §18 Этап 3**) | ⬜ |
-| C2.2 | `sub_volume` + `left_volume`/`right_volume` (мин. набор §7.5) | `NodeConfig`, `web_server.h`, SPA | F18 | В `/api/status` и UI — 4 громкости | ⬜ |
-| C2.3 | Delay lines L/R/Sub на мастере S3 (0–200 мс, NVS) | `master_s3/src/main.cpp` | §7.4 | Задержки применяются без ребута | ⬜ |
-| C2.4 | Подключить аудио-хендлеры Web UI к реальному pipeline (сейчас — только конфиг) | `web_server.h` | §16 | Слайдеры реально меняют звук | ⬜ |
+| C2.1 | Подключить `PcmPipeline` (volume → tone → limiter → LR4 → L/R/Sub) к `master_s3` | `master_s3/src/main.cpp` | F13 | Сабвуфер играет только НЧ (**критерий §18 Этап 3**) | ✅ (12.08.2026: `PcmPipeline` в аудио-пути loop() — стерео → `sub` (моно-микс → LPF), `concealGain()` при потерях; volume/mute/crossover из конфига; см. «Выполнено») |
+| C2.2 | `sub_volume` + `left_volume`/`right_volume` (мин. набор §7.5) | `NodeConfig`, `web_server.h`, SPA | F18 | В `/api/status` и UI — 4 громкости | ⬜ (частично: общая громкость/мьют/кроссовер живые через pipeline; отдельные L/R/Sub громкости не реализованы) |
+| C2.3 | Delay lines L/R/Sub на мастере S3 (0–200 мс, NVS) | `master_s3/src/main.cpp` | §7.4 | Задержки применяются без ребута | ✅ (12.08.2026: `DelayLine` L/R/Sub в PSRAM (ёмкость `kMaxDelayMs`=200 мс), задержки из конфига; в `delay_line.h` добавлен внешний буфер; см. «Выполнено») |
+| C2.4 | Подключить аудио-хендлеры Web UI к реальному pipeline (сейчас — только конфиг) | `web_server.h` | §16 | Слайдеры реально меняют звук | ✅ (12.08.2026: `&g_pipeline` + `&g_delayLeft/Right/Sub` переданы в `MasterWebServer` — `/api/volume`, `/api/mute`, `/api/crossover`, `/api/delay` применяются к живым объектам; см. «Выполнено») |
 
 ### Этап 3. 🔴 Аудио-TX на сателлиты + 🟠 синхронизация (ТЗ §18, Этап 4–5) — ~1.5 недели
 
@@ -418,3 +418,35 @@
   - Сборка: `master_s3_wifi` (pioarduino core 3.3.11) — SUCCESS (RAM 18%,
     Flash 17.2%); `satellite_s3_left` (core 2.0.17) — SUCCESS. Host-тесты не
     затронуты. Критерий «звук со смартфона через PCM5102A» — ручная проверка.
+
+- **C2.1 — `PcmPipeline` подключён к мастеру (DSP: volume → tone → limiter → LR4)** — реализовано:
+  - `master_s3/src/main.cpp`: глобальный `g_pipeline`, в setup — `configure(sampleRate)`
+    + `setVolume/setMute/setCrossoverHz` из конфига; в loop() аудио-путь стал
+    `UDP → feed() → DSP → sub → DelayLine → jitter → I2S`: для каждой стереопары
+    `process(l, r)` → `out.sub` (моно-микс → LPF), умножение на `concealGain()`
+    (плавное затухание при потерях §9.3), float→int16, задержка сабвуфера.
+  - left/right (HPF) пока не используются — TX на сателлиты (Этап 3).
+  - Команда `status` выводит `dsp:` (volume/mute/crossover) и `delays:`.
+
+- **C2.3 — Delay lines L/R/Sub в PSRAM** — реализовано:
+  - `delay_line.h`: добавлен необязательный `externalBuffer` (DelayLine не владеет
+    внешним буфером и не освобождает его) — обратная совместимость сохранена
+    (host-тест `DelayLine dl(200, sampleRate)` не изменён).
+  - `master_s3/src/main.cpp`: `createDelayLinePsram()` — `ps_malloc` буфера
+    (ёмкость `kMaxDelayMs` = 200 мс), объект `new DelayLine(...)`; задержки из
+    конфига (`delayLeftMs/RightMs/SubMs`); при нехватке PSRAM — nullptr
+    (задержка канала не применяется, web-хендлер работает только с конфигом).
+
+- **C2.4 — аудио-хендлеры Web UI подключены к живому pipeline** — реализовано:
+  - `master_s3/src/main.cpp`: в `MasterWebServer` переданы `&g_pipeline` и
+    `&g_delayLeft/Right/Sub` (вместо nullptr) — `/api/volume`, `/api/mute`,
+    `/api/crossover`, `/api/delay` теперь применяют настройки к реальным
+    объектам DSP, а не только к `NodeConfig` (слайдеры реально меняют звук).
+
+- **Кодировка (дефект двойной перекодировки)** — исправлено:
+  - `master_s3/src/main.cpp` и `web_server.h`: устранён остаточный мусор
+    UTF-8→CP1251 («вЂ”» → «—» и т.п.); весь проект проверен `rg` — чисто.
+
+- Сборка после Этапа 2: `master_s3_wifi` — SUCCESS (RAM 18.1%, Flash 17.2%);
+  `satellite_s3_left/right` — SUCCESS; host-тесты 5/5 зелёные.
+  Критерий «сабвуфер играет только НЧ» — ручная проверка на железе.
