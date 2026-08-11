@@ -27,6 +27,7 @@ test: $(BINS)
 	@set -e; for t in $(TESTS); do \
 		echo ">>> $$t"; ./$$t"_bin"; \
 	done
+	@echo ">>> config_gen_test"; python3 config_gen_test.py
 
 clean:
 	rm -f $(BINS) $(DEPS)

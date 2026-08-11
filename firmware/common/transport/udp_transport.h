@@ -14,6 +14,7 @@
 
 #include "audio_packet.h"
 #include "node_config.h"
+#include "broadcast_ip.h"
 
 namespace audio21 {
 
@@ -48,11 +49,18 @@ public:
         return m_udp.endPacket() == 1;
     }
 
-    // Отправка широковещательно (для discovery).
+    // Отправка широковещательно (для discovery). Broadcast вычисляется по
+    // маске подсети (корректно для любой маски, не только /24).
+    // IPAddress::operator[] доступен и в core 2.x, и в core 3.x.
     bool broadcast(uint16_t port, const uint8_t* data, size_t size) {
-        IPAddress bc = ~WiFi.localIP();
-        bc[3] = 255;
-        return sendTo(bc, port, data, size);
+        IPAddress lip = WiFi.localIP();
+        IPAddress lmask = WiFi.subnetMask();
+        uint8_t ip[4] = {lip[0], lip[1], lip[2], lip[3]};
+        uint8_t mask[4] = {lmask[0], lmask[1], lmask[2], lmask[3]};
+        uint8_t bc[4];
+        computeBroadcastAddress(ip, mask, bc);
+        IPAddress bcIp(bc[0], bc[1], bc[2], bc[3]);
+        return sendTo(bcIp, port, data, size);
     }
 
     // Отправка мастером аудио: unicast на запомненный IP сателлита канала,

@@ -42,8 +42,9 @@
 #define AUDIO_I2S_DATA_OUT       22
 
 // --- OLED ---
+// SCL на 23: не конфликтует с I2S DATA_OUT (22).
 #define AUDIO_OLED_SDA           21
-#define AUDIO_OLED_SCL           22
+#define AUDIO_OLED_SCL           23
 
 // --- Энкодер ---
 #define AUDIO_ENC_A              32

@@ -1,5 +1,13 @@
 // storage.h — хранение NodeConfig в NVS (Preferences).
 // Header-only.
+//
+// Ручная проверка round-trip (только на железе, NVS недоступен на хосте):
+//   1. Прошить мастер/сателлит, в serial-консоли: `volume 80`, `crossover 100`,
+//      `delay left 15`, затем `save`.
+//   2. Перезагрузить (`reboot` или питание).
+//   3. `status` — значения должны сохраниться (volume=80, crossover=100,
+//      delay_left=15). При несовпадении версии/размера возвращаются дефолты.
+//   4. `save` при пустой NVS (первый старт) — дефолты записываются без ошибок.
 #pragma once
 
 #include <Arduino.h>

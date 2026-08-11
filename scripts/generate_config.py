@@ -129,7 +129,8 @@ def main():
         sys.exit(1)
 
     try:
-        macros = generate(expand(env), args.env)
+        expanded = expand(env)
+        macros = generate(expanded, args.env)
     except ValueError as e:
         print(f"ОШИБКА: {e}", file=sys.stderr)
         sys.exit(1)
@@ -138,7 +139,7 @@ def main():
     with open(args.out, "w", encoding="utf-8") as f:
         f.write(macros)
 
-    print(f"Сгенерировано {len(expand(env))} макросов -> {args.out}")
+    print(f"Сгенерировано {len(expanded)} макросов -> {args.out}")
 
 
 if __name__ == "__main__":

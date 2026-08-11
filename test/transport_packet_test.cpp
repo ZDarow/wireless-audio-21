@@ -4,6 +4,7 @@
 
 #include "arduino_stub.h"
 #include "audio_packet.h"
+#include "broadcast_ip.h"
 
 using namespace audio21;
 
@@ -63,6 +64,32 @@ int main() {
     CHECK(hdr.sampleFormat == kSampleFormatFloat32, "формат float32");
     CHECK(hdr.channel == kChannelRight, "канал right");
     CHECK(payloadSize == 8, "float32 payload = 8 байт");
+
+    // Broadcast-адрес: корректный для любой маски (не только /24).
+    uint8_t bc[4];
+    const uint8_t ipA[4] = {192, 168, 1, 5};
+    const uint8_t mask24[4] = {255, 255, 255, 0};
+    computeBroadcastAddress(ipA, mask24, bc);
+    CHECK(bc[0] == 192 && bc[1] == 168 && bc[2] == 1 && bc[3] == 255,
+          "broadcast /24: 192.168.1.5 -> 192.168.1.255");
+
+    const uint8_t ipB[4] = {10, 0, 0, 1};
+    const uint8_t mask8[4] = {255, 0, 0, 0};
+    computeBroadcastAddress(ipB, mask8, bc);
+    CHECK(bc[0] == 10 && bc[1] == 255 && bc[2] == 255 && bc[3] == 255,
+          "broadcast /8: 10.0.0.1 -> 10.255.255.255");
+
+    const uint8_t ipC[4] = {192, 168, 10, 42};
+    const uint8_t mask16[4] = {255, 255, 0, 0};
+    computeBroadcastAddress(ipC, mask16, bc);
+    CHECK(bc[0] == 192 && bc[1] == 168 && bc[2] == 255 && bc[3] == 255,
+          "broadcast /16: 192.168.10.42 -> 192.168.255.255");
+
+    // Маска /32 (один хост): broadcast = сам IP.
+    const uint8_t mask32[4] = {255, 255, 255, 255};
+    computeBroadcastAddress(ipA, mask32, bc);
+    CHECK(bc[0] == 192 && bc[1] == 168 && bc[2] == 1 && bc[3] == 5,
+          "broadcast /32 = сам IP");
 
     if (g_failures) {
         printf("ИТОГ: %d ПРОВАЛОВ\n", g_failures);

@@ -115,6 +115,8 @@ private:
             sendOk(m_server);
             return;
         }
+        // Нет ни volume, ни mute — ошибка (не молча ставим 0).
+        if (!doc["volume"].is<int>()) { sendErr(m_server, "missing volume|mute"); return; }
         int v = doc["volume"].as<int>();
         if (v < kVolumeMin || v > kVolumeMax) { sendErr(m_server, "volume out of range"); return; }
         m_cfg.masterVolume = v;

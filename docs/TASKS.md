@@ -33,10 +33,10 @@
 | ID | Проблема | Место | Приоритет | Статус |
 |---|---|---|---|---|
 | B1 | `g_leftOnline`/`g_rightOnline` нигде не выставляются в true: статус сателлитов в `/api/status` и serial всегда «offline». Нет ESP-NOW sent-callback и UDP-сердцебиений | `firmware/master/src/main.cpp:47` | Высокий | ✅ (ESP-NOW sent-callback по MAC + UDP discovery каждые 3 с + timeout 5 с) |
-| B2 | Конфликт пинов в `config.example.h`: `AUDIO_I2S_DATA_OUT=22` и `AUDIO_OLED_SCL=22` (актуально при реализации F12) | `config.example.h` | Средний | ⬜ |
-| B3 | `UdpTransport::broadcast()` считает broadcast-IP как `~localIP` + `bc[3]=255` — корректен только для /24-подсети | `firmware/common/transport/udp_transport.h:53` | Низкий | ⬜ (связано с T10) |
-| B4 | `handleVolume` без поля `volume` в JSON молча ставит громкость 0 вместо ошибки | `firmware/master/include/web_server.h:118` | Низкий | ⬜ |
-| B5 | `generate_config.py:133` повторно вызывает `expand(env)` при выводе счётчика макросов (косметика) | `scripts/generate_config.py` | Низкий | ⬜ |
+| B2 | Конфликт пинов в `config.example.h`: `AUDIO_I2S_DATA_OUT=22` и `AUDIO_OLED_SCL=22` (актуально при реализации F12) | `config.example.h` | Средний | ✅ (OLED SCL → 23) |
+| B3 | `UdpTransport::broadcast()` считает broadcast-IP как `~localIP` + `bc[3]=255` — корректен только для /24-подсети | `firmware/common/transport/udp_transport.h:53` | Низкий | ✅ (broadcast по маске подсети, `broadcast_ip.h`) |
+| B4 | `handleVolume` без поля `volume` в JSON молча ставит громкость 0 вместо ошибки | `firmware/master/include/web_server.h:118` | Низкий | ✅ (ошибка `missing volume|mute`) |
+| B5 | `generate_config.py:133` повторно вызывает `expand(env)` при выводе счётчика макросов (косметика) | `scripts/generate_config.py` | Низкий | ✅ (результат переиспользуется) |
 | B6 | Риск нестабильности A2DP + Wi-Fi STA coexistence на ESP32 (нужна проверка на железе) | мастер | Риск | ⬜ |
 | B7 | Partition `huge_app.csv` без OTA — осознанное MVP-решение, блокирует будущий OTA | `platformio.ini:25` | Замечание | ⬜ |
 | B8 | Имя `udp.h` в case-insensitive ФС (Windows) конфликтует с системным `Udp.h` из Arduino (включается `WiFiUdp.h`) — сборка падала. Файл переименован в `udp_transport.h` | `firmware/common/transport/udp_transport.h` | Высокий | ✅ (переименование + сборка 3 env SUCCESS) |
@@ -48,9 +48,9 @@
 | ID | Задача | Место | Приоритет | Статус |
 |---|---|---|---|---|
 | T7 | Тест переполнения и дефицита jitter buffer (overwrite старых семплов, pop из пустого буфера) | `test/audio_filter_test.cpp` | Средний | ✅ |
-| T8 | Host-тест генератора конфига: `generate_config.py` → проверить все 23 макроса, включая MAC-адреса и строки с кавычками | `test/` (новый `config_gen_test.py`) | Средний | ⬜ |
-| T9 | Тест `ConfigStorage` (NVS) — только на железе; добавить round-trip тест в firmware-тестах или документировать ручную проверку | `firmware/common/config/storage.h` | Низкий | ⬜ |
-| T10 | Тест UDP broadcast-адресации и `sendTo` (чистая логика выделения broadcast-IP) | `test/transport_packet_test.cpp` | Низкий | ⬜ |
+| T8 | Host-тест генератора конфига: `generate_config.py` → проверить все 23 макроса, включая MAC-адреса и строки с кавычками | `test/` (новый `config_gen_test.py`) | Средний | ✅ |
+| T9 | Тест `ConfigStorage` (NVS) — только на железе; добавить round-trip тест в firmware-тестах или документировать ручную проверку | `firmware/common/config/storage.h` | Низкий | ✅ (инструкция ручной проверки в storage.h) |
+| T10 | Тест UDP broadcast-адресации и `sendTo` (чистая логика выделения broadcast-IP) | `test/transport_packet_test.cpp` | Низкий | ✅ (`broadcast_ip.h` + тесты /8, /16, /24, /32) |
 
 ---
 
@@ -109,8 +109,7 @@
   - CI: `ci.yml` собирает новые S3 env, добавлен `workflow_dispatch`.
   - Сборка: 3 S3 env — SUCCESS (master 10.7% flash, сателлиты 22.6%);
     host-тесты зелёные.
-- Осталось: T8 (host-тест генератора), T9 (round-trip ConfigStorage),
-  T10 (тест broadcast-адресации), T1 (активация Actions), F12–F16, F18–F20,
+- Осталось: T1 (активация Actions), F12–F16, F18–F20,
   Этап 2 (Wi-Fi приём PCM: `udp_audio_receiver`, jitter buffer, clock recovery).
 
 ## 7. Выполнено (обновление 10.08.2026, вечер)
