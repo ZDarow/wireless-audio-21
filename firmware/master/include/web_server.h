@@ -26,6 +26,8 @@
 #include <WebServer.h>
 #include <ArduinoJson.h>
 #include <WiFi.h>
+#include <vector>
+#include <utility>
 
 #include "node_config.h"
 #include "pcm_pipeline.h"
@@ -52,26 +54,70 @@ public:
           m_leftOnline(leftOnline), m_rightOnline(rightOnline),
           m_a2dpConnected(a2dpConnected) {}
 
-    // Запустить сервер (Wi-Fi должен быть подключён).
+    // Запустить серверы (Wi-Fi должен быть подключён). Два сервера:
+    //   m_server   — на STA-IP (WiFi.localIP()) — домашняя сеть;
+    //   m_apServer — на AP-IP (WiFi.softAPIP()) — клиенты AP (192.168.4.1).
+    // Без отдельного сервера на AP-IP Web UI недоступен через AP в режиме
+    // APSTA (B9): сервер без привязки к IP слушает только STA-интерфейс.
     void begin() {
-        m_server.on("/", HTTP_GET, [this]() { handleRoot(); });
-        m_server.on("/api/status", HTTP_GET, [this]() { handleStatus(); });
-        m_server.on("/api/volume", HTTP_PUT, [this]() { handleVolume(); });
-        m_server.on("/api/crossover", HTTP_PUT, [this]() { handleCrossover(); });
-        m_server.on("/api/delay", HTTP_PUT, [this]() { handleDelay(); });
-        m_server.on("/api/transport", HTTP_POST, [this]() { handleTransport(); });
-        m_server.on("/api/pair", HTTP_POST, [this]() { handlePair(); });
-        m_server.on("/api/save", HTTP_POST, [this]() { handleSave(); });
-        m_server.on("/api/reboot", HTTP_POST, [this]() { handleReboot(); });
-        m_server.on("/api/wifi/scan", HTTP_GET, [this]() { handleWifiScan(); });
-        m_server.on("/api/wifi", HTTP_POST, [this]() { handleWifi(); });
-        m_server.begin();
+        // STA-сервер — только при подключённом STA (иначе localIP() = 0.0.0.0).
+        if (WiFi.status() == WL_CONNECTED) {
+            m_server = new WebServer(WiFi.localIP(), 80);
+            bindRoutes(*m_server);
+            m_server->begin();
+        }
+        // AP-сервер — только при активном AP (setup mode, AP_DIRECT, APSTA).
+        if (WiFi.getMode() & WIFI_AP) {
+            m_apServer = new WebServer(WiFi.softAPIP(), 80);
+            bindRoutes(*m_apServer);
+            m_apServer->begin();
+        }
     }
 
     // Вызывать в loop().
-    void handleClient() { m_server.handleClient(); }
+    void handleClient() {
+        if (m_server) m_server->handleClient();
+        if (m_apServer) m_apServer->handleClient();
+    }
+
+    // Кеш найденных Wi-Fi сетей. Заполняется в main.cpp ДО старта AP:
+    // WiFi.scanNetworks() при работающем Soft-AP отключает радио — телефоны
+    // теряют сеть в момент отправки POST с кредами (см. отчёт по B9).
+    struct WifiNetInfo {
+        String ssid;
+        int rssi;
+        bool open;
+    };
+    void setWifiCache(std::vector<WifiNetInfo> cache) { m_wifiCache = std::move(cache); }
 
 private:
+    // Зарегистрировать роуты на переданном сервере (общий код для STA и AP).
+    void bindRoutes(WebServer& s) {
+        s.on("/", HTTP_GET, [this, &s]() { handleRoot(s); });
+        s.on("/api/status", HTTP_GET, [this, &s]() { handleStatus(s); });
+        s.on("/api/volume", HTTP_PUT, [this, &s]() { handleVolume(s); });
+        s.on("/api/crossover", HTTP_PUT, [this, &s]() { handleCrossover(s); });
+        s.on("/api/delay", HTTP_PUT, [this, &s]() { handleDelay(s); });
+        s.on("/api/transport", HTTP_POST, [this, &s]() { handleTransport(s); });
+        s.on("/api/pair", HTTP_POST, [this, &s]() { handlePair(s); });
+        s.on("/api/save", HTTP_POST, [this, &s]() { handleSave(s); });
+        s.on("/api/reboot", HTTP_POST, [this, &s]() { handleReboot(s); });
+        s.on("/api/wifi/scan", HTTP_GET, [this, &s]() { handleWifiScan(s); });
+        s.on("/api/wifi", HTTP_POST, [this, &s]() { handleWifi(s); });
+        // Captive portal probes (Android/iOS/macOS/Windows): телефон при
+        // подключении к AP без интернета проверяет эти URL и автоматически
+        // открывает страницу настройки.
+        s.on("/generate_204", HTTP_GET, [this, &s]() { redirectRoot(s); });
+        s.on("/hotspot-detect.html", HTTP_GET, [this, &s]() { redirectRoot(s); });
+        s.on("/ncsi.txt", HTTP_GET, [this, &s]() { s.send(200, "text/plain", "Microsoft NCSI"); });
+        s.on("/connecttest.txt", HTTP_GET, [this, &s]() { s.send(200, "text/plain", ""); });
+        s.on("/fwlink", HTTP_GET, [this, &s]() { redirectRoot(s); });
+        s.onNotFound([this, &s]() { redirectRoot(s); });
+    }
+
+    static void redirectRoot(WebServer& s) {
+        s.send(200, "text/html", "<html><body><script>location.href='/'</script></body></html>");
+    }
     // --- Ответы ---
     static void sendJson(WebServer& s, int code, JsonDocument& doc) {
         String body;
@@ -92,12 +138,12 @@ private:
     }
 
     // --- Страница управления ---
-    void handleRoot() {
-        m_server.send(200, "text/html", kPageHtml);
+    void handleRoot(WebServer& s) {
+        s.send(200, "text/html", kPageHtml);
     }
 
     // --- GET /api/status ---
-    void handleStatus() {
+    void handleStatus(WebServer& s) {
         JsonDocument doc;
         doc["role"] = "master";
         doc["source"] = sourceToString(m_cfg.source);
@@ -120,113 +166,124 @@ private:
         JsonObject satellites = doc["satellites"].to<JsonObject>();
         satellites["left"] = (m_leftOnline && *m_leftOnline) ? "online" : "offline";
         satellites["right"] = (m_rightOnline && *m_rightOnline) ? "online" : "offline";
-        sendJson(m_server, 200, doc);
+        sendJson(s, 200, doc);
     }
 
     // --- PUT /api/volume ---
-    void handleVolume() {
-        if (!m_pipeline) { sendErr(m_server, "audio unavailable"); return; }
+    void handleVolume(WebServer& s) {
+        if (!m_pipeline) { sendErr(s, "audio unavailable"); return; }
         JsonDocument doc;
-        if (deserializeJson(doc, m_server.arg("plain"))) { sendErr(m_server, "bad json"); return; }
+        if (deserializeJson(doc, s.arg("plain"))) { sendErr(s, "bad json"); return; }
 
         if (doc["mute"].is<bool>()) {
             bool m = doc["mute"].as<bool>();
             m_cfg.mute = m;
             m_pipeline->setMute(m);
-            sendOk(m_server);
+            sendOk(s);
             return;
         }
         // Нет ни volume, ни mute — ошибка (не молча ставим 0).
-        if (!doc["volume"].is<int>()) { sendErr(m_server, "missing volume|mute"); return; }
+        if (!doc["volume"].is<int>()) { sendErr(s, "missing volume|mute"); return; }
         int v = doc["volume"].as<int>();
-        if (v < kVolumeMin || v > kVolumeMax) { sendErr(m_server, "volume out of range"); return; }
+        if (v < kVolumeMin || v > kVolumeMax) { sendErr(s, "volume out of range"); return; }
         m_cfg.masterVolume = v;
         m_pipeline->setVolume(v);
-        sendOk(m_server);
+        sendOk(s);
     }
 
     // --- PUT /api/crossover ---
-    void handleCrossover() {
-        if (!m_pipeline) { sendErr(m_server, "audio unavailable"); return; }
+    void handleCrossover(WebServer& s) {
+        if (!m_pipeline) { sendErr(s, "audio unavailable"); return; }
         JsonDocument doc;
-        if (deserializeJson(doc, m_server.arg("plain"))) { sendErr(m_server, "bad json"); return; }
+        if (deserializeJson(doc, s.arg("plain"))) { sendErr(s, "bad json"); return; }
         int hz = doc["hz"].as<int>();
-        if (hz < kCrossoverMinHz || hz > kCrossoverMaxHz) { sendErr(m_server, "hz out of range"); return; }
+        if (hz < kCrossoverMinHz || hz > kCrossoverMaxHz) { sendErr(s, "hz out of range"); return; }
         m_cfg.crossoverHz = hz;
         m_pipeline->setCrossoverHz(hz);
-        sendOk(m_server);
+        sendOk(s);
     }
 
     // --- PUT /api/delay ---
-    void handleDelay() {
-        if (!m_delayLeft || !m_delayRight || !m_delaySub) { sendErr(m_server, "audio unavailable"); return; }
+    void handleDelay(WebServer& s) {
+        if (!m_delayLeft || !m_delayRight || !m_delaySub) { sendErr(s, "audio unavailable"); return; }
         JsonDocument doc;
-        if (deserializeJson(doc, m_server.arg("plain"))) { sendErr(m_server, "bad json"); return; }
+        if (deserializeJson(doc, s.arg("plain"))) { sendErr(s, "bad json"); return; }
         const char* chan = doc["channel"] | "";
         int ms = doc["ms"].as<int>();
-        if (ms < kMinDelayMs || ms > kMaxDelayMs) { sendErr(m_server, "ms out of range"); return; }
+        if (ms < kMinDelayMs || ms > kMaxDelayMs) { sendErr(s, "ms out of range"); return; }
 
         if (strcmp(chan, "left") == 0) { m_cfg.delayLeftMs = ms; (*m_delayLeft)->setDelayMs(ms); }
         else if (strcmp(chan, "right") == 0) { m_cfg.delayRightMs = ms; (*m_delayRight)->setDelayMs(ms); }
         else if (strcmp(chan, "sub") == 0) { m_cfg.delaySubMs = ms; (*m_delaySub)->setDelayMs(ms); }
-        else { sendErr(m_server, "bad channel"); return; }
-        sendOk(m_server);
+        else { sendErr(s, "bad channel"); return; }
+        sendOk(s);
     }
 
     // --- POST /api/transport ---
-    void handleTransport() {
+    void handleTransport(WebServer& s) {
         JsonDocument doc;
-        if (deserializeJson(doc, m_server.arg("plain"))) { sendErr(m_server, "bad json"); return; }
+        if (deserializeJson(doc, s.arg("plain"))) { sendErr(s, "bad json"); return; }
         const char* mode = doc["mode"] | "";
         if (strcmp(mode, "espnow") == 0) m_cfg.transport = TransportMode::EspNow;
         else if (strcmp(mode, "udp") == 0) m_cfg.transport = TransportMode::Udp;
-        else { sendErr(m_server, "bad mode"); return; }
-        sendOk(m_server);
+        else { sendErr(s, "bad mode"); return; }
+        sendOk(s);
     }
 
     // --- POST /api/pair ---
-    void handlePair() {
-        if (!m_espnow) { sendErr(m_server, "espnow unavailable"); return; }
+    void handlePair(WebServer& s) {
+        if (!m_espnow) { sendErr(s, "espnow unavailable"); return; }
         JsonDocument doc;
-        if (deserializeJson(doc, m_server.arg("plain"))) { sendErr(m_server, "bad json"); return; }
+        if (deserializeJson(doc, s.arg("plain"))) { sendErr(s, "bad json"); return; }
         const char* side = doc["side"] | "";
         const char* macStr = doc["mac"] | "";
         MacAddr mac;
-        if (!MacAddr::parse(macStr, mac)) { sendErr(m_server, "bad mac"); return; }
+        if (!MacAddr::parse(macStr, mac)) { sendErr(s, "bad mac"); return; }
 
         if (strcmp(side, "left") == 0) { m_cfg.leftSatMac = mac; m_espnow->addPeer(mac); }
         else if (strcmp(side, "right") == 0) { m_cfg.rightSatMac = mac; m_espnow->addPeer(mac); }
-        else { sendErr(m_server, "bad side"); return; }
-        sendOk(m_server);
+        else { sendErr(s, "bad side"); return; }
+        sendOk(s);
     }
 
     // --- POST /api/save ---
-    void handleSave() {
+    void handleSave(WebServer& s) {
         // ConfigStorage подключается в main.cpp; здесь только ответ.
         m_saveRequested = true;
-        sendOk(m_server);
+        sendOk(s);
     }
 
     // --- POST /api/reboot ---
-    void handleReboot() {
-        m_server.send(200, "application/json", "{\"status\":\"rebooting\"}");
+    void handleReboot(WebServer& s) {
+        s.send(200, "application/json", "{\"status\":\"rebooting\"}");
         delay(100);
         ESP.restart();
     }
 
     // --- GET /api/wifi/scan : список найденных сетей ---
-    void handleWifiScan() {
-        // В setup mode STA-драйвер может активно переподключаться (авто-реконнект
-        // после неудачного WiFi.begin) и мешать сканированию — останавливаем
-        // попытки и отключаем автоподключение, чтобы скан был чистым.
+    void handleWifiScan(WebServer& s) {
+        JsonDocument doc;
+        JsonArray nets = doc["networks"].to<JsonArray>();
+        // Если AP активен (setup mode / APSTA / AP_DIRECT), живой скан
+        // отключает радио и роняет AP — телефоны теряют сеть в момент POST
+        // с кредами (B9). Отдаём кеш, заполненный в main.cpp ДО старта AP.
+        if (!m_wifiCache.empty()) {
+            for (const WifiNetInfo& n : m_wifiCache) {
+                JsonObject o = nets.add<JsonObject>();
+                o["ssid"] = n.ssid;
+                o["rssi"] = n.rssi;
+                o["enc"] = n.open ? "open" : "wpa";
+            }
+            sendJson(s, 200, doc);
+            return;
+        }
+        // Кеша нет (чистый STA-режим, AP не поднят) — скан безопасен.
         WiFi.setAutoReconnect(false);
         if (WiFi.status() != WL_CONNECTED) {
             WiFi.disconnect(false, true);
             delay(100);
         }
         int n = WiFi.scanNetworks(); // блокирующий скан (~1-2 с)
-        JsonDocument doc;
-        JsonArray nets = doc["networks"].to<JsonArray>();
         for (int i = 0; i < n; i++) {
             JsonObject o = nets.add<JsonObject>();
             o["ssid"] = WiFi.SSID(i);
@@ -234,27 +291,27 @@ private:
             o["enc"] = WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "open" : "wpa";
         }
         WiFi.scanDelete();
-        sendJson(m_server, 200, doc);
+        sendJson(s, 200, doc);
     }
 
     // --- POST /api/wifi : сохранить SSID/пароль и перезагрузиться ---
-    void handleWifi() {
+    void handleWifi(WebServer& s) {
         JsonDocument doc;
-        if (deserializeJson(doc, m_server.arg("plain"))) { sendErr(m_server, "bad json"); return; }
+        if (deserializeJson(doc, s.arg("plain"))) { sendErr(s, "bad json"); return; }
         const char* ssid = doc["ssid"] | "";
         const char* pass = doc["password"] | "";
         if (ssid == nullptr || strlen(ssid) == 0 || strlen(ssid) >= sizeof(m_cfg.wifiSsid)) {
-            sendErr(m_server, "bad ssid");
+            sendErr(s, "bad ssid");
             return;
         }
         if (pass != nullptr && strlen(pass) >= sizeof(m_cfg.wifiPassword)) {
-            sendErr(m_server, "bad password");
+            sendErr(s, "bad password");
             return;
         }
         strlcpy(m_cfg.wifiSsid, ssid, sizeof(m_cfg.wifiSsid));
         strlcpy(m_cfg.wifiPassword, pass != nullptr ? pass : "", sizeof(m_cfg.wifiPassword));
-        if (!ConfigStorage::save(m_cfg)) { sendErr(m_server, "nvs save failed"); return; }
-        m_server.send(200, "application/json", "{\"status\":\"saved, rebooting\"}");
+        if (!ConfigStorage::save(m_cfg)) { sendErr(s, "nvs save failed"); return; }
+        s.send(200, "application/json", "{\"status\":\"saved, rebooting\"}");
         delay(200);
         ESP.restart();
     }
@@ -274,7 +331,9 @@ private:
     volatile bool* m_leftOnline;
     volatile bool* m_rightOnline;
     volatile bool* m_a2dpConnected;
-    WebServer m_server;
+    WebServer* m_server = nullptr;      // STA-интерфейс (домашняя сеть)
+    WebServer* m_apServer = nullptr;    // AP-интерфейс (клиенты AP)
+    std::vector<WifiNetInfo> m_wifiCache; // кеш сетей со скана до старта AP
     bool m_saveRequested = false;
 
     // Панель управления (HTML+JS, без внешних ресурсов).

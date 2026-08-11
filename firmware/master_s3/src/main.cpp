@@ -21,11 +21,13 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
+#include <DNSServer.h>
 #include <ESPmDNS.h>
 #include <esp_netif.h>
 #include <esp_system.h>
 #include <ping/ping_sock.h>
 #include <freertos/semphr.h>
+#include <vector>
 
 #include "node_config.h"
 #include "storage.h"
@@ -51,6 +53,37 @@ static MasterWebServer g_webServer(g_cfg);
 
 // Режим настройки Wi-Fi: STA не подключился → мастер поднял AP настройки.
 static bool g_setupMode = false;
+
+// Captive portal: перехватывает DNS-запросы телефона (любой домен → softAPIP()),
+// браузер открывает http://192.168.4.1/ → onNotFound → страница настройки.
+static DNSServer g_dns;
+
+// ---------------------------------------------------------------------------
+// Скан Wi-Fi сетей ДО старта AP (B9)
+// ---------------------------------------------------------------------------
+
+// WiFi.scanNetworks() при активном Soft-AP отключает радио — телефон теряет
+// сеть в момент POST с кредами («не сохраняет подключение»). Поэтому список
+// сетей сканируется заранее (STA-режим, AP ещё не поднят) и кешируется в
+// MasterWebServer; GET /api/wifi/scan отдаёт кеш.
+static void scanWifiBeforeAp() {
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect(false, true);
+    delay(100);
+    int n = WiFi.scanNetworks(); // блокирующий скан (~1-2 с)
+    std::vector<MasterWebServer::WifiNetInfo> cache;
+    if (n > 0) cache.reserve(static_cast<size_t>(n));
+    for (int i = 0; i < n; i++) {
+        MasterWebServer::WifiNetInfo info;
+        info.ssid = WiFi.SSID(i);
+        info.rssi = WiFi.RSSI(i);
+        info.open = WiFi.encryptionType(i) == WIFI_AUTH_OPEN;
+        cache.push_back(std::move(info));
+    }
+    WiFi.scanDelete();
+    g_webServer.setWifiCache(std::move(cache));
+    Logger::infof("wifi", "pre-AP scan: %d networks cached", n);
+}
 
 // ---------------------------------------------------------------------------
 // Стартовая диагностика (ТЗ §14.2)
@@ -109,6 +142,7 @@ static void enableNapt() {
 // Поднять AP настройки (используется при неудачном STA-подключении).
 static bool startSetupAp() {
     if (WiFi.getMode() == WIFI_AP) return true; // AP уже поднят (ApSta)
+    scanWifiBeforeAp(); // список сетей для Web UI — ДО старта AP (B9)
     WiFi.mode(WIFI_AP_STA);
     bool ok = WiFi.softAP(g_cfg.wifiApSsid, g_cfg.wifiApPassword, kDefaultWifiChannel);
     if (!ok) {
@@ -127,6 +161,7 @@ static bool initWifi() {
     WiFi.setSleep(false); // отключить power save для аудиоузлов (ТЗ §16.3)
 
     if (g_cfg.wifiMode == WifiMode::ApDirect) {
+        scanWifiBeforeAp(); // список сетей для Web UI — ДО старта AP (B9)
         WiFi.mode(WIFI_AP);
         bool ok = WiFi.softAP(g_cfg.wifiApSsid, g_cfg.wifiApPassword, kDefaultWifiChannel);
         if (!ok) {
@@ -142,6 +177,7 @@ static bool initWifi() {
 
     if (g_cfg.wifiMode == WifiMode::ApSta) {
         // Репитер: AP для смартфона + STA (домашняя сеть) + NAPT.
+        scanWifiBeforeAp(); // список сетей для Web UI — ДО старта AP (B9)
         WiFi.mode(WIFI_AP_STA);
         bool ok = WiFi.softAP(g_cfg.wifiApSsid, g_cfg.wifiApPassword, kDefaultWifiChannel);
         if (!ok) {
@@ -362,6 +398,16 @@ void setup() {
         Logger::infof("master", "Web UI: http://%s", WiFi.localIP().toString().c_str());
     }
 
+    // Captive portal (B9): при активном AP перехватываем DNS (любой домен →
+    // softAPIP()), чтобы телефон автоматически открыл страницу настройки.
+    if (WiFi.getMode() & WIFI_AP) {
+        if (g_dns.start(53, "*", WiFi.softAPIP())) {
+            Logger::info("master", "DNS captive portal: * -> softAPIP");
+        } else {
+            Logger::error("master", "DNS start failed (port 53 busy?)");
+        }
+    }
+
     // UDP-listener аудио от смартфона (Этап 2: приём PCM-пакетов).
     if (g_udp.begin(g_cfg.udpAudioPort)) {
         Logger::infof("master", "UDP audio listener on port %u", g_cfg.udpAudioPort);
@@ -394,6 +440,9 @@ void loop() {
         g_webServer.clearSaveRequested();
         Logger::info("master", "config saved via Web UI");
     }
+
+    // Captive portal: обработать DNS-запросы телефона (no-op, если не запущен).
+    g_dns.processNextRequest();
 
     delay(10);
 }
