@@ -1,0 +1,86 @@
+# REST API мастер-узла — примеры запросов (расширение REST Client, humao.rest-client)
+#
+# Подключитесь к Web UI мастера: http://<IP-мастера>/ (адрес в serial при старте).
+# Замените {{baseUrl}} на реальный IP. Спецификация: docs/PLAN.md §6.4.
+
+@baseUrl = http://192.168.4.1
+
+### Панель управления (HTML)
+GET {{baseUrl}}/
+Accept: text/html
+
+### Состояние узла (JSON)
+GET {{baseUrl}}/api/status
+Accept: application/json
+
+### Громкость 60 (PUT)
+PUT {{baseUrl}}/api/volume
+Content-Type: application/json
+
+{"volume": 60}
+
+### Mute (PUT)
+PUT {{baseUrl}}/api/volume
+Content-Type: application/json
+
+{"mute": true}
+
+### Unmute (PUT)
+PUT {{baseUrl}}/api/volume
+Content-Type: application/json
+
+{"mute": false}
+
+### Ошибка: ни volume, ни mute (ожидается 400 missing volume|mute)
+PUT {{baseUrl}}/api/volume
+Content-Type: application/json
+
+{}
+
+### Ошибка: volume вне диапазона (ожидается 400)
+PUT {{baseUrl}}/api/volume
+Content-Type: application/json
+
+{"volume": 150}
+
+### Кроссовер 90 Гц (PUT)
+PUT {{baseUrl}}/api/crossover
+Content-Type: application/json
+
+{"hz": 90}
+
+### Задержка левого канала 10 мс (PUT)
+PUT {{baseUrl}}/api/delay
+Content-Type: application/json
+
+{"channel": "left", "ms": 10}
+
+### Транспорт UDP (POST — действие)
+POST {{baseUrl}}/api/transport
+Content-Type: application/json
+
+{"mode": "udp"}
+
+### Транспорт ESP-NOW (POST)
+POST {{baseUrl}}/api/transport
+Content-Type: application/json
+
+{"mode": "espnow"}
+
+### Привязка левого сателлита (POST)
+POST {{baseUrl}}/api/pair
+Content-Type: application/json
+
+{"side": "left", "mac": "AA:BB:CC:DD:EE:01"}
+
+### Сохранить в NVS (POST)
+POST {{baseUrl}}/api/save
+Content-Type: application/json
+
+{}
+
+### Перезагрузка (POST)
+POST {{baseUrl}}/api/reboot
+Content-Type: application/json
+
+{}

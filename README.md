@@ -101,6 +101,8 @@ POST /api/save              # сохранить в NVS
 POST /api/reboot            # перезагрузка
 ```
 
+Готовые примеры запросов для REST Client (VS Code): [docs/api.http](docs/api.http).
+
 ### 5. Serial-консоль мастера
 
 ```
