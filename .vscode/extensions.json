@@ -1,0 +1,39 @@
+{
+    "recommendations": [
+        // ---- Embedded / PlatformIO (основной стек) ----
+        "pioarduino.pioarduino-ide",
+        "ms-vscode.cpptools",
+        "Jason2866.esp-decoder",
+        "ms-vscode.hexeditor",
+        "ms-vscode.vscode-serial-monitor",
+
+        // ---- Python (скрипты и тесты) ----
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.black-formatter",
+        "charliermarsh.ruff",
+
+        // ---- Bash (скрипты прошивки) ----
+        "timonwong.shellcheck",
+        "foxundermoon.shell-format",
+
+        // ---- Документация ----
+        "yzhang.markdown-all-in-one",
+        "hediet.vscode-drawio",
+        "streetsidesoftware.code-spell-checker",
+
+        // ---- Git и CI ----
+        "eamodio.gitlens",
+        "redhat.vscode-yaml",
+        "github.vscode-github-actions",
+
+        // ---- REST API (Web UI мастера) ----
+        "humao.rest-client"
+    ],
+    "unwantedRecommendations": [
+        "ms-vscode.cpptools-extension-pack",
+        "platformio.platformio-ide",
+        "espressif.esp-idf-extension",
+        "marus25.cortex-debug"
+    ]
+}

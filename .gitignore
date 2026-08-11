@@ -3,7 +3,8 @@
 .pioenvs/
 .piolibdeps/
 .pio-core-master/
-.vscode/extensions.json
+# extensions.json хранится в репозитории (рекомендации для команды);
+# остальные .vscode файлы генерируются PlatformIO (абсолютные пути) — игнорируются.
 .vscode/settings.json
 .vscode/c_cpp_properties.json
 .vscode/launch.json
