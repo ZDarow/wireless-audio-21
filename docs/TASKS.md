@@ -287,9 +287,9 @@
 |---|---|---|---|---|---|
 | C1.1 | `udp_audio_receiver`: разбор пакета по §9.1 (magic `0xA210`, version, flags, `sequence`, `timestamp_samples`, `sample_rate`, `channels`, `bits_per_sample`, `payload_length`) | `firmware/common/transport/udp_audio_packet.h`, `common/audio/udp_audio_receiver.h` (новые) | T13/F13 | Разбор валидных/невалидных пакетов; host-тест | ✅ (11.08.2026: `udp_audio_packet.h` + host-тест в `transport_packet_test.cpp`; `udp_audio_receiver.h` — закрыт как C1.2) |
 | C1.2 | Проверка `sequence`, concealment, ramp-out, mute при отсутствии потока >3 с (§9.3) | `udp_audio_receiver` | §9.3 | Пропуск пакетов → тишина/плавное затухание; тест | ✅ (11.08.2026: `common/audio/udp_audio_receiver.h` + host-тест; см. «Выполнено») |
-| C1.3 | Jitter buffer мастера **в PSRAM**, 20–60 мс (§7.6, §16.2) | `common/audio/jitter_buffer.h` | B13 | Буфер в PSRAM, ready()/deficit работают | ⬜ |
-| C1.4 | I2S-выход мастера (пины 4/5/6), вынести в общий `common/audio/i2s_output.h` | `master_s3/src/main.cpp`, `common/audio/i2s_output.h` (новый) | T14 | Звук со смартфона через PCM5102A (**критерий §18 Этап 2**) | ⬜ |
-| C1.5 | Заменить «счётчик байт» в loop() на реальный приём | `master_s3/src/main.cpp:535-541` | §18 Этап 2 | Пакеты не отбрасываются | ⬜ |
+| C1.3 | Jitter buffer мастера **в PSRAM**, 20–60 мс (§7.6, §16.2) | `common/audio/jitter_buffer.h` | B13 | Буфер в PSRAM, ready()/deficit работают | ✅ (11.08.2026: `master_s3/src/main.cpp` — `ps_malloc` 60 мс/48 кГц, target 30 мс, выдача через `audioOutTick()`; см. «Выполнено») |
+| C1.4 | I2S-выход мастера (пины 4/5/6), вынести в общий `common/audio/i2s_output.h` | `master_s3/src/main.cpp`, `common/audio/i2s_output.h` (новый) | T14 | Звук со смартфона через PCM5102A (**критерий §18 Этап 2**) | ✅ (11.08.2026: `common/audio/i2s_output.h` (автовыбор `i2s_std.h`/`i2s.h` по `ESP_ARDUINO_VERSION_MAJOR`, моно L=R, DMA 8×256); сателлит переведён на обёртку; master_s3 — init + `tone <freq>`; обе ветки проверены на хосте. Критерий «звук на сабвуфере» — ручная проверка) |
+| C1.5 | Заменить «счётчик байт» в loop() на реальный приём | `master_s3/src/main.cpp` | §18 Этап 2 | Пакеты не отбрасываются | ✅ (11.08.2026: loop() разбирает UDP-пакет `parseUdpPacket` (§9.1), стерео→моно, `feed()` + jitter + I2S; `g_audioActive` для Web UI; см. «Выполнено») |
 
 ### Этап 2. 🔴 DSP + кроссовер на S3-мастере (ТЗ §18, Этап 3) + 🟠 громкости — ~1 неделя
 
@@ -391,3 +391,30 @@
     conceal; потеря 100 мс → conceal с gain ≈ 1/3; 210 мс → ramp to mute;
     3.2 с → standby; восстановление после standby; дубликаты/переупорядочивание
     не считаются потерями; wrap sequence; добавлен в `test/Makefile`.
+
+- **C1.4 — `i2s_output.h` (I2S-выход, общий для мастера и сателлитов)** — реализовано:
+  - `firmware/common/audio/i2s_output.h` (header-only, guard `ESP32 && ARDUINO`):
+    автовыбор API по `ESP_ARDUINO_VERSION_MAJOR` — `driver/i2s_std.h` (IDF 5.x,
+    master_s3, pioarduino core 3.3.11) или legacy `driver/i2s.h` (core 2.0.17,
+    сателлиты); `I2sOutputPins {bck, ws, data}` + `init(pins, sampleRate, mono)`
+    (моно дублирует сэмпл в оба канала L=R), `write(samples, n)`, `writeMono`,
+    `writeStereo`, `silence`; DMA-буферы 8×256, `tx_desc_auto_clear`.
+  - `master_s3/src/main.cpp`: инициализация I2S в setup(), статус `i2s: on/off`,
+    serial-команда `tone <freq>` (синус 2 с, генерируется в loop() через
+    `toneTick()`, не блокирует Wi-Fi/Web UI) — проверка PCM5102A без смартфона.
+  - `satellite/src/main.cpp`: локальный I2S-код (`i2s_driver_install` + `i2s_write`)
+    заменён на общую обёртку, поведение сохранено (моно, L=R).
+  - Синтаксис обеих веток проверен на хосте (g++ с заглушками `driver/i2s.h` и
+    `driver/i2s_std.h`); host-тесты зелёные. Полная сборка — CI. Критерий «тон на
+    сабвуфере» — ручная проверка на железе.
+
+- **C1.3/C1.5 — аудио-путь мастера UDP → jitter (PSRAM) → I2S** — реализовано:
+  - `master_s3/src/main.cpp`: loop() вместо «счётчика байт» разбирает UDP-пакет
+    (`parseUdpPacket`, §9.1), стерео PCM усредняется в моно (сабвуфер),
+    `UdpAudioReceiver::feed()` детектит потери/state, валидные пакеты кладутся в
+    `JitterBuffer` из `ps_malloc` (ёмкость 60 мс/48 кГц, target 30 мс, §7.6),
+    `audioOutTick()` вычитывает в I2S (тишина до накопления целевого уровня —
+    плавный старт без щелчков); `g_audioActive` — статус потока для Web UI.
+  - Сборка: `master_s3_wifi` (pioarduino core 3.3.11) — SUCCESS (RAM 18%,
+    Flash 17.2%); `satellite_s3_left` (core 2.0.17) — SUCCESS. Host-тесты не
+    затронуты. Критерий «звук со смартфона через PCM5102A» — ручная проверка.

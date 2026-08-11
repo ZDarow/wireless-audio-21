@@ -8,7 +8,6 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
-#include <driver/i2s.h>
 #include <esp_system.h>
 #include <esp_wifi.h>
 
@@ -22,6 +21,7 @@
 #include "udp_transport.h"
 #include "audio_packet.h"
 #include "satellite_config.h"
+#include "i2s_output.h"
 
 using namespace audio21;
 
@@ -62,38 +62,17 @@ static constexpr uint8_t kMyChannel = kChannelLeft;
 static constexpr uint8_t kEspNowChannel = AUDIO_ESPNOW_CHANNEL;
 
 // ---------------------------------------------------------------------------
-// I2S выход сателлита (моно)
+// I2S выход сателлита (моно, L=R)
 // ---------------------------------------------------------------------------
-static i2s_port_t g_outPort = I2S_NUM_0;
+static I2sOutput g_i2sOut;
 
 static bool initI2S(const NodeConfig& cfg) {
-    i2s_config_t conf = {};
-    conf.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
-    conf.sample_rate = cfg.sampleRate;
-    conf.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT;
-    conf.channel_format = I2S_CHANNEL_FMT_ONLY_LEFT; // моно-сателлит
-    conf.communication_format = I2S_COMM_FORMAT_STAND_I2S;
-    conf.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1;
-    conf.dma_buf_count = 8;
-    conf.dma_buf_len = 256;
-    conf.use_apll = false;
-    conf.tx_desc_auto_clear = true;
-
-    i2s_pin_config_t pins = {};
-    pins.bck_io_num = cfg.i2sBck;
-    pins.ws_io_num = cfg.i2sWs;
-    pins.data_out_num = cfg.i2sDataOut;
-    pins.data_in_num = I2S_PIN_NO_CHANGE;
-
-    if (i2s_driver_install(g_outPort, &conf, 0, nullptr) != ESP_OK) return false;
-    if (i2s_set_pin(g_outPort, &pins) != ESP_OK) return false;
-    return true;
+    I2sOutputPins pins = {(int)cfg.i2sBck, (int)cfg.i2sWs, (int)cfg.i2sDataOut};
+    return g_i2sOut.init(pins, cfg.sampleRate, /*mono=*/true);
 }
 
 static void writeSample(int16_t sample) {
-    int16_t frame[2] = {sample, sample};
-    size_t written = 0;
-    i2s_write(g_outPort, frame, sizeof(frame), &written, portMAX_DELAY);
+    g_i2sOut.write(&sample, 1);
 }
 
 // ---------------------------------------------------------------------------

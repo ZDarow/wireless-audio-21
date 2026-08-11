@@ -90,9 +90,9 @@ CI: `.github/workflows/ci.yml` (собирает master_s3_wifi + сателли
 | C0.2 | Судьба legacy env `master_a2dp` | 🟠 | ⬜ | решение |
 | C1.1 | `udp_audio_packet.h` по §9.1 | 🔴 | ✅ | пакет |
 | C1.2 | Контроль sequence / concealment / standby | 🔴 | ✅ | пакет |
-| C1.3 | Jitter buffer мастера в PSRAM | 🔴 | ⬜ | пакет |
-| C1.4 | I2S-выход мастера (4/5/6) | 🔴 | ⬜ | пакет |
-| C1.5 | Приём вместо отбрасывания | 🔴 | ⬜ | пакет |
+| C1.3 | Jitter buffer мастера в PSRAM | 🔴 | ✅ | пакет |
+| C1.4 | I2S-выход мастера (4/5/6) | 🔴 | ✅ | пакет |
+| C1.5 | Приём вместо отбрасывания | 🔴 | ✅ | пакет |
 | C2.1 | Подключить PcmPipeline | 🔴 | ⬜ | пакет |
 | C2.2 | L/R/Sub громкости | 🟠 | ⬜ | пакет |
 | C2.3 | Delay lines мастера (PSRAM) | 🟠 | ⬜ | пакет |
@@ -223,15 +223,25 @@ CI: `.github/workflows/ci.yml` (собирает master_s3_wifi + сателли
 - **Критерий:** диагностика показывает PSRAM-аллокацию (логировать адрес через `heap_caps_get_info`); jitter 20/40/60 мс работает.
 - **Оценка:** 2 ч.
 
-#### C1.4 — I2S-выход мастера (BCK=4, WS=5, DATA=6)
+#### C1.4 — I2S-выход мастера (BCK=4, WS=5, DATA=6) — ✅
 
 - **Проблема:** I2S-вывода на мастере S3 нет вообще (S3 core 3.x — новый API `driver/i2s_std.h`, legacy `driver/i2s.h` в core 3.x удалён/депрекейтнут).
 - **Требование:** §18 Этап 2 — вывод PCM через PCM5102A; §19.1.
-- **План:**
-  1. Создать `common/audio/i2s_output.h` — обёртку: `init(pins, sampleRate, mono)` + `write(int16* buf, size_t n)`.
-  2. Использовать `i2s_new_channel`/`i2s_std_config` (IDF 5.x) для S3-мастера, legacy `i2s_driver_install` для сателлитов (core 2.0.17).
-  3. Стерео-фрейм на PCM5102A: `L=sub, R=sub` (или моно-режим I2S).
-  4. DMA-буферы 8×256.
+- **Реализовано (11.08.2026):** `firmware/common/audio/i2s_output.h` (header-only, guard `ESP32 && ARDUINO`):
+  - Автовыбор API по `ESP_ARDUINO_VERSION_MAJOR`: `driver/i2s_std.h` (IDF 5.x) для
+    `master_s3` (pioarduino core 3.3.11), legacy `driver/i2s.h` (core 2.0.17) для сателлитов.
+  - `I2sOutputPins {bck, ws, data}` + `init(pins, sampleRate, mono)`: `i2s_new_channel`/
+    `I2S_STD_CLK_DEFAULT_CONFIG`/`I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG` (IDF 5.x) либо
+    `i2s_driver_install`/`i2s_set_pin` (legacy); DMA-буферы 8×256, `tx_desc_auto_clear`.
+  - `write(samples, n)`: моно-режим дублирует каждый сэмпл в оба канала (L=R),
+    стерео — пары {L,R}; `writeMono`/`writeStereo`/`silence`.
+  - `master_s3/src/main.cpp`: I2S-инициализация в setup(), статус `i2s: on/off`,
+    serial-команда `tone <freq>` (синус 2 с через `toneTick()` в loop, не блокирует
+    Wi-Fi/Web UI) — ручная проверка PCM5102A без смартфона.
+  - `satellite/src/main.cpp`: локальный I2S-код заменён на общую обёртку (`initI2S`/
+    `writeSample`), поведение сохранено (моно, L=R).
+  - Синтаксис обеих веток проверен на хосте (g++ с заглушками `driver/i2s.h` и
+    `driver/i2s_std.h`); host-тесты зелёные. Полная сборка — CI.
 - **Код-скетч (S3, IDF 5.x):**
   ```cpp
   #include "driver/i2s_std.h"

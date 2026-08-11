@@ -29,6 +29,7 @@
 #include <freertos/semphr.h>
 #include <time.h>
 #include <vector>
+#include <math.h>
 
 #include "node_config.h"
 #include "storage.h"
@@ -37,8 +38,26 @@
 #include "web_server.h"
 #include "logs.h"
 #include "internet_check.h"
+#include "udp_audio_packet.h"
+#include "udp_audio_receiver.h"
+#include "jitter_buffer.h"
+#include "i2s_output.h"
 
 using namespace audio21;
+
+// ---------------------------------------------------------------------------
+// Аудио-конвейер мастера (Этап 2, §9/§18): UDP-пакет со смартфона →
+// UdpAudioReceiver (sequence/concealment) → JitterBuffer (PSRAM) → I2S (sub).
+// Стерео PCM складывается в моно (сабвуфер), задержки/DSP — Этап 3.
+// ---------------------------------------------------------------------------
+
+// Буфер PCM для приёма: максимальный UDP-пакет §9.2 (< MTU).
+static uint8_t g_udpBuf[sizeof(UdpAudioHeader) + kUdpMaxPayload];
+static UdpAudioReceiver g_audioRecv;
+// JitterBuffer в PSRAM: 20–60 мс при 48 кГц (§7.6, §16.2 — B13). Моно.
+static constexpr uint32_t kMasterJitterCapacity = 60 * 48000 / 1000;
+static JitterBuffer* g_jitter = nullptr;   // ps_malloc в setup
+static volatile bool g_audioActive = false; // статус для Web UI
 
 // ---------------------------------------------------------------------------
 // Р“Р»РѕР±Р°Р»СЊРЅРѕРµ СЃРѕСЃС‚РѕСЏРЅРёРµ
@@ -48,6 +67,17 @@ static NodeConfig g_cfg;
 static WiFiUDP g_udp;
 static uint32_t g_packetsRx = 0;
 static uint32_t g_packetBytesRx = 0;
+
+// I2S-выход (C1.4): сабвуфер — моно (L=R), пины BCK=4/WS=5/DATA=6.
+static I2sOutput g_i2sOut;
+static bool g_i2sOn = false;
+
+// Тестовый тон для проверки I2S: `tone <freq>` — синус в loop(), не блокируя Wi-Fi/Web UI.
+static constexpr uint32_t kToneDurationMs = 2000;
+static uint32_t g_toneUntilMs = 0;
+static uint32_t g_toneFreq = 440;
+static uint32_t g_tonePhase = 0;
+static constexpr float kToneAmp = 0.2f;
 
 // ESP-NOW: РїСЂРёС‘Рј heartbeat РѕС‚ СЃР°С‚РµР»Р»РёС‚РѕРІ (discovery-response) РґР»СЏ СЃС‚Р°С‚СѓСЃР°
 // online РґР°Р¶Рµ Р±РµР· Р°СѓРґРёРѕ-РїРѕС‚РѕРєР°. РђСѓРґРёРѕ-РєРѕРЅРІРµР№РµСЂ вЂ” Р­С‚Р°Рї 2+.
@@ -370,6 +400,7 @@ static void handleConsoleCommand(const String& line) {
         Serial.printf("udp_port: %u\n", g_cfg.udpAudioPort);
         Serial.printf("packets_rx: %lu\n", (unsigned long)g_packetsRx);
         Serial.printf("bytes_rx: %lu\n", (unsigned long)g_packetBytesRx);
+        Serial.printf("i2s: %s\n", g_i2sOn ? "on" : "off");
         Serial.printf("sats: L=%s R=%s heartbeats=%lu\n",
                       g_leftOnline ? "online" : "offline",
                       g_rightOnline ? "online" : "offline",
@@ -442,6 +473,27 @@ static void handleConsoleCommand(const String& line) {
     if (cmd == "reboot") {
         Serial.println("rebooting");
         ESP.restart();
+        return;
+    }
+
+    // Тестовый тон на I2S (C1.4): `tone 440`, `tone off`. Проверка PCM5102A без смартфона.
+    if (cmd.startsWith("tone")) {
+        String rest = cmd.substring(4);
+        rest.trim();
+        if (rest.length() == 0 || rest == "off") {
+            g_toneUntilMs = 0;
+            Serial.println("tone: off");
+            return;
+        }
+        long freq = rest.toInt();
+        if (freq <= 0 || !g_i2sOn) {
+            Serial.println("usage: tone <freq> | tone off  (i2s must be on)");
+            return;
+        }
+        g_toneFreq = (uint32_t)freq;
+        g_tonePhase = 0;
+        g_toneUntilMs = millis() + kToneDurationMs;
+        Serial.printf("tone: %lu Hz, %u s\n", g_toneFreq, kToneDurationMs / 1000);
         return;
     }
 
@@ -527,18 +579,106 @@ void setup() {
         Logger::error("master", "UDP begin failed");
     }
 
+    // I2S-выход (C1.4): PCM5102A на пинах BCK/WS/DATA, сабвуфер — моно (L=R).
+    I2sOutputPins i2sPins = {(int)g_cfg.i2sBck, (int)g_cfg.i2sWs, (int)g_cfg.i2sDataOut};
+    if (g_i2sOut.init(i2sPins, g_cfg.sampleRate, /*mono=*/true)) {
+        g_i2sOn = true;
+        Logger::infof("audio", "I2S out: %u Hz, mono (L=R), pins %u/%u/%u",
+                      (unsigned)g_cfg.sampleRate, g_cfg.i2sBck, g_cfg.i2sWs, g_cfg.i2sDataOut);
+    } else {
+        Logger::error("audio", "I2S init failed");
+    }
+
+    // Jitter-буфер в PSRAM (C1.3, §7.6): 60 мс ёмкость, целевая задержка 30 мс.
+    g_jitter = new (ps_malloc(kMasterJitterCapacity * sizeof(int16_t))) JitterBuffer(kMasterJitterCapacity);
+    if (g_jitter) {
+        g_jitter->setTargetMs(30, g_cfg.sampleRate);
+        Logger::infof("audio", "Jitter buffer: cap=%u samples (%u ms), target=30 ms",
+                      (unsigned)kMasterJitterCapacity, (unsigned)(kMasterJitterCapacity * 1000 / g_cfg.sampleRate));
+    } else {
+        Logger::error("audio", "Jitter buffer alloc failed");
+    }
+
+    // Приёмник UDP-аудио (C1.2): 5 мс/пакет при 48 кГц стерео 16 бит (§9.3).
+    g_audioRecv.configure(g_cfg.sampleRate, 5.0f);
+
     Logger::info("master", "Ready. Type 'status' for info.");
 }
 
+// Генерация тестового тона (C1.4): вызывается из loop(), не блокирует Wi-Fi/Web UI.
+static void toneTick() {
+    if (g_toneUntilMs == 0) return;
+    if (millis() >= g_toneUntilMs) {
+        g_toneUntilMs = 0;
+        Logger::info("audio", "tone stopped");
+        return;
+    }
+    if (!g_i2sOn) {
+        g_toneUntilMs = 0;
+        return;
+    }
+    const size_t kChunk = 128;
+    int16_t buf[kChunk];
+    const uint32_t phaseStep =
+        (uint32_t)((g_toneFreq * 65536.0f) / (float)g_cfg.sampleRate);
+    for (size_t i = 0; i < kChunk; i++) {
+        g_tonePhase += phaseStep;
+        float ph = (float)(g_tonePhase >> 16) * (2.0f * PI) / 65536.0f;
+        buf[i] = (int16_t)(kToneAmp * 32767.0f * sinf(ph));
+    }
+    g_i2sOut.write(buf, kChunk);
+}
+
+// Драйвер аудио-выхода (C1.3/C1.5): вычитывает моно-семплы из jitter-буфера
+// в I2S. Задержка конфигурируется через setTargetMs (30 мс). Пока буфер не
+// накоплен до целевого уровня — выдаём тишину (плавный старт без щелчков).
+static void audioOutTick() {
+    if (!g_i2sOn || !g_jitter) return;
+    constexpr size_t kChunk = 128;
+    int16_t buf[kChunk];
+    for (size_t i = 0; i < kChunk; i++) {
+        int16_t s;
+        buf[i] = g_jitter->pop(s) ? s : 0;
+    }
+    g_i2sOut.write(buf, kChunk);
+}
+
 void loop() {
-    // Р­С‚Р°Рї 1: СЃС‡РёС‚Р°РµРј РїР°РєРµС‚С‹, СЂР°Р·Р±РѕСЂ вЂ” РІ Р­С‚Р°РїРµ 2 (udp_audio_receiver).
+    // Приём UDP-аудио со смартфона (C1.5, §9): разбор пакета → UdpAudioReceiver
+    // (sequence/concealment) → JitterBuffer (PSRAM) → I2S (sub). Стерео→моно.
     int packetSize = g_udp.parsePacket();
     if (packetSize > 0) {
+        int n = g_udp.read(g_udpBuf, sizeof(g_udpBuf));
         g_packetsRx++;
-        g_packetBytesRx += static_cast<uint32_t>(packetSize);
-        char discard[64];
-        while (g_udp.available()) g_udp.read(discard, sizeof(discard));
+        g_packetBytesRx += static_cast<uint32_t>(n);
+
+        UdpAudioHeader hdr;
+        const uint8_t* payload;
+        size_t payloadSize;
+        if (n > 0 && parseUdpPacket(g_udpBuf, static_cast<size_t>(n), hdr, payload, payloadSize)) {
+            // Стерео PCM → моно (сабвуфер): усредняем пары {L, R}.
+            size_t nSamples = payloadSize / sizeof(int16_t);
+            const int16_t* pcm = reinterpret_cast<const int16_t*>(payload);
+            static int16_t s_mono[sizeof(g_udpBuf) / sizeof(int16_t)];
+            for (size_t i = 0, o = 0; i + 1 < nSamples; i += 2, o++) {
+                s_mono[o] = static_cast<int16_t>((static_cast<int32_t>(pcm[i]) + pcm[i + 1]) / 2);
+            }
+            size_t nMono = nSamples / 2;
+
+            StreamState st = g_audioRecv.feed(hdr.sequence, hdr.timestampSamples,
+                                              s_mono, nMono, millis());
+            if (st == StreamState::Active || st == StreamState::Conceal) {
+                g_jitter->push(s_mono, nMono);
+            }
+            g_audioActive = (st != StreamState::Standby);
+        }
     }
+
+    // Драйвер аудио-выхода: вычитываем из jitter-буфера в I2S.
+    audioOutTick();
+
+    // Тестовый тон (C1.4) — не блокирует loop.
+    toneTick();
 
     // РЎС‚Р°С‚СѓСЃ СЃР°С‚РµР»Р»РёС‚РѕРІ: online, РїРѕРєР° РїСЂРёС…РѕРґРёС‚ heartbeat (discovery-response).
     uint32_t now = millis();
