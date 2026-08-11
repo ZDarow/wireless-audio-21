@@ -1,20 +1,20 @@
-﻿// main.cpp вЂ” РјР°СЃС‚РµСЂ-СѓР·РµР» Wireless Audio 2.1 РЅР° ESP32-S3 (СЃР°Р±РІСѓС„РµСЂ).
+// main.cpp — мастер-узел Wireless Audio 2.1 на ESP32-S3 (сабвуфер).
 //
-// РђРґР°РїС‚Р°С†РёСЏ РїРѕРґ ESP32-S3 (СЃРј. docs/PLAN.md Рё РўР—): S3 РЅРµ РїРѕРґРґРµСЂР¶РёРІР°РµС‚ A2DP,
-// РїРѕСЌС‚РѕРјСѓ РёСЃС‚РѕС‡РЅРёРє Р°СѓРґРёРѕ вЂ” Wi-Fi UDP PCM СЃРѕ СЃРјР°СЂС‚С„РѕРЅР°.
+// Адаптация под ESP32-S3 (см. docs/PLAN.md и ТЗ): S3 не поддерживает A2DP,
+// поэтому источник аудио — Wi-Fi UDP PCM со смартфона.
 //
-// Р­С‚Р°Рї 1 (С‚РµРєСѓС‰РёР№): Р·Р°РіСЂСѓР·РєР° РїР»Р°С‚С‹, СЃС‚Р°СЂС‚РѕРІР°СЏ РґРёР°РіРЅРѕСЃС‚РёРєР° (chip/flash/PSRAM),
-// Wi-Fi (AP_DIRECT, STA РёР»Рё APSTA-СЂРµРїРёС‚РµСЂ), Web UI + REST API (РІРєР»СЋС‡Р°СЏ
-// РЅР°СЃС‚СЂРѕР№РєСѓ Wi-Fi РїРѕРґРєР»СЋС‡РµРЅРёСЏ СЃРѕ СЃРјР°СЂС‚С„РѕРЅР°), UDP-listener РЅР° AUDIO_UDP_PORT,
-// serial-РєРѕРЅСЃРѕР»СЊ. РђСѓРґРёРѕ-РєРѕРЅРІРµР№РµСЂ (jitter buffer, DSP, TX РЅР° СЃР°С‚РµР»Р»РёС‚С‹) вЂ”
-// Р­С‚Р°Рї 2+.
+// Этап 1 (текущий): загрузка платы, стартовая диагностика (chip/flash/PSRAM),
+// Wi-Fi (AP_DIRECT, STA или APSTA-репитер), Web UI + REST API (включая
+// настройку Wi-Fi подключения со смартфона), UDP-listener на AUDIO_UDP_PORT,
+// serial-консоль. Аудио-конвейер (jitter buffer, DSP, TX на сателлиты) —
+// Этап 2+.
 //
-// РќР°СЃС‚СЂРѕР№РєР° Wi-Fi: РµСЃР»Рё STA-РїРѕРґРєР»СЋС‡РµРЅРёРµ Рє РґРѕРјР°С€РЅРµР№ СЃРµС‚Рё РЅРµ СѓРґР°Р»РѕСЃСЊ (СЃРµС‚СЊ РЅРµ
-// РЅР°Р№РґРµРЅР°, РЅРµРІРµСЂРЅС‹Р№ РїР°СЂРѕР»СЊ), РјР°СЃС‚РµСЂ РїРѕРґРЅРёРјР°РµС‚ AP РЅР°СЃС‚СЂРѕР№РєРё Рё Р·Р°РїСѓСЃРєР°РµС‚ Web UI
-// РЅР° http://192.168.4.1 вЂ” СЃРѕ СЃРјР°СЂС‚С„РѕРЅР° РІС‹Р±РёСЂР°РµС‚СЃСЏ СЃРµС‚СЊ, РІРІРѕРґСЏС‚СЃСЏ SSID/РїР°СЂРѕР»СЊ,
-// РєСЂРµРґС‹ СЃРѕС…СЂР°РЅСЏСЋС‚СЃСЏ РІ NVS Рё РјР°СЃС‚РµСЂ РїРµСЂРµР·Р°РіСЂСѓР¶Р°РµС‚СЃСЏ РІ STA/APSTA-СЂРµР¶РёРјРµ.
+// Настройка Wi-Fi: если STA-подключение к домашней сети не удалось (сеть не
+// найдена, неверный пароль), мастер поднимает AP настройки и запускает Web UI
+// на http://192.168.4.1 — со смартфона выбирается сеть, вводятся SSID/пароль,
+// креды сохраняются в NVS и мастер перезагружается в STA/APSTA-режиме.
 //
-// РЎС‚Р°СЂС‚РѕРІР°СЏ РґРёР°РіРЅРѕСЃС‚РёРєР° (РўР— В§14.2):
+// Стартовая диагностика (ТЗ §14.2):
 //   chip model, flash size, PSRAM size, Wi-Fi mode, IP, UDP audio port,
 //   I2S pins, satellite MAC, transport mode, crossover, delays.
 
@@ -60,7 +60,7 @@ static JitterBuffer* g_jitter = nullptr;   // ps_malloc в setup
 static volatile bool g_audioActive = false; // статус для Web UI
 
 // ---------------------------------------------------------------------------
-// Р“Р»РѕР±Р°Р»СЊРЅРѕРµ СЃРѕСЃС‚РѕСЏРЅРёРµ
+// Глобальное состояние
 // ---------------------------------------------------------------------------
 
 static NodeConfig g_cfg;
@@ -79,8 +79,8 @@ static uint32_t g_toneFreq = 440;
 static uint32_t g_tonePhase = 0;
 static constexpr float kToneAmp = 0.2f;
 
-// ESP-NOW: РїСЂРёС‘Рј heartbeat РѕС‚ СЃР°С‚РµР»Р»РёС‚РѕРІ (discovery-response) РґР»СЏ СЃС‚Р°С‚СѓСЃР°
-// online РґР°Р¶Рµ Р±РµР· Р°СѓРґРёРѕ-РїРѕС‚РѕРєР°. РђСѓРґРёРѕ-РєРѕРЅРІРµР№РµСЂ вЂ” Р­С‚Р°Рї 2+.
+// ESP-NOW: приём heartbeat от сателлитов (discovery-response) для статуса
+// online даже без аудио-потока. Аудио-конвейер — Этап 2+.
 static EspNowTransport g_espnow;
 static volatile bool g_leftOnline = false;
 static volatile bool g_rightOnline = false;
@@ -88,20 +88,20 @@ static uint32_t g_leftLastSeenMs = 0;
 static uint32_t g_rightLastSeenMs = 0;
 static uint32_t g_heartbeatsRx = 0;
 
-// Web UI + REST API. РђСѓРґРёРѕ-РєРѕРЅРІРµР№РµСЂ (pipeline/delay/espnow) РІ Р­С‚Р°РїРµ 1 РЅРµ
-// СЂРµР°Р»РёР·РѕРІР°РЅ вЂ” РїРµСЂРµРґР°С‘Рј nullptr: Р°СѓРґРёРѕ-СЌРЅРґРїРѕРёРЅС‚С‹ РїСЂРёРјРµРЅСЏСЋС‚ РЅР°СЃС‚СЂРѕР№РєРё Рє
-// РєРѕРЅС„РёРіСѓ, РґРѕСЃС‚СѓРїРЅС‹ РЅР°СЃС‚СЂРѕР№РєР° Wi-Fi, РёРЅС‚РµСЂРЅРµС‚Р°, РґРёР°РіРЅРѕСЃС‚РёРєР° Рё reboot.
+// Web UI + REST API. Аудио-конвейер (pipeline/delay/espnow) в Этапе 1 не
+// реализован — передаём nullptr: аудио-эндпоинты применяют настройки к
+// конфигу, доступны настройка Wi-Fi, интернета, диагностика и reboot.
 static MasterWebServer g_webServer(g_cfg, nullptr, nullptr, nullptr, nullptr,
-                                   &g_espnow, &g_leftOnline, &g_rightOnline);// Р РµР¶РёРј РЅР°СЃС‚СЂРѕР№РєРё Wi-Fi: STA РЅРµ РїРѕРґРєР»СЋС‡РёР»СЃСЏ в†’ РјР°СЃС‚РµСЂ РїРѕРґРЅСЏР» AP РЅР°СЃС‚СЂРѕР№РєРё.
+                                   &g_espnow, &g_leftOnline, &g_rightOnline);// Режим настройки Wi-Fi: STA не подключился → мастер поднял AP настройки.
 static bool g_setupMode = false;
 
-// Captive portal: РїРµСЂРµС…РІР°С‚С‹РІР°РµС‚ DNS-Р·Р°РїСЂРѕСЃС‹ С‚РµР»РµС„РѕРЅР° (Р»СЋР±РѕР№ РґРѕРјРµРЅ в†’ softAPIP()),
-// Р±СЂР°СѓР·РµСЂ РѕС‚РєСЂС‹РІР°РµС‚ http://192.168.4.1/ в†’ onNotFound в†’ СЃС‚СЂР°РЅРёС†Р° РЅР°СЃС‚СЂРѕР№РєРё.
+// Captive portal: перехватывает DNS-запросы телефона (любой домен → softAPIP()),
+// браузер открывает http://192.168.4.1/ → onNotFound → страница настройки.
 static DNSServer g_dns;
 
-// РџСЂРѕРІРµСЂРєР° РёРЅС‚РµСЂРЅРµС‚Р° (РўР—_Р’РµР± В§7): HTTP GET РґРѕ connectivitycheck.gstatic.com.
-// Р‘Р»РѕРєРёСЂСѓСЋС‰РёР№ HTTP (DNS+connect+read) РІС‹РїРѕР»РЅСЏРµС‚СЃСЏ РІ РѕС‚РґРµР»СЊРЅРѕР№ Р·Р°РґР°С‡Рµ
-// internetCheckTask, С‡С‚РѕР±С‹ РЅРµ Р·Р°РјРѕСЂР°Р¶РёРІР°С‚СЊ loop/Web UI.
+// Проверка интернета (ТЗ_Веб §7): HTTP GET до connectivitycheck.gstatic.com.
+// Блокирующий HTTP (DNS+connect+read) выполняется в отдельной задаче
+// internetCheckTask, чтобы не замораживать loop/Web UI.
 static InternetChecker g_internet;
 static uint32_t g_lastNetTick = 0;
 
@@ -115,27 +115,27 @@ static void internetCheckTask(void*) {
     }
 }
 
-// РљРѕР»СЊС†РµРІРѕР№ Р±СѓС„РµСЂ Р»РѕРіРѕРІ РґР»СЏ Web UI (РўР—_Р’РµР± В§13).
+// Кольцевой буфер логов для Web UI (ТЗ_Веб §13).
 static char g_logStorage[32][LogRing::kLineSize];
 static LogRing g_logs(g_logStorage[0], 32);
 
 // ---------------------------------------------------------------------------
-// ESP-NOW: РїСЂРёС‘Рј heartbeat/discovery-response РѕС‚ СЃР°С‚РµР»Р»РёС‚РѕРІ (СЃС‚Р°С‚СѓСЃ online)
+// ESP-NOW: приём heartbeat/discovery-response от сателлитов (статус online)
 // ---------------------------------------------------------------------------
 
-// РЎР°С‚РµР»Р»РёС‚ С€Р»С‘С‚ discovery-response (kFlagDiscoveryResponse) РєР°Р¶РґС‹Рµ ~2 СЃ
-// (heartbeat) СЃРѕ СЃРІРѕРёРј РєР°РЅР°Р»РѕРј вЂ” РјР°СЃС‚РµСЂ РїРѕРјРµС‡Р°РµС‚ РµРіРѕ online. РўР°Р№РјР°СѓС‚ вЂ” 6 СЃ.
-// РРЅС‚РµСЂРІР°Р» Рё С‚Р°Р№РјР°СѓС‚ вЂ” РѕР±С‰РёРµ (audio_packet.h).
+// Сателлит шлёт discovery-response (kFlagDiscoveryResponse) каждые ~2 с
+// (heartbeat) со своим каналом — мастер помечает его online. Таймаут — 6 с.
+// Интервал и таймаут — общие (audio_packet.h).
 static constexpr uint32_t kDiscoveryIntervalMs = kHeartbeatIntervalMs;
 
-// РџРµСЂРµРїРѕРґРєР»СЋС‡РµРЅРёРµ STA РїРѕ Р·Р°РїСЂРѕСЃСѓ Web UI: РЅРµ СѓР±РёРІР°РµРј AP (ApSta-СЂРµРїРёС‚РµСЂ) Рё РЅРµ
-// Р±Р»РѕРєРёСЂСѓРµРј loop вЂ” Р¶РґС‘Рј РёСЃС…РѕРґ РІ loop() СЃ Р»РёРјРёС‚РѕРј, РїСЂРё РЅРµСѓРґР°С‡Рµ РїРѕРґРЅРёРјР°РµРј setup AP.
+// Переподключение STA по запросу Web UI: не убиваем AP (ApSta-репитер) и не
+// блокируем loop — ждём исход в loop() с лимитом, при неудаче поднимаем setup AP.
 static constexpr uint32_t kReconnectTimeoutMs = 20000;
 static uint32_t g_reconnectAtMs = 0;
 static bool g_reconnectPending = false;
 
-// РџРµСЂРёРѕРґРёС‡РµСЃРєРёР№ discovery-Р·Р°РїСЂРѕСЃ: СЃР°С‚РµР»Р»РёС‚ Р·Р°РїРѕРјРёРЅР°РµС‚ MAC РјР°СЃС‚РµСЂР° Рё РѕС‚РІРµС‡Р°РµС‚
-// unicast-heartbeat-РѕРј; РјР°СЃС‚РµСЂ С‚Р°РєР¶Рµ РїРѕР»СѓС‡Р°РµС‚ broadcast-heartbeat РЅР°РїСЂСЏРјСѓСЋ.
+// Периодический discovery-запрос: сателлит запоминает MAC мастера и отвечает
+// unicast-heartbeat-ом; мастер также получает broadcast-heartbeat напрямую.
 static uint32_t g_lastDiscoveryMs = 0;
 static void sendDiscoveryRequest() {
     uint8_t buf[kMaxPacketSize];
@@ -162,7 +162,7 @@ static void onEspNowPacket(const uint8_t* data, size_t size, const MacAddr& from
         }
         return;
     }
-    (void)from; // MAC РёСЃС‚РѕС‡РЅРёРєР° РЅРµ РЅСѓР¶РµРЅ РґР»СЏ heartbeat
+    (void)from; // MAC источника не нужен для heartbeat
 }
 
 static bool initEspNow() {
@@ -172,18 +172,18 @@ static bool initEspNow() {
 }
 
 // ---------------------------------------------------------------------------
-// РЎРєР°РЅ Wi-Fi СЃРµС‚РµР№ Р”Рћ СЃС‚Р°СЂС‚Р° AP (B9)
+// Скан Wi-Fi сетей ДО старта AP (B9)
 // ---------------------------------------------------------------------------
 
-// WiFi.scanNetworks() РїСЂРё Р°РєС‚РёРІРЅРѕРј Soft-AP РѕС‚РєР»СЋС‡Р°РµС‚ СЂР°РґРёРѕ вЂ” С‚РµР»РµС„РѕРЅ С‚РµСЂСЏРµС‚
-// СЃРµС‚СЊ РІ РјРѕРјРµРЅС‚ POST СЃ РєСЂРµРґР°РјРё (В«РЅРµ СЃРѕС…СЂР°РЅСЏРµС‚ РїРѕРґРєР»СЋС‡РµРЅРёРµВ»). РџРѕСЌС‚РѕРјСѓ СЃРїРёСЃРѕРє
-// СЃРµС‚РµР№ СЃРєР°РЅРёСЂСѓРµС‚СЃСЏ Р·Р°СЂР°РЅРµРµ (STA-СЂРµР¶РёРј, AP РµС‰С‘ РЅРµ РїРѕРґРЅСЏС‚) Рё РєРµС€РёСЂСѓРµС‚СЃСЏ РІ
-// MasterWebServer; GET /api/wifi/scan РѕС‚РґР°С‘С‚ РєРµС€.
+// WiFi.scanNetworks() при активном Soft-AP отключает радио — телефон теряет
+// сеть в момент POST с кредами («не сохраняет подключение»). Поэтому список
+// сетей сканируется заранее (STA-режим, AP ещё не поднят) и кешируется в
+// MasterWebServer; GET /api/wifi/scan отдаёт кеш.
 static void scanWifiBeforeAp() {
     WiFi.mode(WIFI_STA);
     WiFi.disconnect(false, true);
     delay(100);
-    int n = WiFi.scanNetworks(); // Р±Р»РѕРєРёСЂСѓСЋС‰РёР№ СЃРєР°РЅ (~1-2 СЃ)
+    int n = WiFi.scanNetworks(); // блокирующий скан (~1-2 с)
     std::vector<MasterWebServer::WifiNetInfo> cache;
     if (n > 0) cache.reserve(static_cast<size_t>(n));
     for (int i = 0; i < n; i++) {
@@ -199,7 +199,7 @@ static void scanWifiBeforeAp() {
 }
 
 // ---------------------------------------------------------------------------
-// РЎС‚Р°СЂС‚РѕРІР°СЏ РґРёР°РіРЅРѕСЃС‚РёРєР° (РўР— В§14.2)
+// Стартовая диагностика (ТЗ §14.2)
 // ---------------------------------------------------------------------------
 
 static void printDiagnostics() {
@@ -226,18 +226,18 @@ static void printDiagnostics() {
     Logger::infof("diag", "delays ms: L=%d R=%d Sub=%d",
                   g_cfg.delayLeftMs, g_cfg.delayRightMs, g_cfg.delaySubMs);
 
-    // РљСЂРёС‚РµСЂРёР№ РєРѕСЂСЂРµРєС‚РЅРѕСЃС‚Рё PSRAM (РўР— В§14.3).
+    // Критерий корректности PSRAM (ТЗ §14.3).
     if (ESP.getPsramSize() == 0) {
-        Logger::error("diag", "PSRAM size = 0 вЂ” РЅРµРІРµСЂРЅР°СЏ РїР»Р°С‚Р° РёР»Рё board_build.arduino.memory_type");
+        Logger::error("diag", "PSRAM size = 0 — неверная плата или board_build.arduino.memory_type");
     }
 }
 
 // ---------------------------------------------------------------------------
-// Wi-Fi: AP_DIRECT, STA РёР»Рё APSTA-СЂРµРїРёС‚РµСЂ (РўР— В§6.1)
+// Wi-Fi: AP_DIRECT, STA или APSTA-репитер (ТЗ §6.1)
 // ---------------------------------------------------------------------------
 
-// NAPT вЂ” СЂРµРїРёС‚РµСЂ: AP-РєР»РёРµРЅС‚С‹ (СЃРјР°СЂС‚С„РѕРЅ) РїРѕР»СѓС‡Р°СЋС‚ РёРЅС‚РµСЂРЅРµС‚ С‡РµСЂРµР· STA (uplink).
-// API РµСЃС‚СЊ С‚РѕР»СЊРєРѕ РІ Arduino core 3.x (IDF 5.1+), РіРґРµ lwip СЃРѕР±СЂР°РЅ СЃ
+// NAPT — репитер: AP-клиенты (смартфон) получают интернет через STA (uplink).
+// API есть только в Arduino core 3.x (IDF 5.1+), где lwip собран с
 // CONFIG_LWIP_IP_FORWARD=y / CONFIG_LWIP_IPV4_NAPT=y (pioarduino 55.03.311).
 static void enableNapt() {
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
@@ -245,17 +245,17 @@ static void enableNapt() {
     if (ap != nullptr && esp_netif_napt_enable(ap) == ESP_OK) {
         Logger::info("wifi", "NAPT enabled вЂ” AP clients routed to upstream");
     } else {
-        Logger::error("wifi", "NAPT enable failed (lwip Р±РµР· CONFIG_LWIP_IPV4_NAPT?)");
+        Logger::error("wifi", "NAPT enable failed (lwip без CONFIG_LWIP_IPV4_NAPT?)");
     }
 #else
     Logger::warn("wifi", "NAPT requires Arduino core 3.x вЂ” skipping");
 #endif
 }
 
-// РџРѕРґРЅСЏС‚СЊ AP РЅР°СЃС‚СЂРѕР№РєРё (РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РїСЂРё РЅРµСѓРґР°С‡РЅРѕРј STA-РїРѕРґРєР»СЋС‡РµРЅРёРё).
+// Поднять AP настройки (используется при неудачном STA-подключении).
 static bool startSetupAp() {
-    if (WiFi.getMode() == WIFI_AP) return true; // AP СѓР¶Рµ РїРѕРґРЅСЏС‚ (ApSta)
-    scanWifiBeforeAp(); // СЃРїРёСЃРѕРє СЃРµС‚РµР№ РґР»СЏ Web UI вЂ” Р”Рћ СЃС‚Р°СЂС‚Р° AP (B9)
+    if (WiFi.getMode() == WIFI_AP) return true; // AP уже поднят (ApSta)
+    scanWifiBeforeAp(); // список сетей для Web UI — ДО старта AP (B9)
     WiFi.mode(WIFI_AP_STA);
     bool ok = WiFi.softAP(g_cfg.wifiApSsid, g_cfg.wifiApPassword, kDefaultWifiChannel);
     if (!ok) {
@@ -271,10 +271,10 @@ static bool startSetupAp() {
 
 static bool initWifi() {
     WiFi.disconnect(true);
-    WiFi.setSleep(false); // РѕС‚РєР»СЋС‡РёС‚СЊ power save РґР»СЏ Р°СѓРґРёРѕСѓР·Р»РѕРІ (РўР— В§16.3)
+    WiFi.setSleep(false); // отключить power save для аудиоузлов (ТЗ §16.3)
 
     if (g_cfg.wifiMode == WifiMode::ApDirect) {
-        scanWifiBeforeAp(); // СЃРїРёСЃРѕРє СЃРµС‚РµР№ РґР»СЏ Web UI вЂ” Р”Рћ СЃС‚Р°СЂС‚Р° AP (B9)
+        scanWifiBeforeAp(); // список сетей для Web UI — ДО старта AP (B9)
         WiFi.mode(WIFI_AP);
         bool ok = WiFi.softAP(g_cfg.wifiApSsid, g_cfg.wifiApPassword, kDefaultWifiChannel);
         if (!ok) {
@@ -289,8 +289,8 @@ static bool initWifi() {
     }
 
     if (g_cfg.wifiMode == WifiMode::ApSta) {
-        // Р РµРїРёС‚РµСЂ: AP РґР»СЏ СЃРјР°СЂС‚С„РѕРЅР° + STA (РґРѕРјР°С€РЅСЏСЏ СЃРµС‚СЊ) + NAPT.
-        scanWifiBeforeAp(); // СЃРїРёСЃРѕРє СЃРµС‚РµР№ РґР»СЏ Web UI вЂ” Р”Рћ СЃС‚Р°СЂС‚Р° AP (B9)
+        // Репитер: AP для смартфона + STA (домашняя сеть) + NAPT.
+        scanWifiBeforeAp(); // список сетей для Web UI — ДО старта AP (B9)
         WiFi.mode(WIFI_AP_STA);
         bool ok = WiFi.softAP(g_cfg.wifiApSsid, g_cfg.wifiApPassword, kDefaultWifiChannel);
         if (!ok) {
@@ -311,15 +311,15 @@ static bool initWifi() {
                           WiFi.localIP().toString().c_str());
             enableNapt();
         } else {
-            // Р”РѕРјР°С€РЅСЏСЏ СЃРµС‚СЊ РЅРµРґРѕСЃС‚СѓРїРЅР° вЂ” AP РѕСЃС‚Р°С‘С‚СЃСЏ, РІРєР»СЋС‡Р°РµРј СЂРµР¶РёРј РЅР°СЃС‚СЂРѕР№РєРё.
-            // РћС‚РєР»СЋС‡Р°РµРј Р°РІС‚Рѕ-СЂРµРєРѕРЅРЅРµРєС‚ STA: РїРѕСЃС‚РѕСЏРЅРЅС‹Рµ РїРѕРїС‹С‚РєРё РїРѕРґРєР»СЋС‡РµРЅРёСЏ
-            // РјРµС€Р°СЋС‚ СЃРєР°РЅРёСЂРѕРІР°РЅРёСЋ СЃРµС‚РµР№ РІ Web UI Рё РЅР°РіСЂСѓР¶Р°СЋС‚ СЂР°РґРёРѕРјРѕРґСѓР»СЊ.
+            // Домашняя сеть недоступна — AP остаётся, включаем режим настройки.
+            // Отключаем авто-реконнект STA: постоянные попытки подключения
+            // мешают сканированию сетей в Web UI и нагружают радиомодуль.
             WiFi.setAutoReconnect(false);
             WiFi.disconnect(false, true);
             Logger::warn("wifi", "upstream not connected вЂ” setup mode (Web UI on AP)");
             g_setupMode = true;
         }
-        return true; // AP СЂР°Р±РѕС‚Р°РµС‚ РІ Р»СЋР±РѕРј СЃР»СѓС‡Р°Рµ
+        return true; // AP работает в любом случае
     }
 
     // STA
@@ -329,9 +329,9 @@ static bool initWifi() {
     int tries = 0;
     while (WiFi.status() != WL_CONNECTED && tries++ < 40) delay(500);
     if (WiFi.status() != WL_CONNECTED) {
-        // РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕРґРєР»СЋС‡РёС‚СЊСЃСЏ Рє РґРѕРјР°С€РЅРµР№ СЃРµС‚Рё вЂ” РїРѕРґРЅРёРјР°РµРј AP РЅР°СЃС‚СЂРѕР№РєРё,
-        // С‡С‚РѕР±С‹ РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ РјРѕРі Р·Р°РґР°С‚СЊ SSID/РїР°СЂРѕР»СЊ С‡РµСЂРµР· Web UI.
-        // РћС‚РєР»СЋС‡Р°РµРј Р°РІС‚Рѕ-СЂРµРєРѕРЅРЅРµРєС‚ STA (РјРµС€Р°РµС‚ СЃРєР°РЅСѓ СЃРµС‚РµР№ РІ Web UI).
+        // Не удалось подключиться к домашней сети — поднимаем AP настройки,
+        // чтобы пользователь мог задать SSID/пароль через Web UI.
+        // Отключаем авто-реконнект STA (мешает скану сетей в Web UI).
         WiFi.setAutoReconnect(false);
         WiFi.disconnect(false, true);
         Logger::warn("wifi", "connect failed вЂ” switching to setup AP");
@@ -343,11 +343,11 @@ static bool initWifi() {
 }
 
 // ---------------------------------------------------------------------------
-// Serial-РєРѕРЅСЃРѕР»СЊ
+// Serial-консоль
 // ---------------------------------------------------------------------------
 
-// Р‘Р»РѕРєРёСЂСѓСЋС‰РёР№ ping С‡РµСЂРµР· esp_ping (IDF 5.x). РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РєРѕРјР°РЅРґРѕР№ `net`
-// РґР»СЏ РґРёР°РіРЅРѕСЃС‚РёРєРё РґРѕСЃС‚СѓРїР° РІ СЃРµС‚СЊ СЃ СЃР°РјРѕРіРѕ РјР°СЃС‚РµСЂР°.
+// Блокирующий ping через esp_ping (IDF 5.x). Используется командой `net`
+// для диагностики доступа в сеть с самого мастера.
 static SemaphoreHandle_t g_pingDone = nullptr;
 static uint32_t g_pingRecv = 0;
 
@@ -371,7 +371,7 @@ static bool pingHost(const IPAddress& ip, uint32_t count, uint32_t timeoutMs) {
     cbs.on_ping_end = onPingEnd;
     esp_ping_handle_t h;
     if (esp_ping_new_session(&cfg, &cbs, &h) != ESP_OK) return false;
-    xSemaphoreTake(g_pingDone, 0); // СЃР±СЂРѕСЃ СЃРµРјР°С„РѕСЂР°
+    xSemaphoreTake(g_pingDone, 0); // сброс семафора
     g_pingRecv = 0;
     esp_ping_start(h);
     uint32_t waitMs = count * (timeoutMs + 300) + 500;
@@ -409,7 +409,7 @@ static void handleConsoleCommand(const String& line) {
         return;
     }
 
-    // Р СѓС‡РЅР°СЏ РЅР°СЃС‚СЂРѕР№РєР° Wi-Fi С‡РµСЂРµР· РєРѕРЅСЃРѕР»СЊ: `wifi <ssid> <password>`
+    // Ручная настройка Wi-Fi через консоль: `wifi <ssid> <password>`
     if (cmd.startsWith("wifi ")) {
         String rest = cmd.substring(5);
         rest.trim();
@@ -437,7 +437,7 @@ static void handleConsoleCommand(const String& line) {
         Serial.printf("gateway: %s\n", WiFi.gatewayIP().toString().c_str());
         Serial.printf("netmask: %s\n", WiFi.subnetMask().toString().c_str());
         Serial.printf("dns: %s\n", WiFi.dnsIP().toString().c_str());
-        // РџСЂРѕРІРµСЂРєР° AP-РёРЅС‚РµСЂС„РµР№СЃР°: РїРёРЅРі РїРµСЂРІРѕРіРѕ РєР»РёРµРЅС‚Р° (192.168.4.x)
+        // Проверка AP-интерфейса: пинг первого клиента (192.168.4.x)
         {
             esp_netif_ip_info_t ip;
             esp_netif_t* ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
@@ -521,21 +521,21 @@ void setup() {
         Logger::error("master", "Wi-Fi init failed");
     }
 
-    // ESP-NOW: heartbeat РѕС‚ СЃР°С‚РµР»Р»РёС‚РѕРІ в†’ СЃС‚Р°С‚СѓСЃ online Р±РµР· Р°СѓРґРёРѕ-РїРѕС‚РѕРєР°.
+    // ESP-NOW: heartbeat от сателлитов → статус online без аудио-потока.
     if (initEspNow()) {
         Logger::info("master", "ESP-NOW ready (satellite heartbeat RX)");
     } else {
         Logger::error("master", "ESP-NOW init failed");
     }
 
-    // mDNS (F16): РґРѕСЃС‚СѓРї РїРѕ http://<hostname>.local (РґРµС„РѕР»С‚ audio-master.local).
-    // Р’ СЂРµР¶РёРјРµ РЅР°СЃС‚СЂРѕР№РєРё mDNS РЅР° AP РЅРµ СЂР°Р±РѕС‚Р°РµС‚ вЂ” Web UI РґРѕСЃС‚СѓРїРµРЅ РїРѕ IP.
+    // mDNS (F16): доступ по http://<hostname>.local (дефолт audio-master.local).
+    // В режиме настройки mDNS на AP не работает — Web UI доступен по IP.
     if (!g_setupMode && MDNS.begin(g_cfg.hostname)) {
         Logger::infof("master", "mDNS: http://%s.local", g_cfg.hostname);
         MDNS.addService("http", "tcp", 80);
     }
 
-    // NTP (РўР—_Р’РµР± В§7.5): СЃРёРЅС…СЂРѕРЅРёР·Р°С†РёСЏ РІСЂРµРјРµРЅРё РёР· STA-СЃРµС‚Рё.
+    // NTP (ТЗ_Веб §7.5): синхронизация времени из STA-сети.
     if (!g_setupMode && g_cfg.ntpEnabled && WiFi.status() == WL_CONNECTED) {
         configTime(0, 0, g_cfg.ntpServer);
         setenv("TZ", g_cfg.timezone, 1);
@@ -543,17 +543,17 @@ void setup() {
         Logger::infof("master", "NTP: %s (tz %s)", g_cfg.ntpServer, g_cfg.timezone);
     }
 
-    // РџСЂРѕРІРµСЂРєР° РёРЅС‚РµСЂРЅРµС‚Р° (РўР—_Р’РµР± В§7): Р°РєС‚РёРІРЅР° РїСЂРё STA-РїРѕРґРєР»СЋС‡РµРЅРёРё.
+    // Проверка интернета (ТЗ_Веб §7): активна при STA-подключении.
     g_internet.configure(g_cfg.netCheckUrl, g_cfg.netCheckIntervalSec,
                          g_cfg.netCheckTimeoutMs, g_cfg.netCheckEnabled && !g_setupMode);
     g_internet.start(httpInternetCheck, millis());
     g_webServer.setInternetChecker(&g_internet);
     g_webServer.setLogs(&g_logs);
-    // Р—Р°РґР°С‡Р° РёРЅС‚РµСЂРЅРµС‚-С‡РµРєР°: Р±Р»РѕРєРёСЂСѓСЋС‰РёР№ HTTP РІС‹РїРѕР»РЅСЏРµС‚СЃСЏ РІРЅРµ loop.
+    // Задача интернет-чека: блокирующий HTTP выполняется вне loop.
     xTaskCreate(internetCheckTask, "netcheck", 4096, nullptr, 1, nullptr);
     g_logs.addf(LogCat::Boot, 1, "master booted, mode %s", wifiModeToString(g_cfg.wifiMode));
 
-    // Web UI: РІ СЂРµР¶РёРјРµ РЅР°СЃС‚СЂРѕР№РєРё вЂ” РЅР° AP (http://192.168.4.1), РёРЅР°С‡Рµ вЂ” РїРѕ IP/mDNS.
+    // Web UI: в режиме настройки — на AP (http://192.168.4.1), иначе — по IP/mDNS.
     g_webServer.begin();
     if (g_setupMode) {
         Logger::infof("master", "Wi-Fi setup: connect to AP '%s', open http://192.168.4.1",
@@ -562,8 +562,8 @@ void setup() {
         Logger::infof("master", "Web UI: http://%s", WiFi.localIP().toString().c_str());
     }
 
-    // Captive portal (B9): РїСЂРё Р°РєС‚РёРІРЅРѕРј AP РїРµСЂРµС…РІР°С‚С‹РІР°РµРј DNS (Р»СЋР±РѕР№ РґРѕРјРµРЅ в†’
-    // softAPIP()), С‡С‚РѕР±С‹ С‚РµР»РµС„РѕРЅ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё РѕС‚РєСЂС‹Р» СЃС‚СЂР°РЅРёС†Сѓ РЅР°СЃС‚СЂРѕР№РєРё.
+    // Captive portal (B9): при активном AP перехватываем DNS (любой домен →
+    // softAPIP()), чтобы телефон автоматически открыл страницу настройки.
     if (WiFi.getMode() & WIFI_AP) {
         if (g_dns.start(53, "*", WiFi.softAPIP())) {
             Logger::info("master", "DNS captive portal: * -> softAPIP");
@@ -572,7 +572,7 @@ void setup() {
         }
     }
 
-    // UDP-listener Р°СѓРґРёРѕ РѕС‚ СЃРјР°СЂС‚С„РѕРЅР° (Р­С‚Р°Рї 2: РїСЂРёС‘Рј PCM-РїР°РєРµС‚РѕРІ).
+    // UDP-listener аудио от смартфона (Этап 2: приём PCM-пакетов).
     if (g_udp.begin(g_cfg.udpAudioPort)) {
         Logger::infof("master", "UDP audio listener on port %u", g_cfg.udpAudioPort);
     } else {
@@ -680,15 +680,15 @@ void loop() {
     // Тестовый тон (C1.4) — не блокирует loop.
     toneTick();
 
-    // РЎС‚Р°С‚СѓСЃ СЃР°С‚РµР»Р»РёС‚РѕРІ: online, РїРѕРєР° РїСЂРёС…РѕРґРёС‚ heartbeat (discovery-response).
+    // Статус сателлитов: online, пока приходит heartbeat (discovery-response).
     uint32_t now = millis();
     if (g_leftOnline && (now - g_leftLastSeenMs > kSatelliteTimeoutMs)) g_leftOnline = false;
     if (g_rightOnline && (now - g_rightLastSeenMs > kSatelliteTimeoutMs)) g_rightOnline = false;
 
-    // Discovery-Р·Р°РїСЂРѕСЃ СЃР°С‚РµР»Р»РёС‚Р°Рј: РїРѕРєР° РєС‚Рѕ-С‚Рѕ offline вЂ” РєР°Р¶РґС‹Рµ 2 СЃ, С‡С‚РѕР±С‹
-    // РѕРЅРё РїРµСЂРµС€Р»Рё РЅР° unicast-heartbeat. РљРѕРіРґР° РѕР±Р° online, СЌС„РёСЂ РЅРµ РјСѓСЃРѕСЂРёРј
-    // (heartbeat РїСЂРёС…РѕРґРёС‚ Рё С‚Р°Рє); РЅРѕРІС‹Р№/РїРµСЂРµР·Р°РіСЂСѓР¶РµРЅРЅС‹Р№ СЃР°С‚РµР»Р»РёС‚ СЃР°Рј РїРѕС€Р»С‘С‚
-    // broadcast-heartbeat, РїРѕ РєРѕС‚РѕСЂРѕРјСѓ РјР°СЃС‚РµСЂ РІРѕСЃСЃС‚Р°РЅРѕРІРёС‚ СЃС‚Р°С‚СѓСЃ.
+    // Discovery-запрос сателлитам: пока кто-то offline — каждые 2 с, чтобы
+    // они перешли на unicast-heartbeat. Когда оба online, эфир не мусорим
+    // (heartbeat приходит и так); новый/перезагруженный сателлит сам пошлёт
+    // broadcast-heartbeat, по которому мастер восстановит статус.
     if (now - g_lastDiscoveryMs >= kDiscoveryIntervalMs && (!g_leftOnline || !g_rightOnline)) {
         g_lastDiscoveryMs = now;
         sendDiscoveryRequest();
@@ -699,7 +699,7 @@ void loop() {
         handleConsoleCommand(line);
     }
 
-    // Web UI: РѕР±СЂР°Р±РѕС‚РєР° Р·Р°РїСЂРѕСЃРѕРІ Рё СЃРѕС…СЂР°РЅРµРЅРёРµ РєРѕРЅС„РёРіР° РїРѕ РєРЅРѕРїРєРµ.
+    // Web UI: обработка запросов и сохранение конфига по кнопке.
     g_webServer.handleClient();
     if (g_webServer.saveRequested()) {
         ConfigStorage::save(g_cfg);
@@ -708,8 +708,8 @@ void loop() {
         g_logs.addf(LogCat::Config, 1, "config saved via Web UI");
     }
 
-    // РРЅС‚РµСЂРЅРµС‚-С‡РµРє (РўР—_Р’РµР± В§7.4): РІС‹РїРѕР»РЅСЏРµС‚СЃСЏ РІ РѕС‚РґРµР»СЊРЅРѕР№ Р·Р°РґР°С‡Рµ, С‡С‚РѕР±С‹
-    // Р±Р»РѕРєРёСЂСѓСЋС‰РёР№ HTTP (DNS + connect + read) РЅРµ Р·Р°РјРѕСЂР°Р¶РёРІР°Р» loop Рё Web UI.
+    // Интернет-чек (ТЗ_Веб §7.4): выполняется в отдельной задаче, чтобы
+    // блокирующий HTTP (DNS + connect + read) не замораживал loop и Web UI.
     static NetStatus lastLoggedNet = NetStatus::Disabled;
     if (g_internet.status() != lastLoggedNet) {
         lastLoggedNet = g_internet.status();
@@ -717,15 +717,15 @@ void loop() {
                     g_internet.statusName(), (unsigned long)g_internet.latencyMs());
     }
 
-    // РџРµСЂРµРїРѕРґРєР»СЋС‡РµРЅРёРµ Wi-Fi РїРѕ Р·Р°РїСЂРѕСЃСѓ Web UI (POST /api/wifi/connect).
+    // Переподключение Wi-Fi по запросу Web UI (POST /api/wifi/connect).
     if (g_webServer.reconnectRequested()) {
         g_webServer.clearReconnectRequested();
         Logger::infof("wifi", "reconnect requested via Web UI (ssid %s)", g_cfg.wifiSsid);
         g_logs.addf(LogCat::Wifi, 1, "reconnect requested: %s", g_cfg.wifiSsid);
         bool keepAp = g_cfg.wifiMode == WifiMode::ApSta || g_cfg.wifiMode == WifiMode::ApDirect;
         if (keepAp && WiFi.getMode() == WIFI_AP) {
-            // AP СѓР¶Рµ РїРѕРґРЅСЏС‚ вЂ” РїРµСЂРµР·Р°РїСѓСЃРєР°РµРј С‚РѕР»СЊРєРѕ STA-С‡Р°СЃС‚СЊ, С‡С‚РѕР±С‹ РЅРµ С‚РµСЂСЏС‚СЊ
-            // РєР°РЅР°Р» ESP-NOW (СЃРІСЏР·СЊ СЃ СЃР°С‚РµР»Р»РёС‚Р°РјРё Р¶РёРІС‘С‚ Р±РµР· Р°СѓРґРёРѕ-РїР°РєРµС‚РѕРІ).
+            // AP уже поднят — перезапускаем только STA-часть, чтобы не терять
+            // канал ESP-NOW (связь с сателлитами живёт без аудио-пакетов).
             WiFi.mode(WIFI_AP_STA);
         } else if (!keepAp) {
             WiFi.mode(WIFI_STA);
@@ -737,8 +737,8 @@ void loop() {
         g_reconnectAtMs = millis();
     }
 
-    // Fallback: reconnect STA РЅРµ СѓРґР°Р»СЃСЏ Р·Р° Р»РёРјРёС‚ вЂ” РїРѕРґРЅСЏС‚СЊ setup AP, С‡С‚РѕР±С‹
-    // Web UI РѕСЃС‚Р°РІР°Р»СЃСЏ РґРѕСЃС‚СѓРїРЅС‹Рј (Рё СЃРІСЏР·СЊ СЃ СЃР°С‚РµР»Р»РёС‚Р°РјРё РЅРµ РїРѕС‚РµСЂСЏР»Р°СЃСЊ).
+    // Fallback: reconnect STA не удался за лимит — поднять setup AP, чтобы
+    // Web UI оставался доступным (и связь с сателлитами не потерялась).
     if (g_reconnectPending) {
         wl_status_t st = WiFi.status();
         if (st == WL_CONNECTED) {
@@ -760,7 +760,7 @@ void loop() {
         }
     }
 
-    // Captive portal: РѕР±СЂР°Р±РѕС‚Р°С‚СЊ DNS-Р·Р°РїСЂРѕСЃС‹ С‚РµР»РµС„РѕРЅР° (no-op, РµСЃР»Рё РЅРµ Р·Р°РїСѓС‰РµРЅ).
+    // Captive portal: обработать DNS-запросы телефона (no-op, если не запущен).
     g_dns.processNextRequest();
 
     delay(10);

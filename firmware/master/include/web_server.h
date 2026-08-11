@@ -1,18 +1,18 @@
-﻿// web_server.h вЂ” Web UI + REST API РјР°СЃС‚РµСЂ-СѓР·Р»Р° (РўР—_Р’РµР±.md, РїРѕР»РЅР°СЏ СЂРµР°Р»РёР·Р°С†РёСЏ).
+// web_server.h — Web UI + REST API мастер-узла (ТЗ_Веб.md, полная реализация).
 //
-// РСЃРїРѕР»СЊР·СѓРµС‚ РІСЃС‚СЂРѕРµРЅРЅС‹Р№ WebServer ESP32 Arduino (СЃРёРЅС…СЂРѕРЅРЅС‹Р№) + ArduinoJson.
-// Р”РІР° СЃРµСЂРІРµСЂР° (B9): STA-РёРЅС‚РµСЂС„РµР№СЃ (localIP:80) + AP-РёРЅС‚РµСЂС„РµР№СЃ (softAPIP:80),
-// С‡С‚РѕР±С‹ Web UI Р±С‹Р» РґРѕСЃС‚СѓРїРµРЅ РєР»РёРµРЅС‚Р°Рј AP РІ APSTA-СЂРµР¶РёРјРµ.
+// Использует встроенный WebServer ESP32 Arduino (синхронный) + ArduinoJson.
+// Два сервера (B9): STA-интерфейс (localIP:80) + AP-интерфейс (softAPIP:80),
+// чтобы Web UI был доступен клиентам AP в APSTA-режиме.
 //
-// Р Р°Р·РґРµР»С‹ (РўР— В§4): Dashboard, Wi-Fi, Internet, Audio, Delays, Satellites,
-// System, Update, Logs. REST API вЂ” РўР— В§15-17. РђРІС‚РѕСЂРёР·Р°С†РёСЏ вЂ” В§18/В§23.
+// Разделы (ТЗ §4): Dashboard, Wi-Fi, Internet, Audio, Delays, Satellites,
+// System, Update, Logs. REST API — ТЗ §15-17. Авторизация — §18/§23.
 //
-// РђСѓРґРёРѕ-Р·Р°РІРёСЃРёРјРѕСЃС‚Рё (pipeline, delay, espnow, СЃС‚Р°С‚СѓСЃС‹) вЂ” РѕРїС†РёРѕРЅР°Р»СЊРЅС‹Рµ
-// (СѓРєР°Р·Р°С‚РµР»Рё, РґРµС„РѕР»С‚ nullptr): РјР°СЃС‚РµСЂ ESP32-S3 (СЌС‚Р°Рї 1, Р±РµР· Р°СѓРґРёРѕ-РєРѕРЅРІРµР№РµСЂР°)
-// РёСЃРїРѕР»СЊР·СѓРµС‚ С‚РѕС‚ Р¶Рµ Web UI РґР»СЏ РЅР°СЃС‚СЂРѕР№РєРё Wi-Fi, РёРЅС‚РµСЂРЅРµС‚Р° Рё РґРёР°РіРЅРѕСЃС‚РёРєРё;
-// Р°СѓРґРёРѕ-СЌРЅРґРїРѕРёРЅС‚С‹ РїСЂРё СЌС‚РѕРј РїСЂРёРјРµРЅСЏСЋС‚ РёР·РјРµРЅРµРЅРёСЏ С‚РѕР»СЊРєРѕ Рє РєРѕРЅС„РёРіСѓ.
+// Аудио-зависимости (pipeline, delay, espnow, статусы) — опциональные
+// (указатели, дефолт nullptr): мастер ESP32-S3 (этап 1, без аудио-конвейера)
+// использует тот же Web UI для настройки Wi-Fi, интернета и диагностики;
+// аудио-эндпоинты при этом применяют изменения только к конфигу.
 //
-// Header-only. РўРѕР»СЊРєРѕ РґР»СЏ РјР°СЃС‚РµСЂ-СѓР·Р»Р°.
+// Header-only. Только для мастер-узла.
 #pragma once
 
 #include <Arduino.h>
@@ -37,16 +37,16 @@
 
 namespace audio21 {
 
-// РҐСѓРє РїСЂРѕРІРµСЂРєРё РёРЅС‚РµСЂРЅРµС‚Р° РґР»СЏ InternetChecker (РўР— В§7.4). Р РµР°Р»РёР·Р°С†РёСЏ вЂ” СЃС‹СЂРѕР№
-// HTTP/1.1 РїРѕРІРµСЂС… WiFiClient: СЂРµР·РѕР»РІРёРј РёРјСЏ РІ IPv4 (WiFi.hostByName), С€Р»С‘Рј
-// GET Рё С‡РёС‚Р°РµРј РїРµСЂРІСѓСЋ СЃС‚СЂРѕРєСѓ РѕС‚РІРµС‚Р° (РєРѕРґ 200/204 в†’ online, 3xx в†’ captive
-// portal). HTTPClient core 3.x РѕС€РёР±РѕС‡РЅРѕ РІРѕР·РІСЂР°С‰Р°РµС‚ connection refused РїСЂРё
-// СЂР°Р±РѕС‡РµРј TCP-СЃРѕРµРґРёРЅРµРЅРёРё (РїСЂРѕРІРµСЂРµРЅРѕ РЅР° Р¶РµР»РµР·Рµ), РїРѕСЌС‚РѕРјСѓ РѕР±С…РѕРґРёРј РµРіРѕ.
+// Хук проверки интернета для InternetChecker (ТЗ §7.4). Реализация — сырой
+// HTTP/1.1 поверх WiFiClient: резолвим имя в IPv4 (WiFi.hostByName), шлём
+// GET и читаем первую строку ответа (код 200/204 → online, 3xx → captive
+// portal). HTTPClient core 3.x ошибочно возвращает connection refused при
+// рабочем TCP-соединении (проверено на железе), поэтому обходим его.
 inline HttpCheckResult httpInternetCheck(const char* url, uint32_t timeoutMs) {
     HttpCheckResult r;
     if (!url || !url[0]) { r.connectFailed = 1; return r; }
 
-    // Р Р°Р·Р±РѕСЂ URL: http://host[:port]/path
+    // Разбор URL: http://host[:port]/path
     String u(url);
     String host;
     uint16_t port = 80;
@@ -121,14 +121,14 @@ public:
           m_leftOnline(leftOnline), m_rightOnline(rightOnline),
           m_a2dpConnected(a2dpConnected) {}
 
-    // --- РРЅСЉРµРєС†РёРё РёР· main.cpp ---
+    // --- Инъекции из main.cpp ---
     void setInternetChecker(InternetChecker* ic) { m_net = ic; }
     void setLogs(LogRing* logs) { m_logs = logs; }
 
-    // Р—Р°РїСѓСЃС‚РёС‚СЊ СЃРµСЂРІРµСЂС‹ (Wi-Fi РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ РїРѕРґРєР»СЋС‡С‘РЅ).
+    // Запустить серверы (Wi-Fi должен быть подключён).
     void begin() {
-        // РљР°СЃС‚РѕРјРЅС‹Рµ Р·Р°РіРѕР»РѕРІРєРё РЅСѓР¶РЅРѕ Р·Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°С‚СЊ Р”Рћ begin() (close() РёРЅР°С‡Рµ
-        // РѕСЃС‚Р°РІРёС‚ С‚РѕР»СЊРєРѕ Authorization). Cookie вЂ” РґР»СЏ СЃРµСЃСЃРёРё, X-CSRF-Token вЂ” РґР»СЏ CSRF.
+        // Кастомные заголовки нужно зарегистрировать ДО begin() (close() иначе
+        // оставит только Authorization). Cookie — для сессии, X-CSRF-Token — для CSRF.
         const char* hdrKeys[] = { "Cookie", "X-CSRF-Token" };
         if (WiFi.status() == WL_CONNECTED) {
             m_server = new WebServer(WiFi.localIP(), 80);
@@ -149,7 +149,7 @@ public:
         if (m_apServer) m_apServer->handleClient();
     }
 
-    // РљРµС€ РЅР°Р№РґРµРЅРЅС‹С… Wi-Fi СЃРµС‚РµР№ (Р·Р°РїРѕР»РЅСЏРµС‚СЃСЏ РґРѕ СЃС‚Р°СЂС‚Р° AP, B9).
+    // Кеш найденных Wi-Fi сетей (заполняется до старта AP, B9).
     struct WifiNetInfo {
         String ssid;
         int rssi;
@@ -157,20 +157,20 @@ public:
     };
     void setWifiCache(std::vector<WifiNetInfo> cache) { m_wifiCache = std::move(cache); }
 
-    // Р¤Р»Р°Рі В«Р·Р°РїСЂРѕС€РµРЅРѕ СЃРѕС…СЂР°РЅРµРЅРёРµВ» вЂ” РѕРїСЂР°С€РёРІР°РµС‚СЃСЏ РІ loop() main.cpp.
+    // Флаг «запрошено сохранение» — опрашивается в loop() main.cpp.
     bool saveRequested() const { return m_saveRequested; }
     void clearSaveRequested() { m_saveRequested = false; }
 
-    // Р¤Р»Р°Рі РїРµСЂРµРїРѕРґРєР»СЋС‡РµРЅРёСЏ Wi-Fi (РґР»СЏ main.cpp).
+    // Флаг переподключения Wi-Fi (для main.cpp).
     bool reconnectRequested() const { return m_reconnectRequested; }
     void clearReconnectRequested() { m_reconnectRequested = false; }
 
-    // РЎС‚Р°С‚СѓСЃ Р°РІС‚РѕСЂРёР·Р°С†РёРё (РґР»СЏ main.cpp/РєРѕРЅСЃРѕР»Рё).
+    // Статус авторизации (для main.cpp/консоли).
     bool sessionActive() const { return m_sessionActive; }
 
 private:
     // ------------------------------------------------------------------
-    // Р РѕСѓС‚С‹
+    // Роуты
     // ------------------------------------------------------------------
     void bindRoutes(WebServer& s) {
         s.on("/", HTTP_GET, [this, &s]() { handleRoot(s); });
@@ -216,10 +216,10 @@ private:
     }
 
     // ------------------------------------------------------------------
-    // РђРІС‚РѕСЂРёР·Р°С†РёСЏ (РўР— В§18, В§23)
+    // Авторизация (ТЗ §18, §23)
     // ------------------------------------------------------------------
-    // РђРІС‚РѕСЂРёР·РѕРІР°РЅ С‚РѕР»СЊРєРѕ РѕР±Р»Р°РґР°С‚РµР»СЊ cookie С‚РµРєСѓС‰РµР№ СЃРµСЃСЃРёРё (m_sessionActive
-    // вЂ” РіР»РѕР±Р°Р»СЊРЅС‹Р№ С„Р»Р°Рі В«СЃРµСЃСЃРёСЏ СЃРѕР·РґР°РЅР°В», РЅРѕ РЅРµ Р·Р°РјРµРЅСЏРµС‚ cookie).
+    // Авторизован только обладатель cookie текущей сессии (m_sessionActive
+    // — глобальный флаг «сессия создана», но не заменяет cookie).
     bool isAuthed(WebServer& s) const {
         if (!m_cfg.authEnabled) return true;
         if (!m_sessionActive) return false;
@@ -237,7 +237,7 @@ private:
     bool csrfOk(WebServer& s) const {
         if (!m_cfg.authEnabled) return true;
         if (!m_sessionActive) return false;
-        if (!isAuthed(s)) return false; // cookie СЃРµСЃСЃРёРё РѕР±СЏР·Р°РЅР° СЃРѕРІРїР°РґР°С‚СЊ
+        if (!isAuthed(s)) return false; // cookie сессии обязана совпадать
         String header = s.header("X-CSRF-Token");
         if (header.length() == 0) return false;
         char expected[65];
@@ -246,7 +246,7 @@ private:
     }
 
     // ------------------------------------------------------------------
-    // РћС‚РІРµС‚С‹
+    // Ответы
     // ------------------------------------------------------------------
     static void sendJson(WebServer& s, int code, JsonDocument& doc) {
         String body;
@@ -274,14 +274,14 @@ private:
     }
 
     // ------------------------------------------------------------------
-    // РЎС‚СЂР°РЅРёС†С‹ (SPA вЂ” РѕРґРёРЅ HTML, СЂР°Р·РґРµР»С‹ С‡РµСЂРµР· hash-РЅР°РІРёРіР°С†РёСЋ)
+    // Страницы (SPA — один HTML, разделы через hash-навигацию)
     // ------------------------------------------------------------------
     void handleRoot(WebServer& s) {
         s.send(200, "text/html", kPageHtml);
     }
 
     // ------------------------------------------------------------------
-    // GET /api/status (РўР— В§16.1)
+    // GET /api/status (ТЗ §16.1)
     // ------------------------------------------------------------------
     void handleStatus(WebServer& s) {
         JsonDocument doc;
@@ -326,7 +326,7 @@ private:
     }
 
     // ------------------------------------------------------------------
-    // GET /api/wifi/status (РўР— В§15.1)
+    // GET /api/wifi/status (ТЗ §15.1)
     // ------------------------------------------------------------------
     void handleWifiStatus(WebServer& s) {
         JsonDocument doc;
@@ -347,7 +347,7 @@ private:
     }
 
     // ------------------------------------------------------------------
-    // GET /api/wifi/scan (РўР— В§15.2) вЂ” РєРµС€ РґРѕ СЃС‚Р°СЂС‚Р° AP (B9) РёР»Рё Р¶РёРІРѕР№ СЃРєР°РЅ.
+    // GET /api/wifi/scan (ТЗ §15.2) — кеш до старта AP (B9) или живой скан.
     // ------------------------------------------------------------------
     void handleWifiScan(WebServer& s) {
         JsonDocument doc;
@@ -385,7 +385,7 @@ private:
     }
 
     // ------------------------------------------------------------------
-    // POST /api/wifi/connect (РўР— В§15.3)
+    // POST /api/wifi/connect (ТЗ §15.3)
     // ------------------------------------------------------------------
     void handleWifiConnect(WebServer& s) {
         if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
@@ -424,7 +424,7 @@ private:
     }
 
     // ------------------------------------------------------------------
-    // POST /api/wifi/save (РўР— В§15.4) вЂ” СЃРѕС…СЂР°РЅРёС‚СЊ РїСЂРѕС„РёР»СЊ Р±РµР· РїРѕРґРєР»СЋС‡РµРЅРёСЏ.
+    // POST /api/wifi/save (ТЗ §15.4) — сохранить профиль без подключения.
     // ------------------------------------------------------------------
     void handleWifiSave(WebServer& s) {
         if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
@@ -449,7 +449,7 @@ private:
     }
 
     // ------------------------------------------------------------------
-    // POST /api/wifi/forget (РўР— В§15.5)
+    // POST /api/wifi/forget (ТЗ §15.5)
     // ------------------------------------------------------------------
     void handleWifiForget(WebServer& s) {
         if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
@@ -461,7 +461,7 @@ private:
     }
 
     // ------------------------------------------------------------------
-    // GET /api/wifi/profiles (РўР— В§6.5) вЂ” СЃРїРёСЃРѕРє СЃРѕС…СЂР°РЅС‘РЅРЅС‹С… СЃРµС‚РµР№.
+    // GET /api/wifi/profiles (ТЗ §6.5) — список сохранённых сетей.
     // ------------------------------------------------------------------
     void handleWifiProfiles(WebServer& s) {
         JsonDocument doc;
@@ -480,7 +480,7 @@ private:
     }
 
     // ------------------------------------------------------------------
-    // GET /api/net/internet (РўР— В§15.6)
+    // GET /api/net/internet (ТЗ §15.6)
     // ------------------------------------------------------------------
     void handleInternetStatus(WebServer& s) {
         JsonDocument doc;
@@ -504,7 +504,7 @@ private:
     }
 
     // ------------------------------------------------------------------
-    // POST /api/net/check (РўР— В§15.7) вЂ” РїСЂРёРЅСѓРґРёС‚РµР»СЊРЅР°СЏ РїСЂРѕРІРµСЂРєР°.
+    // POST /api/net/check (ТЗ §15.7) — принудительная проверка.
     // ------------------------------------------------------------------
     void handleInternetCheck(WebServer& s) {
         if (m_net) m_net->forceCheck(httpInternetCheck);
@@ -512,7 +512,7 @@ private:
     }
 
     // ------------------------------------------------------------------
-    // PUT /api/volume | POST /api/mute (РўР— В§16.2, В§16.5)
+    // PUT /api/volume | POST /api/mute (ТЗ §16.2, §16.5)
     // ------------------------------------------------------------------
     void handleVolume(WebServer& s) {
         if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
@@ -544,7 +544,7 @@ private:
     }
 
     // ------------------------------------------------------------------
-    // PUT /api/crossover (РўР— В§16.3)
+    // PUT /api/crossover (ТЗ §16.3)
     // ------------------------------------------------------------------
     void handleCrossover(WebServer& s) {
         if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
@@ -558,7 +558,7 @@ private:
     }
 
     // ------------------------------------------------------------------
-    // PUT /api/delay (РўР— В§16.4)
+    // PUT /api/delay (ТЗ §16.4)
     // ------------------------------------------------------------------
     void handleDelay(WebServer& s) {
         if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
@@ -614,7 +614,7 @@ private:
     }
 
     // ------------------------------------------------------------------
-    // POST /api/save, /api/system/* (РўР— В§17)
+    // POST /api/save, /api/system/* (ТЗ §17)
     // ------------------------------------------------------------------
     void handleSave(WebServer& s) {
         if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
@@ -715,7 +715,7 @@ private:
     }
 
     // ------------------------------------------------------------------
-    // GET /api/logs (РўР— В§17.5)
+    // GET /api/logs (ТЗ §17.5)
     // ------------------------------------------------------------------
     void handleLogs(WebServer& s) {
         JsonDocument doc;
@@ -731,7 +731,7 @@ private:
     }
 
     // ------------------------------------------------------------------
-    // GET /api/diagnostics (РўР— В§17.6)
+    // GET /api/diagnostics (ТЗ §17.6)
     // ------------------------------------------------------------------
     void handleDiagnostics(WebServer& s) {
         JsonDocument doc;
@@ -748,7 +748,7 @@ private:
     }
 
     // ------------------------------------------------------------------
-    // POST /api/login, /api/logout, /api/admin/setup (РўР— В§18)
+    // POST /api/login, /api/logout, /api/admin/setup (ТЗ §18)
     // ------------------------------------------------------------------
     void handleLogin(WebServer& s) {
         if (!m_cfg.authEnabled) { sendOk(s, "no password required"); return; }
@@ -775,7 +775,7 @@ private:
 
     void handleAdminSetup(WebServer& s) {
         if (m_cfg.authEnabled) {
-            // РџР°СЂРѕР»СЊ СѓР¶Рµ Р·Р°РґР°РЅ вЂ” СЃР±СЂРѕСЃ РІРѕР·РјРѕР¶РµРЅ С‚РѕР»СЊРєРѕ С‡РµСЂРµР· Р°РІС‚РѕСЂРёР·РѕРІР°РЅРЅСѓСЋ СЃРµСЃСЃРёСЋ.
+            // Пароль уже задан — сброс возможен только через авторизованную сессию.
             s.send(403, "application/json", "{\"ok\":false,\"error\":\"already configured\"}");
             return;
         }
@@ -796,12 +796,12 @@ private:
     }
 
     // ------------------------------------------------------------------
-    // OTA (РўР— В§12) вЂ” POST /api/update
+    // OTA (ТЗ §12) — POST /api/update
     // ------------------------------------------------------------------
     void handleUpdateUpload(WebServer& s) {
         HTTPUpload& up = s.upload();
         if (up.status == UPLOAD_FILE_START) {
-            // РўРѕР»СЊРєРѕ Р°РІС‚РѕСЂРёР·РѕРІР°РЅРЅР°СЏ СЃРµСЃСЃРёСЏ (cookie) + CSRF-С‚РѕРєРµРЅ.
+            // Только авторизованная сессия (cookie) + CSRF-токен.
             if (!csrfOk(s) || !isAuthed(s)) {
                 s.send(401, "application/json", "{\"ok\":false,\"error\":\"unauthorized\"}");
                 return;
@@ -822,7 +822,7 @@ private:
         } else if (up.status == UPLOAD_FILE_END) {
             if (!m_updateActive) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"unauthorized\"}"); return; }
             m_updateActive = false;
-            // end(false): РІР°Р»РёРґРЅС‹Р№ РѕР±СЂР°Р· РѕР±СЏР·Р°С‚РµР»РµРЅ, РёРЅР°С‡Рµ РїРµСЂРµР·Р°РіСЂСѓР·РєРё РЅРµС‚.
+            // end(false): валидный образ обязателен, иначе перезагрузки нет.
             if (Update.end(false)) {
                 s.send(200, "application/json", "{\"ok\":true,\"status\":\"update ok, rebooting\"}");
                 delay(200);
@@ -840,7 +840,7 @@ private:
     }
 
     // ------------------------------------------------------------------
-    // Р§Р»РµРЅС‹
+    // Члены
     // ------------------------------------------------------------------
     NodeConfig& m_cfg;
     PcmPipeline* m_pipeline;
@@ -906,11 +906,11 @@ const char MasterWebServer::kPageHtml[] = R"rawliteral(
 <body>
 <h1>Audio 2.1 Master</h1>
 <div id="loginBanner" class="banner" style="display:none">
-  <h2>РўСЂРµР±СѓРµС‚СЃСЏ РІС…РѕРґ</h2>
-  <label>РџР°СЂРѕР»СЊ Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂР°</label>
+  <h2>Требуется вход</h2>
+  <label>Пароль администратора</label>
   <div class="row">
     <input type="password" id="loginPass" style="flex:1">
-    <button id="loginBtn">Р’РѕР№С‚Рё</button>
+    <button id="loginBtn">Войти</button>
   </div>
 </div>
 <nav id="nav">
@@ -927,85 +927,85 @@ const char MasterWebServer::kPageHtml[] = R"rawliteral(
 
 <div id="p-dashboard" class="page active">
   <div class="card">
-    <h2>РЎС‚Р°С‚СѓСЃ</h2>
+    <h2>Статус</h2>
     <table>
-      <tr><td>РЎРёСЃС‚РµРјР°</td><td id="d_system">-</td></tr>
+      <tr><td>Система</td><td id="d_system">-</td></tr>
       <tr><td>Wi-Fi</td><td id="d_wifi">-</td></tr>
-      <tr><td>РРЅС‚РµСЂРЅРµС‚</td><td id="d_internet">-</td></tr>
-      <tr><td>IP-Р°РґСЂРµСЃ</td><td id="d_ip">-</td></tr>
+      <tr><td>Интернет</td><td id="d_internet">-</td></tr>
+      <tr><td>IP-адрес</td><td id="d_ip">-</td></tr>
       <tr><td>Hostname</td><td id="d_host">-</td></tr>
-      <tr><td>РСЃС‚РѕС‡РЅРёРє Р°СѓРґРёРѕ</td><td id="d_source">-</td></tr>
-      <tr><td>Р“СЂРѕРјРєРѕСЃС‚СЊ</td><td id="d_volume">-</td></tr>
-      <tr><td>РљСЂРѕСЃСЃРѕРІРµСЂ</td><td id="d_crossover">-</td></tr>
-      <tr><td>Р—Р°РґРµСЂР¶РєРё</td><td id="d_delays">-</td></tr>
-      <tr><td>РЎР°С‚РµР»Р»РёС‚С‹</td><td id="d_sats">-</td></tr>
-      <tr><td>РЎРІРѕР±РѕРґРЅС‹Р№ heap</td><td id="d_heap">-</td></tr>
-      <tr><td>РЎРІРѕР±РѕРґРЅС‹Р№ PSRAM</td><td id="d_psram">-</td></tr>
-      <tr><td>Р’РµСЂСЃРёСЏ</td><td id="d_ver">-</td></tr>
+      <tr><td>Источник аудио</td><td id="d_source">-</td></tr>
+      <tr><td>Громкость</td><td id="d_volume">-</td></tr>
+      <tr><td>Кроссовер</td><td id="d_crossover">-</td></tr>
+      <tr><td>Задержки</td><td id="d_delays">-</td></tr>
+      <tr><td>Сателлиты</td><td id="d_sats">-</td></tr>
+      <tr><td>Свободный heap</td><td id="d_heap">-</td></tr>
+      <tr><td>Свободный PSRAM</td><td id="d_psram">-</td></tr>
+      <tr><td>Версия</td><td id="d_ver">-</td></tr>
     </table>
     <div class="row">
       <button id="dMuteBtn">Mute</button>
-      <button id="dSaveBtn" class="ghost">РЎРѕС…СЂР°РЅРёС‚СЊ (NVS)</button>
+      <button id="dSaveBtn" class="ghost">Сохранить (NVS)</button>
       <button id="dRebootBtn" class="danger">Reboot</button>
-      <button id="dLogoutBtn" class="ghost">Р’С‹Р№С‚Рё</button>
+      <button id="dLogoutBtn" class="ghost">Выйти</button>
     </div>
   </div>
 </div>
 
 <div id="p-wifi" class="page">
   <div class="card">
-    <h2>РЎРєР°РЅРёСЂРѕРІР°РЅРёРµ СЃРµС‚РµР№</h2>
+    <h2>Сканирование сетей</h2>
     <div class="row">
-      <button id="wifiScanBtn">РЎРєР°РЅРёСЂРѕРІР°С‚СЊ</button>
-      <label style="display:inline; margin:0">РЎРєСЂС‹С‚Р°СЏ СЃРµС‚СЊ <input type="checkbox" id="wifiHidden" style="width:auto"></label>
+      <button id="wifiScanBtn">Сканировать</button>
+      <label style="display:inline; margin:0">Скрытая сеть <input type="checkbox" id="wifiHidden" style="width:auto"></label>
     </div>
     <div id="wifiNets"></div>
     <div id="wifiMsg" style="font-size:13px;color:#aaa"></div>
   </div>
   <div class="card">
-    <h2>РџРѕРґРєР»СЋС‡РµРЅРёРµ</h2>
+    <h2>Подключение</h2>
     <label>SSID</label>
-    <input type="text" id="wifiSsid" placeholder="SSID СЃРµС‚Рё" autocomplete="off">
-    <label>РџР°СЂРѕР»СЊ</label>
-    <input type="password" id="wifiPass" placeholder="РџР°СЂРѕР»СЊ СЃРµС‚Рё">
+    <input type="text" id="wifiSsid" placeholder="SSID сети" autocomplete="off">
+    <label>Пароль</label>
+    <input type="password" id="wifiPass" placeholder="Пароль сети">
     <div class="row">
-      <button id="wifiConnectBtn">РџРѕРґРєР»СЋС‡РёС‚СЊСЃСЏ Рё СЃРѕС…СЂР°РЅРёС‚СЊ</button>
-      <button id="wifiSaveOnlyBtn" class="ghost">РўРѕР»СЊРєРѕ СЃРѕС…СЂР°РЅРёС‚СЊ</button>
+      <button id="wifiConnectBtn">Подключиться и сохранить</button>
+      <button id="wifiSaveOnlyBtn" class="ghost">Только сохранить</button>
     </div>
   </div>
   <div class="card">
-    <h2>РЎРѕС…СЂР°РЅС‘РЅРЅС‹Рµ СЃРµС‚Рё</h2>
+    <h2>Сохранённые сети</h2>
     <div id="wifiProfiles"></div>
   </div>
 </div>
 
 <div id="p-internet" class="page">
   <div class="card">
-    <h2>РЎС‚Р°С‚СѓСЃ РёРЅС‚РµСЂРЅРµС‚Р°</h2>
+    <h2>Статус интернета</h2>
     <table>
-      <tr><td>РЎС‚Р°С‚СѓСЃ</td><td id="i_status">-</td></tr>
-      <tr><td>Р—Р°РґРµСЂР¶РєР°</td><td id="i_latency">-</td></tr>
-      <tr><td>РџРѕСЃР»РµРґРЅСЏСЏ РїСЂРѕРІРµСЂРєР°</td><td id="i_last">-</td></tr>
-      <tr><td>URL РїСЂРѕРІРµСЂРєРё</td><td id="i_url">-</td></tr>
+      <tr><td>Статус</td><td id="i_status">-</td></tr>
+      <tr><td>Задержка</td><td id="i_latency">-</td></tr>
+      <tr><td>Последняя проверка</td><td id="i_last">-</td></tr>
+      <tr><td>URL проверки</td><td id="i_url">-</td></tr>
       <tr><td>DNS</td><td id="i_dns">-</td></tr>
       <tr><td>HTTP</td><td id="i_http">-</td></tr>
     </table>
-    <button id="iCheckBtn">РџСЂРѕРІРµСЂРёС‚СЊ СЃРµР№С‡Р°СЃ</button>
+    <button id="iCheckBtn">Проверить сейчас</button>
   </div>
   <div class="card">
-    <h2>РќР°СЃС‚СЂРѕР№РєРё</h2>
-    <label>URL РїСЂРѕРІРµСЂРєРё</label>
+    <h2>Настройки</h2>
+    <label>URL проверки</label>
     <input type="text" id="iUrlInput">
     <div class="row">
-      <button id="iUrlSaveBtn">РЎРѕС…СЂР°РЅРёС‚СЊ</button>
+      <button id="iUrlSaveBtn">Сохранить</button>
     </div>
   </div>
 </div>
 
 <div id="p-audio" class="page">
   <div class="card">
-    <h2>Р“СЂРѕРјРєРѕСЃС‚СЊ</h2>
-    <label>Р“СЂРѕРјРєРѕСЃС‚СЊ: <span id="a_volLabel" class="val">50</span></label>
+    <h2>Громкость</h2>
+    <label>Громкость: <span id="a_volLabel" class="val">50</span></label>
     <input type="range" id="a_volume" min="0" max="100" value="50">
     <div class="row">
       <button id="aMuteBtn">Mute</button>
@@ -1013,56 +1013,56 @@ const char MasterWebServer::kPageHtml[] = R"rawliteral(
     </div>
   </div>
   <div class="card">
-    <h2>РљСЂРѕСЃСЃРѕРІРµСЂ</h2>
-    <label>Р§Р°СЃС‚РѕС‚Р°: <span id="a_xoLabel" class="val">90</span> Р“С†</label>
+    <h2>Кроссовер</h2>
+    <label>Частота: <span id="a_xoLabel" class="val">90</span> Гц</label>
     <input type="range" id="a_crossover" min="70" max="120" value="90">
   </div>
   <div class="card">
-    <h2>РђСѓРґРёРѕ-СЃС‚Р°С‚СѓСЃ</h2>
+    <h2>Аудио-статус</h2>
     <table>
-      <tr><td>РСЃС‚РѕС‡РЅРёРє</td><td id="a_source">-</td></tr>
-      <tr><td>Р¤РѕСЂРјР°С‚</td><td id="a_format">-</td></tr>
-      <tr><td>Р’РѕСЃРїСЂРѕРёР·РІРµРґРµРЅРёРµ</td><td id="a_playing">-</td></tr>
+      <tr><td>Источник</td><td id="a_source">-</td></tr>
+      <tr><td>Формат</td><td id="a_format">-</td></tr>
+      <tr><td>Воспроизведение</td><td id="a_playing">-</td></tr>
     </table>
-    <button id="aSaveBtn" class="ghost">РЎРѕС…СЂР°РЅРёС‚СЊ (NVS)</button>
+    <button id="aSaveBtn" class="ghost">Сохранить (NVS)</button>
   </div>
 </div>
 
 <div id="p-delays" class="page">
   <div class="card">
-    <h2>Р—Р°РґРµСЂР¶РєРё РєР°РЅР°Р»РѕРІ, РјСЃ</h2>
-    <label>Left: <span id="dly_l" class="val">0</span> РјСЃ</label>
+    <h2>Задержки каналов, мс</h2>
+    <label>Left: <span id="dly_l" class="val">0</span> мс</label>
     <input type="range" id="dlyLeft" min="0" max="200" value="0">
-    <label>Right: <span id="dly_r" class="val">0</span> РјСЃ</label>
+    <label>Right: <span id="dly_r" class="val">0</span> мс</label>
     <input type="range" id="dlyRight" min="0" max="200" value="0">
-    <label>Sub: <span id="dly_s" class="val">0</span> РјСЃ</label>
+    <label>Sub: <span id="dly_s" class="val">0</span> мс</label>
     <input type="range" id="dlySub" min="0" max="200" value="0">
-    <p style="font-size:12px;color:#777">РџРѕРґСЃРєР°Р·РєР°: delay_ms = distance_m / 0.343 (СЃРєРѕСЂРѕСЃС‚СЊ Р·РІСѓРєР°)</p>
+    <p style="font-size:12px;color:#777">Подсказка: delay_ms = distance_m / 0.343 (скорость звука)</p>
   </div>
 </div>
 
 <div id="p-satellites" class="page">
   <div class="card">
-    <h2>РЎС‚Р°С‚СѓСЃ СЃР°С‚РµР»Р»РёС‚РѕРІ</h2>
+    <h2>Статус сателлитов</h2>
     <table>
-      <tr><td>Р›РµРІС‹Р№</td><td id="s_left">-</td></tr>
-      <tr><td>РџСЂР°РІС‹Р№</td><td id="s_right">-</td></tr>
-      <tr><td>РўСЂР°РЅСЃРїРѕСЂС‚</td><td id="s_transport">-</td></tr>
+      <tr><td>Левый</td><td id="s_left">-</td></tr>
+      <tr><td>Правый</td><td id="s_right">-</td></tr>
+      <tr><td>Транспорт</td><td id="s_transport">-</td></tr>
     </table>
   </div>
   <div class="card">
-    <h2>РџСЂРёРІСЏР·РєР°</h2>
+    <h2>Привязка</h2>
     <div class="row">
       <select id="pairSide">
         <option value="left">Left</option>
         <option value="right">Right</option>
       </select>
       <input type="text" id="pairMac" placeholder="AA:BB:CC:DD:EE:01" style="flex:1">
-      <button id="pairBtn">РџСЂРёРІСЏР·Р°С‚СЊ</button>
+      <button id="pairBtn">Привязать</button>
     </div>
   </div>
   <div class="card">
-    <h2>РўСЂР°РЅСЃРїРѕСЂС‚</h2>
+    <h2>Транспорт</h2>
     <div class="row">
       <select id="transport">
         <option value="espnow">ESP-NOW</option>
@@ -1075,55 +1075,55 @@ const char MasterWebServer::kPageHtml[] = R"rawliteral(
 
 <div id="p-system" class="page">
   <div class="card">
-    <h2>РЈСЃС‚СЂРѕР№СЃС‚РІРѕ</h2>
+    <h2>Устройство</h2>
     <label>Hostname</label>
     <input type="text" id="sysHostname">
-    <label>URL РїСЂРѕРІРµСЂРєРё РёРЅС‚РµСЂРЅРµС‚Р°</label>
+    <label>URL проверки интернета</label>
     <input type="text" id="sysNetUrl">
-    <label>NTP СЃРµСЂРІРµСЂ</label>
+    <label>NTP сервер</label>
     <input type="text" id="sysNtp">
-    <label>Р§Р°СЃРѕРІРѕР№ РїРѕСЏСЃ</label>
+    <label>Часовой пояс</label>
     <input type="text" id="sysTz">
-    <button id="sysSaveBtn">РЎРѕС…СЂР°РЅРёС‚СЊ</button>
+    <button id="sysSaveBtn">Сохранить</button>
   </div>
   <div class="card">
-    <h2>РћР±СЃР»СѓР¶РёРІР°РЅРёРµ</h2>
+    <h2>Обслуживание</h2>
     <div class="row">
       <button id="sysRebootBtn">Reboot</button>
       <button id="sysFactoryBtn" class="danger">Factory reset</button>
-      <button id="sysExportBtn" class="ghost">Р­РєСЃРїРѕСЂС‚ РєРѕРЅС„РёРіР°</button>
-      <button id="sysDiagBtn" class="ghost">Р”РёР°РіРЅРѕСЃС‚РёРєР°</button>
+      <button id="sysExportBtn" class="ghost">Экспорт конфига</button>
+      <button id="sysDiagBtn" class="ghost">Диагностика</button>
     </div>
     <pre id="sysDiagOut" class="mono"></pre>
   </div>
   <div class="card">
-    <h2>РРјРїРѕСЂС‚ РєРѕРЅС„РёРіР° (JSON)</h2>
+    <h2>Импорт конфига (JSON)</h2>
     <textarea id="sysImportArea" rows="5" style="width:100%;background:#222;color:#eee;border:1px solid #444;border-radius:4px"></textarea>
-    <button id="sysImportBtn" class="ghost">РРјРїРѕСЂС‚РёСЂРѕРІР°С‚СЊ</button>
+    <button id="sysImportBtn" class="ghost">Импортировать</button>
   </div>
 </div>
 
 <div id="p-update" class="page">
   <div class="card">
-    <h2>РћР±РЅРѕРІР»РµРЅРёРµ РїСЂРѕС€РёРІРєРё</h2>
+    <h2>Обновление прошивки</h2>
     <table>
-      <tr><td>Р’РµСЂСЃРёСЏ</td><td id="u_ver">-</td></tr>
+      <tr><td>Версия</td><td id="u_ver">-</td></tr>
     </table>
-    <label>Р¤Р°Р№Р» .bin</label>
+    <label>Файл .bin</label>
     <input type="file" id="uFile" accept=".bin">
-    <button id="uBtn">РћР±РЅРѕРІРёС‚СЊ</button>
+    <button id="uBtn">Обновить</button>
     <div id="uMsg" style="font-size:13px;color:#aaa"></div>
-    <p style="font-size:12px;color:#777">РќРµ РїСЂРµСЂС‹РІР°Р№С‚Рµ РїРёС‚Р°РЅРёРµ РІРѕ РІСЂРµРјСЏ РѕР±РЅРѕРІР»РµРЅРёСЏ. РЈСЃС‚СЂРѕР№СЃС‚РІРѕ РїРµСЂРµР·Р°РіСЂСѓР·РёС‚СЃСЏ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё.</p>
+    <p style="font-size:12px;color:#777">Не прерывайте питание во время обновления. Устройство перезагрузится автоматически.</p>
   </div>
 </div>
 
 <div id="p-logs" class="page">
   <div class="card">
-    <h2>Р›РѕРіРё</h2>
+    <h2>Логи</h2>
     <div class="row">
-      <button id="lRefreshBtn">РћР±РЅРѕРІРёС‚СЊ</button>
-      <button id="lClearBtn" class="ghost">РћС‡РёСЃС‚РёС‚СЊ</button>
-      <label style="display:inline;margin:0">Р›РёРјРёС‚ <select id="lLimit" style="width:80px"><option>20</option><option selected>64</option><option>200</option></select></label>
+      <button id="lRefreshBtn">Обновить</button>
+      <button id="lClearBtn" class="ghost">Очистить</button>
+      <label style="display:inline;margin:0">Лимит <select id="lLimit" style="width:80px"><option>20</option><option selected>64</option><option>200</option></select></label>
     </div>
     <pre id="lOut" class="mono" style="max-height:60vh;overflow:auto"></pre>
   </div>
@@ -1188,8 +1188,8 @@ async function refresh() {
     $('d_host').textContent = s.system.hostname;
     $('d_source').textContent = s.audio.source;
     $('d_volume').textContent = s.audio.volume + (s.audio.mute ? ' (mute)' : '');
-    $('d_crossover').textContent = s.audio.crossover_hz + ' Р“С†';
-    $('d_delays').textContent = 'L ' + s.delays.left_ms + ' / R ' + s.delays.right_ms + ' / Sub ' + s.delays.sub_ms + ' РјСЃ';
+    $('d_crossover').textContent = s.audio.crossover_hz + ' Гц';
+    $('d_delays').textContent = 'L ' + s.delays.left_ms + ' / R ' + s.delays.right_ms + ' / Sub ' + s.delays.sub_ms + ' мс';
     $('d_sats').textContent = 'L ' + s.satellites.left + ' | R ' + s.satellites.right;
     $('d_heap').textContent = s.system.heap_free;
     $('d_psram').textContent = s.system.psram_free;
@@ -1212,7 +1212,7 @@ async function refresh() {
 }
 
 async function scanWifi() {
-  $('wifiMsg').textContent = 'РЎРєР°РЅРёСЂРѕРІР°РЅРёРµ...';
+  $('wifiMsg').textContent = 'Сканирование...';
   try {
     const d = await api('/api/wifi/scan');
     $('wifiNets').innerHTML = '';
@@ -1223,8 +1223,8 @@ async function scanWifi() {
       el.onclick = () => { $('wifiSsid').value = n.ssid; };
       $('wifiNets').appendChild(el);
     });
-    $('wifiMsg').textContent = 'РќР°Р№РґРµРЅРѕ СЃРµС‚РµР№: ' + (d.networks || []).length;
-  } catch (e) { $('wifiMsg').textContent = 'РћС€РёР±РєР° СЃРєР°РЅРёСЂРѕРІР°РЅРёСЏ'; }
+    $('wifiMsg').textContent = 'Найдено сетей: ' + (d.networks || []).length;
+  } catch (e) { $('wifiMsg').textContent = 'Ошибка сканирования'; }
 }
 
 async function loadProfiles() {
@@ -1256,8 +1256,8 @@ async function loadProfiles() {
 
 async function connectWifi() {
   const ssid = $('wifiSsid').value.trim();
-  if (!ssid) { $('wifiMsg').textContent = 'Р’РІРµРґРёС‚Рµ SSID'; return; }
-  $('wifiMsg').textContent = 'РџРѕРґРєР»СЋС‡РµРЅРёРµ...';
+  if (!ssid) { $('wifiMsg').textContent = 'Введите SSID'; return; }
+  $('wifiMsg').textContent = 'Подключение...';
   try {
     const r = await fetch('/api/wifi/connect', {
       method: 'POST',
@@ -1266,7 +1266,7 @@ async function connectWifi() {
     });
     const d = await r.json();
     $('wifiMsg').textContent = d.state || d.error || 'ok';
-  } catch (e) { $('wifiMsg').textContent = 'РћС€РёР±РєР° РїРѕРґРєР»СЋС‡РµРЅРёСЏ'; }
+  } catch (e) { $('wifiMsg').textContent = 'Ошибка подключения'; }
 }
 
 async function refreshInternet() {
@@ -1296,7 +1296,7 @@ async function loadLogs() {
     const limit = $('lLimit').value;
     const d = await api('/api/logs?limit=' + limit);
     $('lOut').textContent = (d.logs || []).join('\n');
-  } catch (e) { $('lOut').textContent = 'РћС€РёР±РєР°'; }
+  } catch (e) { $('lOut').textContent = 'Ошибка'; }
 }
 
 async function sysSave() {
@@ -1312,17 +1312,17 @@ async function sysSave() {
       }})
     });
     const d = await r.json();
-    toast(d.ok ? 'РЎРѕС…СЂР°РЅРµРЅРѕ' : (d.error || 'РћС€РёР±РєР°'));
-  } catch (e) { toast('РћС€РёР±РєР°'); }
+    toast(d.ok ? 'Сохранено' : (d.error || 'Ошибка'));
+  } catch (e) { toast('Ошибка'); }
 }
 
 $('dMuteBtn').onclick = async () => api('/api/mute', {mute: true});
-$('dSaveBtn').onclick = async () => { await api('/api/save', {}); toast('РЎРѕС…СЂР°РЅРµРЅРѕ'); };
-$('dRebootBtn').onclick = async () => { await api('/api/system/reboot', {}); toast('РџРµСЂРµР·Р°РіСЂСѓР·РєР°...'); };
+$('dSaveBtn').onclick = async () => { await api('/api/save', {}); toast('Сохранено'); };
+$('dRebootBtn').onclick = async () => { await api('/api/system/reboot', {}); toast('Перезагрузка...'); };
 $('dLogoutBtn').onclick = async () => { await api('/api/logout', {}); location.reload(); };
 $('aMuteBtn').onclick = async () => api('/api/mute', {mute: true});
 $('aUnmuteBtn').onclick = async () => api('/api/mute', {mute: false});
-$('aSaveBtn').onclick = async () => { await api('/api/save', {}); toast('РЎРѕС…СЂР°РЅРµРЅРѕ'); };
+$('aSaveBtn').onclick = async () => { await api('/api/save', {}); toast('Сохранено'); };
 $('a_volume').oninput = async e => { $('a_volLabel').textContent = e.target.value; await api('/api/volume', {volume: +e.target.value}, 'PUT'); };
 $('a_crossover').oninput = async e => { $('a_xoLabel').textContent = e.target.value; await api('/api/crossover', {crossover_hz: +e.target.value}, 'PUT'); };
 $('dlyLeft').oninput = async e => { $('dly_l').textContent = e.target.value; await api('/api/delay', {channel: 'left', delay_ms: +e.target.value}, 'PUT'); };
@@ -1331,8 +1331,8 @@ $('dlySub').oninput = async e => { $('dly_s').textContent = e.target.value; awai
 $('pairBtn').onclick = async () => api('/api/pair', {side: $('pairSide').value, mac: $('pairMac').value.trim()});
 $('transportBtn').onclick = async () => api('/api/transport', {mode: $('transport').value});
 $('sysSaveBtn').onclick = sysSave;
-$('sysRebootBtn').onclick = async () => { await api('/api/system/reboot', {}); toast('РџРµСЂРµР·Р°РіСЂСѓР·РєР°...'); };
-$('sysFactoryBtn').onclick = async () => { if (confirm('РЎР±СЂРѕСЃРёС‚СЊ РІСЃРµ РЅР°СЃС‚СЂРѕР№РєРё?')) { await api('/api/system/factory_reset', {}); } };
+$('sysRebootBtn').onclick = async () => { await api('/api/system/reboot', {}); toast('Перезагрузка...'); };
+$('sysFactoryBtn').onclick = async () => { if (confirm('Сбросить все настройки?')) { await api('/api/system/factory_reset', {}); } };
 $('sysExportBtn').onclick = async () => { const d = await api('/api/system/config/export'); $('sysImportArea').value = JSON.stringify(d, null, 2); };
 $('sysDiagBtn').onclick = async () => { const d = await api('/api/diagnostics'); $('sysDiagOut').textContent = JSON.stringify(d, null, 2); };
 $('sysImportBtn').onclick = async () => {
@@ -1343,17 +1343,17 @@ $('sysImportBtn').onclick = async () => {
       headers: {'Content-Type': 'application/json', ...(csrf ? {'X-CSRF-Token': csrf} : {})},
       body: JSON.stringify(obj)
     });
-    toast((await r.json()).ok ? 'РРјРїРѕСЂС‚РёСЂРѕРІР°РЅРѕ' : 'РћС€РёР±РєР°');
-  } catch (e) { toast('РќРµРІРµСЂРЅС‹Р№ JSON'); }
+    toast((await r.json()).ok ? 'Импортировано' : 'Ошибка');
+  } catch (e) { toast('Неверный JSON'); }
 };
-$('iCheckBtn').onclick = async () => { toast('РџСЂРѕРІРµСЂРєР°...'); await api('/api/net/check', {}); refreshInternet(); };
+$('iCheckBtn').onclick = async () => { toast('Проверка...'); await api('/api/net/check', {}); refreshInternet(); };
 $('iUrlSaveBtn').onclick = async () => {
   await fetch('/api/system/config/import', {
     method: 'POST',
     headers: {'Content-Type': 'application/json', ...(csrf ? {'X-CSRF-Token': csrf} : {})},
     body: JSON.stringify({config: {net_check_url: $('iUrlInput').value.trim()}})
   });
-  toast('РЎРѕС…СЂР°РЅРµРЅРѕ');
+  toast('Сохранено');
 };
 $('wifiScanBtn').onclick = scanWifi;
 $('wifiConnectBtn').onclick = connectWifi;
@@ -1361,7 +1361,7 @@ $('wifiSaveOnlyBtn').onclick = async () => {
   const ssid = $('wifiSsid').value.trim();
   if (!ssid) return;
   await api('/api/wifi/save', {ssid: ssid, password: $('wifiPass').value, hidden: $('wifiHidden').checked, auto_reconnect: true});
-  toast('РЎРѕС…СЂР°РЅРµРЅРѕ'); loadProfiles();
+  toast('Сохранено'); loadProfiles();
 };
 $('lRefreshBtn').onclick = loadLogs;
 $('lClearBtn').onclick = () => { $('lOut').textContent = ''; };
@@ -1373,34 +1373,34 @@ $('loginBtn').onclick = async () => {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({password: $('loginPass').value})
     });
-    if (r.status === 401) { toast('РќРµРІРµСЂРЅС‹Р№ РїР°СЂРѕР»СЊ'); return; }
+    if (r.status === 401) { toast('Неверный пароль'); return; }
     const d = await r.json();
     hideLogin();
     location.reload();
-  } catch (e) { toast('РћС€РёР±РєР°'); }
+  } catch (e) { toast('Ошибка'); }
 };
 $('uBtn').onclick = async () => {
   const f = $('uFile').files[0];
-  if (!f) { $('uMsg').textContent = 'Р’С‹Р±РµСЂРёС‚Рµ С„Р°Р№Р» .bin'; return; }
-  $('uMsg').textContent = 'Р—Р°РіСЂСѓР·РєР°...';
+  if (!f) { $('uMsg').textContent = 'Выберите файл .bin'; return; }
+  $('uMsg').textContent = 'Загрузка...';
   const form = new FormData();
   form.append('firmware', f);
   try {
     const r = await fetch('/api/update', {method: 'POST', body: form});
     const d = await r.json();
-    $('uMsg').textContent = d.status || d.error || 'Р“РѕС‚РѕРІРѕ';
-  } catch (e) { $('uMsg').textContent = 'РћС€РёР±РєР° Р·Р°РіСЂСѓР·РєРё'; }
+    $('uMsg').textContent = d.status || d.error || 'Готово';
+  } catch (e) { $('uMsg').textContent = 'Ошибка загрузки'; }
 };
 
-// РџРµСЂРІС‹Р№ Р·Р°РїСѓСЃРє: РЅРµС‚ РїР°СЂРѕР»СЏ вЂ” РїРѕРєР°Р·Р°С‚СЊ РЅР°СЃС‚СЂРѕР№РєСѓ Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂР°.
+// Первый запуск: нет пароля — показать настройку администратора.
 async function bootCheck() {
   try {
     const s = await api('/api/status');
     if (s.system.authed) { hideLogin(); }
     else if (!s.system.auth_enabled) {
-      const pass = prompt('РџРµСЂРІС‹Р№ Р·Р°РїСѓСЃРє. Р—Р°РґР°Р№С‚Рµ РїР°СЂРѕР»СЊ Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂР° (РјРёРЅ 4 СЃРёРјРІРѕР»Р°):');
+      const pass = prompt('Первый запуск. Задайте пароль администратора (мин 4 символа):');
       if (pass) {
-        const c = prompt('РџРѕРІС‚РѕСЂРёС‚Рµ РїР°СЂРѕР»СЊ:');
+        const c = prompt('Повторите пароль:');
         if (pass === c) {
           await fetch('/api/admin/setup', {
             method: 'POST',
