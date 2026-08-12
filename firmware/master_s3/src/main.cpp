@@ -530,6 +530,28 @@ static void handleConsoleCommand(const String& line) {
         return;
     }
 
+    if (cmd.startsWith("setsat ")) {
+        String rest = cmd.substring(7);
+        rest.trim();
+        int sp = rest.indexOf(' ');
+        if (sp <= 0) { Serial.println("usage: setsat <left|right> <MAC>"); return; }
+        String side = rest.substring(0, sp);
+        String macStr = rest.substring(sp + 1);
+        macStr.trim();
+        MacAddr mac;
+        if (!MacAddr::parse(macStr.c_str(), mac)) { Serial.println("err: bad mac"); return; }
+        if (side == "left") {
+            g_cfg.leftSatMac = mac;
+            Serial.println("left sat mac set");
+        } else if (side == "right") {
+            g_cfg.rightSatMac = mac;
+            Serial.println("right sat mac set");
+        } else {
+            Serial.println("err: side must be left or right");
+        }
+        return;
+    }
+
     if (cmd == "net") {
         Serial.printf("sta_ip: %s\n", WiFi.localIP().toString().c_str());
         Serial.printf("ap_ip: %s\n", WiFi.softAPIP().toString().c_str());
@@ -537,6 +559,7 @@ static void handleConsoleCommand(const String& line) {
         Serial.printf("gateway: %s\n", WiFi.gatewayIP().toString().c_str());
         Serial.printf("netmask: %s\n", WiFi.subnetMask().toString().c_str());
         Serial.printf("dns: %s\n", WiFi.dnsIP().toString().c_str());
+        Serial.printf("wifi_channel: %u\n", (unsigned)WiFi.channel());
         // Проверка AP-интерфейса: пинг первого клиента (192.168.4.x)
         {
             esp_netif_ip_info_t ip;

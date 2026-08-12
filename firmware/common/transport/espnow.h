@@ -32,14 +32,16 @@ public:
             return false;
         }
 
-        // ESP-IDF требует зарегистрированный peer для broadcast-отправки:
+        // ESP-IDF требует зарегистрированного peer для broadcast-отправки:
         // без записи FF:FF:FF:FF:FF:FF esp_now_send() возвращает
         // ESP_ERR_ESPNOW_NOT_FOUND. Пир с channel=0 использует текущий канал.
+        // Примечание: шифрование multicast/broadcast в ESP-NOW не поддерживается
+        // (см. ESP-IDF Programming Guide, ESP-NOW Security), поэтому encrypt=false.
         esp_now_peer_info_t bc = {};
         memset(bc.peer_addr, 0xFF, 6);
         bc.channel = 0;
         bc.ifidx = WIFI_IF_STA;
-        bc.encrypt = true;
+        bc.encrypt = false;
         memcpy(bc.lmk, AUDIO_ESPNOW_LMK, 16);
         esp_now_add_peer(&bc);
 
