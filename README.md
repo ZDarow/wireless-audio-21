@@ -1,5 +1,10 @@
 # Wireless Audio 2.1
 
+[![CI](https://img.shields.io/github/actions/workflow/status/ZDarow/wireless-audio-21/ci.yml?branch=main&label=CI)](https://github.com/ZDarow/wireless-audio-21/actions)
+[![License: GPL-3.0](https://img.shields.io/github/license/ZDarow/wireless-audio-21)](LICENSE)
+[![PlatformIO](https://img.shields.io/badge/PlatformIO-6.1.19-orange)](https://platformio.org)
+[![ESP32-S3](https://img.shields.io/badge/ESP32--S3-blue)](https://www.espressif.com/en/products/socs/esp32-s3)
+
 Беспроводная аудиосистема 2.1 на **ESP32-S3**: мастер (сабвуфер) принимает звук
 по **Wi-Fi UDP PCM** со смартфона (S3 не поддерживает A2DP), обрабатывает его
 DSP-конвейером (громкость → тембр → лимитер → кроссовер), разделяет на каналы
@@ -156,3 +161,16 @@ reboot
 - [docs/TASKS.md](docs/TASKS.md) — файл задач (техдолг, тесты, фичи)
 - [docs/REPO_AUDIT.md](docs/REPO_AUDIT.md) — аудит репозитория (стандарты, безопасность, ресурсы для лендинга)
 - [docs/GIT_AUDIT.md](docs/GIT_AUDIT.md) — глубокий аудит Git (история, ветвление, CI/CD, секреты, зависимости)
+
+## Лицензии
+
+Проект распространяется под **GPL-3.0** (см. [LICENSE](LICENSE)): legacy-стенд
+`master_a2dp` использует библиотеку `arduino-audio-tools` (GPL-3.0), что делает
+сборку производной работой.
+
+| Зависимость | Где | Лицензия |
+|---|---|---|
+| [arduino-audio-tools](https://github.com/pschatzmann/arduino-audio-tools) (SHA-пин) | legacy `master_a2dp` | GPL-3.0 |
+| [ESP32-A2DP](https://github.com/pschatzmann/ESP32-A2DP) (SHA-пин) | legacy `master_a2dp` | Apache-2.0 |
+| [ArduinoJson](https://github.com/bblanchon/ArduinoJson) | `master_s3_wifi` | MIT |
+| PlatformIO / Arduino core / ESP-IDF | все env | Apache-2.0 (Espressif) |

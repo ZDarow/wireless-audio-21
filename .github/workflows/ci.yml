@@ -1,3 +1,4 @@
+---
 name: CI
 
 on:
@@ -6,13 +7,28 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Минимальные права (GIT_AUDIT CI-2): checkout-токен только для чтения.
+permissions:
+  contents: read
+
+# Отменяет предыдущий запуск на той же ветке (GIT_AUDIT CI-6).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    # Страховка от зависших сборок (GIT_AUDIT CI-3).
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      # Actions закреплены по SHA коммитов (GIT_AUDIT CI-4, supply chain):
+      #   checkout@v4         → 11d5960a326750d5838078e36cf38b85af677262
+      #   setup-python@v5     → a26af69be951a213d495a4c3e4e4022e16d87065
+      #   actions/cache@v4    → 0057852bfaa89a56745cba8c7296529d2fc39830
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
 
@@ -21,9 +37,10 @@ jobs:
         run: pipx install platformio==6.1.19
 
       - name: Cache PlatformIO packages
-        # T18: кэшируем пакеты платформ/фреймворков и изолированный core-каталог
-        # мастера (pioarduino core 3.x) — ускорение повторных запусков.
-        uses: actions/cache@v4
+        # T18: кэшируем пакеты платформ/фреймворков и изолированный
+        # core-каталог мастера (pioarduino core 3.x) — ускорение повторных
+        # запусков.
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: |
             ~/.platformio/.cache
