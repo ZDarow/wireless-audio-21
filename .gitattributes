@@ -1,0 +1,25 @@
+# gitattributes — нормализация строк и атрибуты файлов (GIT_AUDIT M6).
+
+# Все текстовые файлы: LF, без BOM.
+* text=auto
+
+*.md    text
+*.cpp   text
+*.h     text
+*.hpp   text
+*.c     text
+*.cc    text
+*.ino   text
+*.py    text
+*.env   text
+*.ini   text
+*.json  text
+*.yml   text
+*.yaml  text
+*.http  text
+*.txt   text
+Makefile text
+
+# Финальные артефакты прошивок в git не хранятся (папки .pio/).
+.pio/    -text
+.pio-core-master/ -text
