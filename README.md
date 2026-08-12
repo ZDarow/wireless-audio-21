@@ -155,3 +155,4 @@ reboot
 - [docs/wiring.md](docs/wiring.md) — схемы подключения
 - [docs/TASKS.md](docs/TASKS.md) — файл задач (техдолг, тесты, фичи)
 - [docs/REPO_AUDIT.md](docs/REPO_AUDIT.md) — аудит репозитория (стандарты, безопасность, ресурсы для лендинга)
+- [docs/GIT_AUDIT.md](docs/GIT_AUDIT.md) — глубокий аудит Git (история, ветвление, CI/CD, секреты, зависимости)
