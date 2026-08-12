@@ -180,6 +180,17 @@ static void test_jitter_buffer_overflow() {
     CHECK(jb.available() == 0, "буфер полностью вычитан");
 }
 
+// --- Jitter buffer: дефолтный целевой уровень (B13) ---
+static void test_jitter_buffer_default_target() {
+    JitterBuffer jb(100);
+    CHECK(!jb.ready(), "без конфигурации пустой буфер не готов (дефолт target>0)");
+    CHECK(jb.deficit() > 0, "дефолтный дефицит > 0");
+    int16_t in[60];
+    memset(in, 0, sizeof(in));
+    jb.push(in, 60);
+    CHECK(jb.ready(), "после наполнения > 50% буфер готов");
+}
+
 // --- Pipeline: громкость + кроссовер, выходы не NaN ---
 static void test_pipeline() {
     PcmPipeline pipe;
@@ -203,6 +214,7 @@ int main() {
     test_jitter_buffer();
     test_jitter_buffer_underflow();
     test_jitter_buffer_overflow();
+    test_jitter_buffer_default_target();
     test_pipeline();
 
     if (g_failures) {

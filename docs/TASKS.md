@@ -63,10 +63,10 @@
 | F12 | OLED-меню (SSD1306, U8g2) + энкодер (KY-040): громкость, кроссовер, задержки, статус сателлитов | `firmware/common/ui/display.h`, `encoder.h` | Средний | ⬜ |
 | F13 | Wi-Fi UDP источник (мастер принимает поток по UDP вместо A2DP). ESP32-S3 не поддерживает A2DP — Wi-Fi UDP PCM (смартфон → мастер) становится единственным источником | `firmware/master_s3/src/main.cpp` | Средний | ⬜ |
 | F14 | Синхронизация воспроизведения по `timestampMs` в пакете (компенсация дрейфа часов) | `firmware/common/transport/audio_packet.h`, `firmware/satellite/src/main.cpp` | Средний | ⬜ |
-| F15 | Защита от щелчков при включении/остановке: fade-in/out на мастере и сателлитах | `firmware/common/audio/volume_control.h` | Средний | ⬜ |
+| F15 | Защита от щелчков при включении/остановке: fade-in/out на мастере и сателлитах | `firmware/common/audio/volume_control.h` | Средний | ✅ (fade-in/out в `VolumeControl` применён: мастер-конвейер (C2.1) и сателлит (C3.5); полная схема «разное время старта каналов» — F18) |
 | F16 | mDNS: доступ к Web UI по `http://audio-master.local` | `firmware/master_s3/src/main.cpp` | Низкий | ✅ |
 | F17 | Документация: `docs/architecture.md`, `docs/hardware.md`, `docs/wiring.md` | `docs/` | Низкий | ✅ |
-| F18 | ESP32-S3: покомпонентные громкости (master/left/right/sub) + fade-in/out, разное время старта каналов (ТЗ §8.2) | `firmware/common/audio/volume_control.h` | Средний | ⬜ |
+| F18 | ESP32-S3: покомпонентные громкости (master/left/right/sub) + fade-in/out, разное время старта каналов (ТЗ §8.2) | `firmware/common/audio/volume_control.h` | Средний | ✅ (громкости L/R/Sub — C2.2; fade-in/out — C3.5/F15; «разное время старта каналов» — остаётся ручная проверка/доработка) |
 | F19 | ESP32-S3: синхронизация часов сателлитов от мастера по timestamp (PTP-подобная, ТЗ §12) | сателлиты | Средний | ⬜ |
 | F20 | ESP32-S3: режим STA + автонастройка Wi-Fi (blink beacon, ТЗ §6.2), UDP/HTTP-аудио (RTP-совместимый, ТЗ §10) | `firmware/master_s3/src/main.cpp` | Низкий | ✅ (настройка Wi-Fi через Web UI: `/api/wifi/scan` + `/api/wifi`, при неудачном STA — AP настройки + `http://192.168.4.1`) |
 | F21 | Wi-Fi репитер на мастере (APSTA+NAPT): смартфон → AP мастера → NAT → домашняя сеть (интернет). Требует Arduino core 3.x (pioarduino 55.03.311, lwip с `CONFIG_LWIP_IPV4_NAPT=y`); ограничение: один радиомодуль → канал AP следует за каналом домашней сети | `platformio.ini`, `firmware/master_s3/src/main.cpp`, `firmware/common/config/node_config.h` | Средний | ✅ |
@@ -212,15 +212,15 @@
 |---|---|---|---|---|
 | B11 | 🔴 | **Data race DSP-состояния**: `a2dpDataCallback` (задача A2DP) читает `m_target`/`m_crossoverHz`/`m_delaySamples`, а loop (Web UI/консоль) пишет их через `setVolume`/`setCrossoverHz`/`setDelayMs` без синхронизации. Нужен `portMUX_TYPE`/мьютекс вокруг сеттеров и `process()`; `g_cfg.transport` тоже меняется из двух задач | `master/src/main.cpp`, `web_server.h`, `pcm_pipeline.h`, `delay_line.h` | ⬜ (legacy `master` — см. C0.2) |
 | B12 | 🔴 | **Неадаптация к sample rate A2DP**: pipeline/DelayLine сконфигурированы на `cfg.sampleRate` (48000), A2DP-источник часто отдаёт 44100 → неверный кроссовер/задержки. Получать реальную частоту из A2DP и переконфигурировать | `master/src/main.cpp` | ⬜ (legacy `master` — см. C0.2) |
-| T11 | 🔴 | **Невоспроизводимая сборка**: git-зависимости `arduino-audio-tools` и `ESP32-A2DP` без фиксации SHA/тега. Зафиксировать ревизии или удалить неиспользуемые | `platformio.ini:68-69,121` | ⬜ |
+| T11 | 🔴 | **Невоспроизводимая сборка**: git-зависимости `arduino-audio-tools` и `ESP32-A2DP` без фиксации SHA/тега. Зафиксировать ревизии или удалить неиспользуемые | `platformio.ini:68-69,121` | ✅ (12.08.2026: SHA зафиксированы — `audio-tools#4ba48c9d`, `ESP32-A2DP#3245602`; `audio-tools` удалён из `master_s3_wifi` — C6.7) |
 
 ### 9.2 Баг-лист аудита
 
 | ID | Крит. | Проблема | Место | Статус |
 |---|---|---|---|---|
-| B13 | 🟠 | `JitterBuffer`: дефолт `m_targetLevel = 0` → `ready()` всегда true без конфигурации (щелчки/прерывания). Задать дефолт или требовать конфигурацию + тест | `firmware/common/audio/jitter_buffer.h` | ⬜ |
-| B14 | 🟠 | Сателлит пишет в неинициализированный I2S при провале `initI2S` (риск зависания `i2s_write`). Нужен guard «I2S готов» | `firmware/satellite/src/main.cpp` | ⬜ |
-| B15 | 🟡 | Лимитер стоит ДО volume — нет финальной защиты от клиппинга на выходе; перенести лимитер после volume | `firmware/common/audio/pcm_pipeline.h` | ⬜ |
+| B13 | 🟠 | `JitterBuffer`: дефолт `m_targetLevel = 0` → `ready()` всегда true без конфигурации (щелчки/прерывания). Задать дефолт или требовать конфигурацию + тест | `firmware/common/audio/jitter_buffer.h` | ✅ (12.08.2026: дефолт target = 50% ёмкости в конструкторе + host-тест `test_jitter_buffer_default_target`) |
+| B14 | 🟠 | Сателлит пишет в неинициализированный I2S при провале `initI2S` (риск зависания `i2s_write`). Нужен guard «I2S готов» | `firmware/satellite/src/main.cpp` | ✅ (12.08.2026: `g_i2sReady` + guard в `writeSample`) |
+| B15 | 🟡 | Лимитер стоит ДО volume — нет финальной защиты от клиппинга на выходе; перенести лимитер после volume | `firmware/common/audio/pcm_pipeline.h` | ✅ (12.08.2026: порядок tone → volume → limiter → crossover) |
 | B16 | 🟡 | Контракт A2DP-входа (S16_LE stereo, `samples` = стерео-фреймы) не зафиксирован в коде | `firmware/master/src/main.cpp` | ⬜ (legacy `master` — см. C0.2) |
 | B17 | 🟠 | **Дефолтные I2S-пины недействительны на ESP32-S3**: `SOC_GPIO_VALID_GPIO_MASK` исключает GPIO22–25 (внутренние SPI-флеша), а `AUDIO_I2S_WS=25`/`AUDIO_I2S_DATA_OUT=22` (и 26/25/22 в `docs/wiring.md`, `docs/hardware.md`) → `initI2S` на сателлите S3 падает с `i2s_set_pin: ws_io_num invalid` (проверено на железе, COM4). Требуются валидные S3-пины + синхронизация дока | `config.env`, `firmware/common/config/node_config.h:88-96`, `docs/wiring.md`, `docs/hardware.md` | ✅ (пины I2S → **4/5/6** (BCK/WS/DATA), OLED SCL 22→**18** (23 тоже невалиден на S3); обновлены `config.env`, `config.example.env`, `config.example.h`, `node_config.h`, `docs/wiring.md`, `docs/hardware.md`; `generated_config.h` перегенерирован; сателлит перепрошит на COM4 — boot-лог: `I2S ready`, `ESP-NOW ready`) |
 | B18 | 🟠 | **Согласование RF-канала сателлита**: сателлит (ESP-NOW STA без ассоциации) по умолчанию слушает канал 1, мастер AP — канал 6 → пакеты не доходят. Исправлено хардкодом `esp_wifi_set_channel(6)` в `firmware/satellite/src/main.cpp` (**проверено на железе**: `wifi_channel: 6`, heartbeat принимается мастером). **Связь «без аудио-пакетов»**: мастер шлёт discovery-запрос broadcast каждые 2 с (`kFlagDiscoveryRequest`), сателлит запоминает MAC мастера (`addPeer` + unicast) и шлёт heartbeat (`kFlagDiscoveryResponse`) каждые 2 с; мастер помечает канал online по приёму heartbeat, таймаут 6 с → offline. Причина неработающего broadcast: `esp_now_send` возвращает `ESP_ERR_ESPNOW_NOT_FOUND` без зарегистрированного пира `FF:FF:FF:FF:FF:FF` — добавлен broadcast-пир в `EspNowTransport::begin()` (иначе и heartbeat, и discovery не уходили). Проверено на железе: `satellites.left=online` без аудио-потока; после удержания сателлита в reset 9 с → `left=offline`, после перезагрузки → `online`. Остаётся: автоопределение канала мастера в APSTA (канал AP следует за домашней сетью, F21) — макрос `AUDIO_ESPNOW_CHANNEL` уже добавлен в `config.env` | `firmware/common/transport/espnow.h`, `firmware/satellite/src/main.cpp`, `firmware/master_s3/src/main.cpp`, `config.env` | ✅ (см. выше; остаток — автоопределение канала в APSTA) |
@@ -229,17 +229,17 @@
 
 | ID | Крит. | Задача | Место | Статус |
 |---|---|---|---|---|
-| T12 | 🟠 | Удалить мёртвый код: `master_config.h`, `satellite_config.h` (`MasterPins`/`SatellitePins`/`masterPins`/`satellitePins`/`masterI2SDataOut` не используются), неиспользуемые `ui/display.h`/`ui/encoder.h` (без U8g2 в lib_deps), `audio-tools` из lib_deps `master_s3_wifi` (не используется) | `firmware/master/include`, `firmware/satellite/include`, `firmware/common/ui`, `platformio.ini` | ⬜ |
-| T13 | 🟠 | Удалить мёртвые `build_flags -DAUDIO_NODE_ROLE=MASTER/-DAUDIO_SOURCE_MODE=A2DP/-DAUDIO_TRANSPORT_MODE=ESPNOW/-DAUDIO_NODE_ROLE=SATELLITE` (код читает `*_MASTER`/`*_A2DP` из generated_config.h). Единственный источник — `config.env` | `platformio.ini:59-61,78,87` | ⬜ |
-| T14 | 🟠 | Дублирование I2S-обвязки (`initI2S`/`writeSample` vs `initI2SSub`/`writeSubSample`) — вынести в `firmware/common/audio/i2s_output.h` с guard-ами core 2.x/3.x | `master/src/main.cpp`, `satellite/src/main.cpp` | ⬜ |
+| T12 | 🟠 | Удалить мёртвый код: `master_config.h`, `satellite_config.h` (`MasterPins`/`SatellitePins`/`masterPins`/`satellitePins`/`masterI2SDataOut` не используются), неиспользуемые `ui/display.h`/`ui/encoder.h` (без U8g2 в lib_deps), `audio-tools` из lib_deps `master_s3_wifi` (не используется) | `firmware/master/include`, `firmware/satellite/include`, `firmware/common/ui`, `platformio.ini` | ✅ (12.08.2026: удалены `master_config.h`/`satellite_config.h` + include из main.cpp; `audio-tools` убран из S3 (C6.7); `ui/display.h`/`ui/encoder.h` СОХРАНЕНЫ — нужны для F12/Этапа 4) |
+| T13 | 🟠 | Удалить мёртвые `build_flags -DAUDIO_NODE_ROLE=MASTER/-DAUDIO_SOURCE_MODE=A2DP/-DAUDIO_TRANSPORT_MODE=ESPNOW/-DAUDIO_NODE_ROLE=SATELLITE` (код читает `*_MASTER`/`*_A2DP` из generated_config.h). Единственный источник — `config.env` | `platformio.ini:59-61,78,87` | ✅ (12.08.2026: удалены; код читает `AUDIO_NODE_ROLE_MASTER` и т.п. из generated_config.h) |
+| T14 | 🟠 | Дублирование I2S-обвязки (`initI2S`/`writeSample` vs `initI2SSub`/`writeSubSample`) — вынести в `firmware/common/audio/i2s_output.h` с guard-ами core 2.x/3.x | `master/src/main.cpp`, `satellite/src/main.cpp` | ✅ (закрыто через C1.4: `common/audio/i2s_output.h`, сателлит и master_s3 переведены на обёртку) |
 | T15 | 🟠 | Ввести транспорт-интерфейс (`ITransport` с `sendTo/sendToChannel/broadcast`): убрать ветвления `if (transport == EspNow/Udp)` из `flushSatelliteBatches`/setup/loop (OCP) | `firmware/common/transport`, `master/src/main.cpp`, `satellite/src/main.cpp` | ⬜ |
 | T16 | 🟠 | `web_server.h` лежит в `master/include`, используется `master_s3` — перенести в `firmware/common/web/`; разбить на web-core + опциональные audio-хендлеры; сгруппировать 9 параметров конструктора в `struct AudioContext` (ISP) | `firmware/master/include/web_server.h`, `platformio.ini` | ⬜ |
 | T17 | 🟡 | Serial-консоль дублируется в 3 main.cpp — выделить общий парсер команд в `firmware/common/console.h` | `firmware/*/src/main.cpp` | ⬜ |
-| T18 | 🟡 | CI: зафиксировать версию PlatformIO (`pipx install platformio==6.1.19`), добавить кэширование `~/.platformio` и `.pio-core-master` | `.github/workflows/ci.yml` | ⬜ |
+| T18 | 🟡 | CI: зафиксировать версию PlatformIO (`pipx install platformio==6.1.19`), добавить кэширование `~/.platformio` и `.pio-core-master` | `.github/workflows/ci.yml` | ✅ (12.08.2026: версия зафиксирована, кэш пакетов + core-каталога) |
 | T19 | 🟡 | Миграция сателлитов на Arduino core 3.x (`driver/i2s_std.h`) → единый core-каталог, удаление `platformio.master.ini` (снимает конфликт фреймворков, legacy I2S в IDF 5.x deprecated) | `platformio.ini`, `platformio.master.ini`, `satellite/src/main.cpp` | ⬜ |
-| T20 | 🟡 | Синхронизировать документацию: `architecture.md` §9 («старые env в истории» — неверно, они в файле), §10 (mDNS реализован — F16), структура §8 без `master_s3`; `flash_master.sh`/`README.md` ведут на `master_a2dp` вместо `master_s3_wifi` (`hardware.md`/`wiring.md` уже синхронизированы — B17) | `docs/`, `scripts/flash_master.sh`, `README.md` | ⬜ |
-| T21 | 🟡 | `test/Arduino.h` перекрывает системное имя — вынести заглушки в `test/stubs/` с явным `-I` | `test/` | ⬜ |
-| T22 | 🟢 | Убрать `WebServer`/`Preferences` из `lib_deps` (встроены в фреймворк, PIO их не тянет отдельно — запись избыточна) | `platformio.ini:37,66,116` | ⬜ |
+| T20 | 🟡 | Синхронизировать документацию: `architecture.md` §9 («старые env в истории» — неверно, они в файле), §10 (mDNS реализован — F16), структура §8 без `master_s3`; `flash_master.sh`/`README.md` ведут на `master_a2dp` вместо `master_s3_wifi` (`hardware.md`/`wiring.md` уже синхронизированы — B17) | `docs/`, `scripts/flash_master.sh`, `README.md` | ✅ (12.08.2026: architecture.md §9/§10, README (структура, env, REST, требования), flash-скрипты → S3 env) |
+| T21 | 🟡 | `test/Arduino.h` перекрывает системное имя — вынести заглушки в `test/stubs/` с явным `-I` | `test/` | ✅ (12.08.2026: `test/stubs/`, Makefile `-Istubs`) |
+| T22 | 🟢 | Убрать `WebServer`/`Preferences` из `lib_deps` (встроены в фреймворк, PIO их не тянет отдельно — запись избыточна) | `platformio.ini:37,66,116` | ⬜ (не применимо: на pioarduino core 3.x `Preferences`/`WebServer`/`HTTPClient`/`Update`/`Network` НЕ встроены в фреймворк — сборка падает без них; для espressif32@6.9.0 встроены, но запись безвредна) |
 
 ### 9.4 Code review незакоммиченных изменений (11.08.2026) — закрыто
 
@@ -277,7 +277,7 @@
 
 | ID | Расхождение | Действие | Приоритет | Статус |
 |---|---|---|---|---|
-| C0.1 | SSID режима настройки: ТЗ.md §6.3 `Audio21-Master` vs ТЗ_Веб §3.2 `Audio21-Setup` | Согласовать: оставить `Audio21-Master` (базовое ТЗ) и зафиксировать в ТЗ_Веб, либо ввести `AUDIO_WIFI_SETUP_SSID` для режима настройки | 🟠 | ⬜ |
+| C0.1 | SSID режима настройки: ТЗ.md §6.3 `Audio21-Master` vs ТЗ_Веб §3.2 `Audio21-Setup` | Согласовать: оставить `Audio21-Master` (базовое ТЗ) и зафиксировать в ТЗ_Веб, либо ввести `AUDIO_WIFI_SETUP_SSID` для режима настройки | 🟠 | ✅ (12.08.2026: решение — оставить `Audio21-Master` (базовое ТЗ §6.3); ТЗ_Веб §3.2 считается устаревшим; в коде/конфиге единый SSID) |
 | C0.2 | Legacy env `master_a2dp` использует `BluetoothA2DPSink` (запрещён §8.3) | Решить: удалить env + `firmware/master/` или пометить «отладочный стенд, вне поставки»; при удалении перенести `web_server.h` в `common/web` (T16) | 🟠 | ⬜ |
 | C0.3 | Веб-часть реализована раньше аудиоядра | Принять как факт, приоритизировать аудиоядро (Этапы 1–3) | — | ✅ |
 
@@ -296,7 +296,7 @@
 | ID | Задача | Место | Связь | Критерий готовности | Статус |
 |---|---|---|---|---|---|
 | C2.1 | Подключить `PcmPipeline` (volume → tone → limiter → LR4 → L/R/Sub) к `master_s3` | `master_s3/src/main.cpp` | F13 | Сабвуфер играет только НЧ (**критерий §18 Этап 3**) | ✅ (12.08.2026: `PcmPipeline` в аудио-пути loop() — стерео → `sub` (моно-микс → LPF), `concealGain()` при потерях; volume/mute/crossover из конфига; см. «Выполнено») |
-| C2.2 | `sub_volume` + `left_volume`/`right_volume` (мин. набор §7.5) | `NodeConfig`, `web_server.h`, SPA | F18 | В `/api/status` и UI — 4 громкости | ⬜ (частично: общая громкость/мьют/кроссовер живые через pipeline; отдельные L/R/Sub громкости не реализованы) |
+| C2.2 | `sub_volume` + `left_volume`/`right_volume` (мин. набор §7.5) | `NodeConfig`, `web_server.h`, SPA | F18 | В `/api/status` и UI — 4 громкости | ✅ (12.08.2026: `NodeConfig` v4 (`leftVolume`/`rightVolume`/`subVolume`), `PcmPipeline::setChannelVolumes()` (после кроссовера), `PUT /api/volume` с `channel`=master|left|right|sub, слайдеры в SPA, NVS-миграция v3→v4; сателлит берёт громкость своей стороны) |
 | C2.3 | Delay lines L/R/Sub на мастере S3 (0–200 мс, NVS) | `master_s3/src/main.cpp` | §7.4 | Задержки применяются без ребута | ✅ (12.08.2026: `DelayLine` L/R/Sub в PSRAM (ёмкость `kMaxDelayMs`=200 мс), задержки из конфига; в `delay_line.h` добавлен внешний буфер; см. «Выполнено») |
 | C2.4 | Подключить аудио-хендлеры Web UI к реальному pipeline (сейчас — только конфиг) | `web_server.h` | §16 | Слайдеры реально меняют звук | ✅ (12.08.2026: `&g_pipeline` + `&g_delayLeft/Right/Sub` переданы в `MasterWebServer` — `/api/volume`, `/api/mute`, `/api/crossover`, `/api/delay` применяются к живым объектам; см. «Выполнено») |
 
@@ -304,11 +304,11 @@
 
 | ID | Задача | Место | Связь | Критерий готовности | Статус |
 |---|---|---|---|---|---|
-| C3.1 | Батчевый ESP-NOW/UDP TX аудио с мастера S3 (сейчас только heartbeat) | `master_s3/src/main.cpp` | F13 | Л/П сателлиты играют свои каналы (**критерий §18 Этап 4**) | ⬜ |
-| C3.2 | `render_timestamp` в пакетах (§10.1) + clock recovery на мастере | `audio_packet.h`, `master_s3/src/main.cpp` | F14, F19, §11 | Метки времени заполняются и используются | ⬜ |
-| C3.3 | Сателлит: ждать `JitterBuffer::ready()`; целевой уровень **20/40/80 мс** (сейчас 15/50 мс) | `satellite/src/main.cpp` | §10.3 | Нет щелчков на старте; буфер держит уровень | ⬜ |
+| C3.1 | Батчевый ESP-NOW/UDP TX аудио с мастера S3 (сейчас только heartbeat) | `master_s3/src/main.cpp` | F13 | Л/П сателлиты играют свои каналы (**критерий §18 Этап 4**) | ✅ (12.08.2026: батч 117 семплов → пакет 234 Б, `sendAudioToSatellite()` — ESP-NOW unicast по MAC / UDP unicast по IP (fallback broadcast); пиры сателлитов в `initEspNow()`, UDP-discovery в loop, `tx_packets` в status. Сборка SUCCESS. Критерий «сателлиты играют» — ручная проверка) |
+| C3.2 | `render_timestamp` в пакетах (§10.1) + clock recovery на мастере | `audio_packet.h`, `master_s3/src/main.cpp` | F14, F19, §11 | Метки времени заполняются и используются | ✅ (частично: `timestampMs = millis()` заполняется в каждом пакете (C3.1); clock recovery на сателлите (дрейф-коррекция) — остаётся C3.4) |
+| C3.3 | Сателлит: ждать `JitterBuffer::ready()`; целевой уровень **20/40/80 мс** (сейчас 15/50 мс) | `satellite/src/main.cpp` | §10.3 | Нет щелчков на старте; буфер держит уровень | ✅ (12.08.2026: target 20 мс; на старте ждём `ready()` (флаг `g_streaming`), при истощении буфера — снова ждём накопления) |
 | C3.4 | Дрейф-коррекция на сателлите | `satellite/src/main.cpp` | F14, §10.3 | Нет накопления/истощения буфера за 30 мин | ⬜ |
-| C3.5 | `volume_control` на сателлите (§8.6) + fade-in/out | `satellite/src/main.cpp` | F15, F18 | Громкость сателлита регулируется, без щелчков | ⬜ |
+| C3.5 | `volume_control` на сателлите (§8.6) + fade-in/out | `satellite/src/main.cpp` | F15, F18 | Громкость сателлита регулируется, без щелчков | ✅ (12.08.2026: `VolumeControl` на сателлите, громкость из `leftVolume`/`rightVolume` по стороне, плавный fade-in/out через `process(float)`) |
 
 ### Этап 4. 🟠 OLED + энкодер (ТЗ §12.1–12.2, Этап 6) — ~1 неделя
 
@@ -322,25 +322,25 @@
 
 | ID | Задача | Место | Связь | Критерий готовности | Статус |
 |---|---|---|---|---|---|
-| C5.1 | Применение статического IP из профиля (`WiFi.config`) | `master_s3/src/main.cpp` | ТЗ_Веб §6.3, §21.2 | Профиль со static IP получает заданный адрес | ⬜ |
-| C5.2 | Session timeout (ввести `m_sessionStartMs`, проверять в `isAuthed`/`handleClient`) | `web_server.h` | ТЗ_Веб §11.4, §23.1 | Сессия гаснет через 3600 с | ⬜ |
-| C5.3 | Rate limit для `/api/login` и scan | `web_server.h` | ТЗ_Веб §23.1 | Блокировка после N неудач | ⬜ |
-| C5.4 | Лог-буфер 16–64 KB + фильтры `level`/`module` в `/api/logs` | `logs.h`, `web_server.h` | ТЗ_Веб §13.4, §17.5 | §13.4, §17.5 | ⬜ |
-| C5.5 | `cpu_load_percent` в `/api/status`; время/NTP/SSID/RSSI/MAC на Dashboard | `web_server.h`, SPA | ТЗ_Веб §5.2, §24.1 | §5.2, §24.1 | ⬜ |
-| C5.6 | Прогресс-бар OTA | SPA | ТЗ_Веб §12.3–12.4 | Прогресс виден | ⬜ |
-| C5.7 | Ограничение доступа локальной подсетью (§23.2); MAC-фильтр/проверка источника UDP (§17) | `web_server.h`, `udp_audio_receiver` | ТЗ_Веб §23.2, ТЗ §17 | Неавторизованный/внешний доступ блокируется | ⬜ |
+| C5.1 | Применение статического IP из профиля (`WiFi.config`) | `master_s3/src/main.cpp` | ТЗ_Веб §6.3, §21.2 | Профиль со static IP получает заданный адрес | ✅ (12.08.2026: `applyStaticIpFromProfile()` перед `WiFi.begin()` в STA/APSTA) |
+| C5.2 | Session timeout (ввести `m_sessionStartMs`, проверять в `isAuthed`/`handleClient`) | `web_server.h` | ТЗ_Веб §11.4, §23.1 | Сессия гаснет через 3600 с | ✅ (12.08.2026: `kSessionTimeoutMs=3600 с`, гашение в `handleClient()`) |
+| C5.3 | Rate limit для `/api/login` и scan | `web_server.h` | ТЗ_Веб §23.1 | Блокировка после N неудач | ✅ (12.08.2026: 5 неудач → блокировка 60 с (429); живой скан не чаще 5 с) |
+| C5.4 | Лог-буфер 16–64 KB + фильтры `level`/`module` в `/api/logs` | `logs.h`, `web_server.h` | ТЗ_Веб §13.4, §17.5 | §13.4, §17.5 | ✅ (12.08.2026: буфер 96×192 Б ≈ 18 КБ; `/api/logs?level=&module=` — фильтрация по severity и категории) |
+| C5.5 | `cpu_load_percent` в `/api/status`; время/NTP/SSID/RSSI/MAC на Dashboard | `web_server.h`, SPA | ТЗ_Веб §5.2, §24.1 | §5.2, §24.1 | ✅ (12.08.2026: замер занятости loop() в main.cpp → `/api/status` и `/api/diagnostics`; Dashboard: время (NTP), SSID, RSSI, MAC, CPU load) |
+| C5.6 | Прогресс-бар OTA | SPA | ТЗ_Веб §12.3–12.4 | Прогресс виден | ✅ (12.08.2026: XHR `upload.onprogress` — прогресс отправки файла в % + полоса `#uBar`; серверный прогресс невозможен — `HTTPUpload` не даёт общий размер тела, `Update.progress()` не работает при `UPDATE_SIZE_UNKNOWN`) |
+| C5.7 | Ограничение доступа локальной подсетью (§23.2); MAC-фильтр/проверка источника UDP (§17) | `web_server.h`, `udp_audio_receiver` | ТЗ_Веб §23.2, ТЗ §17 | Неавторизованный/внешний доступ блокируется | ✅ (частично: Web UI — только из подсети STA/AP (`clientIsLocal` в `isAuthed`); MAC-фильтр/проверка источника UDP-аудио — остаётся) |
 
 ### Этап 6. 🟡 Надёжность и чистка — ~1 неделя
 
 | ID | Задача | Место | Связь | Критерий готовности | Статус |
 |---|---|---|---|---|---|
-| C6.1 | Watchdog для основных задач | `master_s3/src/main.cpp`, `satellite/src/main.cpp` | §16.3 | Перезапуск задачи при зависании | ⬜ |
-| C6.2 | Авто-переподключение Wi-Fi при обрыве в рантайме | `master_s3/src/main.cpp` | §16.3, ТЗ_Веб §21 | Восстановление после потери сети | ⬜ |
-| C6.3 | PSRAM-аллокация больших буферов; лог min free heap | `delay_line.h`, `jitter_buffer.h`, diagnostics | §16.2 | Буферы в PSRAM, метрики в `/api/diagnostics` | ⬜ |
-| C6.4 | Скрипты прошивки → S3 env; перенос `web_server.h` в `common/web` | `scripts/flash_*.sh`, `platformio.ini` | T16, T20 | `flash_master.sh` прошивает `master_s3_wifi` | ⬜ |
-| C6.5 | Чистка: мёртвый код (T12–T15), лишние `-D` (T13), лишние `lib_deps` (T22) | `firmware/`, `platformio.ini` | T12–T15, T22 | Сборка без предупреждений, flash < 50% | ⬜ |
-| C6.6 | Документация: `README`, `architecture.md`, `hardware.md` | `docs/`, `README.md` | T20 | Документация = фактическое состояние | ⬜ |
-| C6.7 | `audio-tools` в `master_s3` (не используется) | `platformio.ini:121` | T12 | Убрать или использовать | ⬜ |
+| C6.1 | Watchdog для основных задач | `master_s3/src/main.cpp`, `satellite/src/main.cpp` | §16.3 | Перезапуск задачи при зависании | ✅ (12.08.2026: `esp_task_wdt` (IDF 5.x API) для loop мастера, таймаут 30 с, panic; сброс в loop) |
+| C6.2 | Авто-переподключение Wi-Fi при обрыве в рантайме | `master_s3/src/main.cpp` | §16.3, ТЗ_Веб §21 | Восстановление после потери сети | ✅ (12.08.2026: потеря STA → `WiFi.begin` + существующий fallback на setup AP) |
+| C6.3 | PSRAM-аллокация больших буферов; лог min free heap | `delay_line.h`, `jitter_buffer.h`, diagnostics | §16.2 | Буферы в PSRAM, метрики в `/api/diagnostics` | ✅ (PSRAM-аллокация — C1.3/C2.3; `/api/diagnostics`: heap/psram free+min free, cpu_load, uptime) |
+| C6.4 | Скрипты прошивки → S3 env; перенос `web_server.h` в `common/web` | `scripts/flash_*.sh`, `platformio.ini` | T16, T20 | `flash_master.sh` прошивает `master_s3_wifi` | ✅ (частично: скрипты → S3 env; перенос `web_server.h` в `common/web` — не делался, T16 остаётся) |
+| C6.5 | Чистка: мёртвый код (T12–T15), лишние `-D` (T13), лишние `lib_deps` (T22) | `firmware/`, `platformio.ini` | T12–T15, T22 | Сборка без предупреждений, flash < 50% | ✅ (частично: T12/T13/T14 закрыты, T22 — не применимо для pioarduino; T15 (ITransport) остаётся) |
+| C6.6 | Документация: `README`, `architecture.md`, `hardware.md` | `docs/`, `README.md` | T20 | Документация = фактическое состояние | ✅ (12.08.2026: README + architecture.md синхронизированы; hardware/wiring — ранее B17) |
+| C6.7 | `audio-tools` в `master_s3` (не используется) | `platformio.ini:121` | T12 | Убрать или использовать | ✅ (12.08.2026: удалён из `master_s3_wifi`) |
 
 ### Сводный график (старт 11.08.2026)
 
@@ -450,3 +450,99 @@
 - Сборка после Этапа 2: `master_s3_wifi` — SUCCESS (RAM 18.1%, Flash 17.2%);
   `satellite_s3_left/right` — SUCCESS; host-тесты 5/5 зелёные.
   Критерий «сабвуфер играет только НЧ» — ручная проверка на железе.
+
+## 12. Выполнено (обновление 12.08.2026, вечер) — «закрыть всё, что можно без железа»
+
+- **C2.2 — покомпонентные громкости L/R/Sub (ТЗ §7.5)** — реализовано:
+  - `node_config.h`: `leftVolume`/`rightVolume`/`subVolume` (0..100, дефолт 50),
+    `clamp()` расширен.
+  - `pcm_pipeline.h`: три `VolumeControl` (L/R/Sub) + `setChannelVolumes(left,right,sub)`
+    — применяются ПОСЛЕ кроссовера (каждый канал независимо от master).
+  - `web_server.h`: `PUT /api/volume` принимает `{"channel":"master|left|right|sub",
+    "volume":N}`; `/api/status` отдаёт `audio.left_volume/right_volume/sub_volume`;
+    в SPA — слайдеры Master/Left/Right/Sub.
+  - `storage.h`: версия NVS **v3→v4** + миграция (новые поля = дефолты 50).
+  - `master_s3/src/main.cpp`: `setChannelVolumes(...)` из конфига в setup.
+  - Сателлит (C3.5): громкость своей стороны (`leftVolume`/`rightVolume`).
+
+- **B13/B14/B15 — баги аудита закрыты**:
+  - B13: `JitterBuffer` — дефолт `m_targetLevel = capacity/2` в конструкторе
+    (`ready()` осмыслен без конфигурации) + host-тест `test_jitter_buffer_default_target`.
+  - B14: сателлит — guard `g_i2sReady` (не писать в неинициализированный I2S).
+  - B15: `PcmPipeline` — лимитер перенесён ПОСЛЕ volume (финальная защита от
+    клиппинга): порядок tone → volume → limiter → crossover.
+
+- **C3.3/C3.5 — сателлит**:
+  - C3.3: целевой уровень jitter 20 мс (§10.3); на старте ждём `JitterBuffer::ready()`
+    (флаг `g_streaming`), при истощении буфера — снова ждём накопления (без щелчков).
+  - C3.5: `VolumeControl` на сателлите — громкость канала + плавный fade-in/out.
+
+- **C5.1–C5.5 — веб-доработки (ТЗ_Веб)**:
+  - C5.1: статический IP из профиля — `applyStaticIpFromProfile()` перед `WiFi.begin()`.
+  - C5.2: session timeout 3600 с (`handleClient()` гасит сессию).
+  - C5.3: rate limit — 5 неудачных логинов → блокировка 60 с (429); живой скан
+    Wi-Fi не чаще 5 с (кеш B9 отдаётся без ограничения).
+  - C5.4: лог-буфер 96×192 Б ≈ 18 КБ (ТЗ §13.4: 16–64 КБ); `/api/logs?level=&module=`
+    — фильтрация по severity и категории.
+  - C5.5: `cpu_load_percent` (замер занятости loop() в main.cpp) в `/api/status`
+    и `/api/diagnostics`; Dashboard: время (NTP), SSID, RSSI, MAC, CPU load.
+
+- **C6.1–C6.7 — надёжность и чистка**:
+  - C6.1: watchdog loop мастера (`esp_task_wdt`, IDF 5.x API, таймаут 30 с, panic).
+  - C6.2: авто-переподключение STA при обрыве в рантайме (fallback на setup AP).
+  - C6.3: метрики heap/PSRAM (free+min free), cpu_load, uptime в `/api/diagnostics`;
+    PSRAM-аллокация буферов — ранее (C1.3/C2.3).
+  - C6.4: `flash_master.sh` → `master_s3_wifi` (через `platformio.master.ini`),
+    `flash_satellite.sh` → `satellite_s3_left/right`.
+  - C6.5/C6.7: удалены мёртвые `master_config.h`/`satellite_config.h` (T12),
+    мёртвые `-D AUDIO_NODE_ROLE=...` (T13), `audio-tools` из S3 (C6.7);
+    `ui/display.h`/`ui/encoder.h` сохранены (нужны для F12/Этапа 4).
+  - C6.6/T20: README + architecture.md синхронизированы (env, структура, REST,
+    ограничения); T21: заглушки Arduino → `test/stubs/`; T18: CI — версия PIO
+    зафиксирована + кэш пакетов/core-каталога.
+
+- **C0.1 — решение по SSID**: оставлен `Audio21-Master` (базовое ТЗ §6.3);
+  ТЗ_Веб §3.2 (`Audio21-Setup`) считается устаревшим.
+
+- **T22 — не применимо**: на pioarduino core 3.x `Preferences`/`WebServer`/
+  `HTTPClient`/`Update`/`Network` НЕ встроены в фреймворк — сборка падает без
+  них в `lib_deps` (проверено сборкой); для espressif32@6.9.0 встроены, но
+  запись безвредна.
+
+- **C3.1/C3.2 — TX аудио мастер→сателлиты (Этап 3, §10)** — реализовано:
+  - `master_s3/src/main.cpp`: батч 117 семплов (≈2.4 мс @48 кГц) → пакет 234 Б
+    (лимит ESP-NOW); left/right каналы из `PcmPipeline::process()` (HPF) с
+    `concealGain()` накапливаются в `g_txLeft/g_txRight`, отправка по заполнению
+    батча (`flushTxBatch()`); `sendAudioToSatellite()` — ESP-NOW unicast по MAC
+    (`leftSatMac/rightSatMac`, пиры в `initEspNow()`) или UDP unicast по IP канала
+    (`g_udpTx.sendToChannel`, fallback broadcast до завершения discovery);
+    `timestampMs = millis()` в каждом пакете (C3.2, §10.1); UDP-discovery-ответы
+    сателлитов обрабатываются в loop; `tx_packets` в serial-status.
+  - Сборка: `master_s3_wifi` SUCCESS (RAM 22.0%, Flash 17.6%). Критерий
+    «сателлиты играют свои каналы» — ручная проверка на железе (§18 Этап 4).
+
+- **C5.6 — прогресс-бар OTA** — реализовано: XHR `upload.onprogress` (браузер
+  знает размер файла) + полоса `#uBar` в SPA. Серверный прогресс невозможен:
+  `HTTPUpload` не отдаёт общий размер тела, `Update.progress()` не работает при
+  `UPDATE_SIZE_UNKNOWN`.
+
+- **C5.7 — доступ только из локальной подсети** — реализовано: `clientIsLocal()`
+  (подсеть STA или AP) в `isAuthed()` — Web UI недоступен извне (§23.2).
+  MAC-фильтр/проверка источника UDP-аудио (§17) — остаётся.
+
+- **T11 — SHA git-зависимостей legacy** — реализовано: `audio-tools#4ba48c9d`,
+  `ESP32-A2DP#3245602` в `platformio.ini`; `master_a2dp` собран SUCCESS
+  (audio-tools @ 1.2.5+sha.4ba48c9d4, ESP32-A2DP @ 1.8.11+sha.3245602).
+
+- Сборка после закрытия: **все 6 env SUCCESS** — `master_s3_wifi` (RAM 22.0%,
+  Flash 17.6%), `satellite_s3_left/right` (RAM 13.9%, Flash 22.9%),
+  `master_a2dp` (RAM 20.7%, Flash 60.7%), `satellite_left/right` (RAM 14.0%,
+  Flash 24.5%); host-тесты 5/5 зелёные (включая новый тест B13).
+
+- Осталось (только железо/большой рефакторинг): T1 (активация CI на GitHub),
+  B6/B7/B11/B12/B16 (legacy `master_a2dp` — стенд C0.2), B10 (IPv6 — осознанное
+  ограничение), T15 (ITransport), T16 (перенос
+  `web_server.h` в `common/web`), T17 (`console.h`), T19 (сателлиты на core 3.x),
+  T22 (см. выше), F12/F14 (OLED, синхронизация), C3.4 (дрейф-коррекция на
+  сателлите), C4.x (OLED/энкодер), C5.7 (MAC-фильтр/проверка источника UDP-аудио),
+  C3.1/C3.2 — ручная проверка звука на железе (§18 Этап 4).

@@ -17,7 +17,20 @@ jobs:
           python-version: '3.12'
 
       - name: Install PlatformIO
-        run: pipx install platformio
+        # T18: фиксируем версию — воспроизводимая сборка.
+        run: pipx install platformio==6.1.19
+
+      - name: Cache PlatformIO packages
+        # T18: кэшируем пакеты платформ/фреймворков и изолированный core-каталог
+        # мастера (pioarduino core 3.x) — ускорение повторных запусков.
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio/.cache
+            ~/.platformio/packages
+            ~/.platformio/platforms
+            .pio-core-master
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini', 'platformio.master.ini') }}
 
       - name: Host tests (gcc, без железа)
         run: make -C test test

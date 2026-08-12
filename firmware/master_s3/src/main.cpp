@@ -26,6 +26,7 @@
 #include <ESPmDNS.h>
 #include <esp_netif.h>
 #include <esp_system.h>
+#include <esp_task_wdt.h>
 #include <ping/ping_sock.h>
 #include <freertos/semphr.h>
 #include <time.h>
@@ -38,9 +39,11 @@
 #include "master_s3_config.h"
 #include "web_server.h"
 #include "logs.h"
+#include "wifi_store.h"
 #include "internet_check.h"
 #include "udp_audio_packet.h"
 #include "udp_audio_receiver.h"
+#include "udp_transport.h"
 #include "jitter_buffer.h"
 #include "pcm_pipeline.h"
 #include "delay_line.h"
@@ -63,6 +66,15 @@ static constexpr uint32_t kMasterJitterCapacity = 60 * 48000 / 1000;
 static JitterBuffer* g_jitter = nullptr;   // ps_malloc в setup
 static volatile bool g_audioActive = false; // статус для Web UI
 
+// TX аудио на сателлиты (C3.1/C3.2, §10.2): батч 117 семплов ≈ 2.4 мс @48 кГц
+// → payload 234 байта (лимит ESP-NOW). Отправка — по заполнению батча.
+static constexpr size_t kBatchSamples = 117;
+static int16_t g_txLeft[kBatchSamples];
+static int16_t g_txRight[kBatchSamples];
+static size_t g_txCount = 0;
+static uint32_t g_txPacketId = 0;
+static uint32_t g_txPackets = 0;
+
 // DSP-конвейер (C2.1): volume → tone → limiter → LR4 crossover → L/R/Sub.
 static PcmPipeline g_pipeline;
 
@@ -78,7 +90,8 @@ static DelayLine* g_delaySub = nullptr;
 // ---------------------------------------------------------------------------
 
 static NodeConfig g_cfg;
-static WiFiUDP g_udp;
+static WiFiUDP g_udp;            // приём аудио от смартфона (порт 5004)
+static UdpTransport g_udpTx;     // C3.1: TX аудио на сателлиты (порт 4210)
 static uint32_t g_packetsRx = 0;
 static uint32_t g_packetBytesRx = 0;
 
@@ -131,8 +144,15 @@ static void internetCheckTask(void*) {
 }
 
 // Кольцевой буфер логов для Web UI (ТЗ_Веб §13).
-static char g_logStorage[32][LogRing::kLineSize];
-static LogRing g_logs(g_logStorage[0], 32);
+// Лог-буфер для Web UI: 96 слотов × 192 Б ≈ 18 КБ (ТЗ §13.4: 16–64 КБ, C5.4).
+static char g_logStorage[96][LogRing::kLineSize];
+static LogRing g_logs(g_logStorage[0], 96);
+
+// CPU load (C5.5): доля времени loop() вне delay, усредняется за 2 с.
+static uint32_t g_cpuBusyUs = 0;
+static uint32_t g_cpuTotalUs = 0;
+static uint32_t g_cpuLastReportMs = 0;
+static uint32_t g_cpuLoadPercent = 0;
 
 // ---------------------------------------------------------------------------
 // ESP-NOW: приём heartbeat/discovery-response от сателлитов (статус online)
@@ -148,6 +168,7 @@ static constexpr uint32_t kDiscoveryIntervalMs = kHeartbeatIntervalMs;
 static constexpr uint32_t kReconnectTimeoutMs = 20000;
 static uint32_t g_reconnectAtMs = 0;
 static bool g_reconnectPending = false;
+static bool g_wifiWasConnected = false; // C6.2: был ли STA-линк (для авто-реконнекта)
 
 // Периодический discovery-запрос: сателлит запоминает MAC мастера и отвечает
 // unicast-heartbeat-ом; мастер также получает broadcast-heartbeat напрямую.
@@ -183,7 +204,37 @@ static void onEspNowPacket(const uint8_t* data, size_t size, const MacAddr& from
 static bool initEspNow() {
     if (!g_espnow.begin()) return false;
     g_espnow.setRxCallback(onEspNowPacket);
+    // C3.1: пиры сателлитов для unicast-отправки аудио (по MAC из конфига).
+    if (g_cfg.leftSatMac != MacAddr{}) g_espnow.addPeer(g_cfg.leftSatMac);
+    if (g_cfg.rightSatMac != MacAddr{}) g_espnow.addPeer(g_cfg.rightSatMac);
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// TX аудио на сателлиты (C3.1/C3.2, §10): батч 117 семплов → пакет 234 байта.
+// ESP-NOW — unicast по MAC сателлита; UDP — unicast на запомненный IP канала
+// (fallback broadcast, пока discovery не завершён).
+// ---------------------------------------------------------------------------
+static void sendAudioToSatellite(uint8_t channel, const int16_t* samples, size_t n) {
+    if (n == 0) return;
+    uint8_t buf[kMaxPacketSize];
+    size_t len = buildPacket(buf, sizeof(buf), channel, kSampleFormatInt16,
+                             samples, (uint16_t)(n * sizeof(int16_t)),
+                             (uint32_t)millis(), g_txPacketId++);
+    if (g_cfg.transport == TransportMode::EspNow) {
+        MacAddr mac = (channel == kChannelLeft) ? g_cfg.leftSatMac : g_cfg.rightSatMac;
+        if (mac != MacAddr{}) g_espnow.sendTo(mac, buf, len);
+    } else {
+        g_udpTx.sendToChannel(channel, UdpTransport::kDefaultPort, buf, len);
+    }
+}
+
+static void flushTxBatch() {
+    if (g_txCount == 0) return;
+    sendAudioToSatellite(kChannelLeft, g_txLeft, g_txCount);
+    sendAudioToSatellite(kChannelRight, g_txRight, g_txCount);
+    g_txPackets += 2;
+    g_txCount = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -284,6 +335,22 @@ static bool startSetupAp() {
     return true;
 }
 
+// C5.1: применить статический IP из сохранённого профиля (ТЗ_Веб §6.3, §21.2).
+// Вызывать ПЕРЕД WiFi.begin() — иначе адрес из DHCP перезапишет конфигурацию.
+static void applyStaticIpFromProfile() {
+    WifiProfile prof;
+    if (!WifiStore::loadProfile(g_cfg.wifiSsid, prof)) return;
+    if (!prof.staticIp || prof.ip[0] == '\0') return;
+    IPAddress ip, gw, mask, dns;
+    if (ip.fromString(prof.ip) && gw.fromString(prof.gateway) &&
+        mask.fromString(prof.netmask) && dns.fromString(prof.dns)) {
+        WiFi.config(ip, gw, mask, dns);
+        Logger::infof("wifi", "static IP from profile: %s", prof.ip);
+    } else {
+        Logger::warn("wifi", "invalid static IP in profile — using DHCP");
+    }
+}
+
 static bool initWifi() {
     WiFi.disconnect(true);
     WiFi.setSleep(false); // отключить power save для аудиоузлов (ТЗ §16.3)
@@ -317,6 +384,7 @@ static bool initWifi() {
                       g_cfg.wifiApSsid, kDefaultWifiChannel,
                       WiFi.softAPIP().toString().c_str());
 
+        applyStaticIpFromProfile(); // C5.1: статический IP из профиля
         WiFi.begin(g_cfg.wifiSsid, g_cfg.wifiPassword);
         Logger::infof("wifi", "Connecting to upstream '%s'...", g_cfg.wifiSsid);
         int tries = 0;
@@ -339,6 +407,7 @@ static bool initWifi() {
 
     // STA
     WiFi.mode(WIFI_STA);
+    applyStaticIpFromProfile(); // C5.1: статический IP из профиля
     WiFi.begin(g_cfg.wifiSsid, g_cfg.wifiPassword);
     Logger::infof("wifi", "Connecting to '%s'...", g_cfg.wifiSsid);
     int tries = 0;
@@ -415,6 +484,7 @@ static void handleConsoleCommand(const String& line) {
         Serial.printf("udp_port: %u\n", g_cfg.udpAudioPort);
         Serial.printf("packets_rx: %lu\n", (unsigned long)g_packetsRx);
         Serial.printf("bytes_rx: %lu\n", (unsigned long)g_packetBytesRx);
+        Serial.printf("tx_packets: %lu\n", (unsigned long)g_txPackets);
         Serial.printf("i2s: %s\n", g_i2sOn ? "on" : "off");
         Serial.printf("dsp: volume=%d mute=%s crossover=%d Hz\n",
                       g_cfg.masterVolume, g_cfg.mute ? "on" : "off", g_cfg.crossoverHz);
@@ -612,6 +682,15 @@ void setup() {
         Logger::error("master", "UDP begin failed");
     }
 
+    // C3.1: UDP-транспорт TX на сателлиты (порт 4210, discovery/аудио).
+    if (g_cfg.transport == TransportMode::Udp) {
+        if (g_udpTx.begin()) {
+            Logger::infof("master", "UDP TX to satellites on port %u", UdpTransport::kDefaultPort);
+        } else {
+            Logger::error("master", "UDP TX begin failed");
+        }
+    }
+
     // I2S-выход (C1.4): PCM5102A на пинах BCK/WS/DATA, сабвуфер — моно (L=R).
     I2sOutputPins i2sPins = {(int)g_cfg.i2sBck, (int)g_cfg.i2sWs, (int)g_cfg.i2sDataOut};
     if (g_i2sOut.init(i2sPins, g_cfg.sampleRate, /*mono=*/true)) {
@@ -642,8 +721,10 @@ void setup() {
     g_pipeline.setVolume(g_cfg.masterVolume);
     g_pipeline.setMute(g_cfg.mute);
     g_pipeline.setCrossoverHz(g_cfg.crossoverHz);
-    Logger::infof("audio", "DSP: volume=%d mute=%s crossover=%d Hz",
-                  g_cfg.masterVolume, g_cfg.mute ? "on" : "off", g_cfg.crossoverHz);
+    g_pipeline.setChannelVolumes(g_cfg.leftVolume, g_cfg.rightVolume, g_cfg.subVolume);
+    Logger::infof("audio", "DSP: volume=%d mute=%s crossover=%d Hz, chan L=%d R=%d Sub=%d",
+                  g_cfg.masterVolume, g_cfg.mute ? "on" : "off", g_cfg.crossoverHz,
+                  g_cfg.leftVolume, g_cfg.rightVolume, g_cfg.subVolume);
 
     // Линии задержки L/R/Sub в PSRAM (C2.3): ёмкость kMaxDelayMs (200 мс),
     // текущие задержки — из конфига (ТЗ §6.9). Настраиваются через /api/delay.
@@ -659,6 +740,17 @@ void setup() {
                   g_delaySub ? g_cfg.delaySubMs : -1);
 
     Logger::info("master", "Ready. Type 'status' for info.");
+
+    // C6.1: watchdog задачи loop (таймаут 30 с — с запасом на блокирующие
+    // Wi-Fi-операции в setup; сброс — в начале loop()). API IDF 5.x (core 3.x):
+    // esp_task_wdt_init принимает esp_task_wdt_config_t.
+    esp_task_wdt_config_t wdtCfg = {
+        .timeout_ms = 30000,
+        .idle_core_mask = 0,
+        .trigger_panic = true,
+    };
+    esp_task_wdt_init(&wdtCfg);
+    esp_task_wdt_add(nullptr);
 }
 
 // Генерация тестового тона (C1.4): вызывается из loop(), не блокирует Wi-Fi/Web UI.
@@ -700,6 +792,10 @@ static void audioOutTick() {
 }
 
 void loop() {
+    // C6.1: сброс watchdog задачи loop.
+    esp_task_wdt_reset();
+    // C5.5: замер занятости loop() (без учёта delay).
+    uint32_t t0 = micros();
     // Приём UDP-аудио со смартфона (C2.1, §9): разбор пакета → UdpAudioReceiver
     // (sequence/concealment) → DSP (volume → tone → limiter → LR4 crossover) →
     // sub → DelayLine → JitterBuffer (PSRAM) → I2S. left/right (HPF) — Этап 3.
@@ -722,8 +818,8 @@ void loop() {
             StreamState st = g_audioRecv.feed(hdr.sequence, hdr.timestampSamples,
                                               pcm, nSamples, millis());
             if (st == StreamState::Active || st == StreamState::Conceal) {
-                // DSP: стерео → sub (моно-микс → LPF). При потерях — плавное
-                // затухание (concealGain), затем задержка сабвуфера.
+            // DSP: стерео → sub (моно-микс → LPF) + left/right (HPF) для TX.
+            // При потерях — плавное затухание (concealGain), затем задержка сабвуфера.
                 float gain = g_audioRecv.concealGain();
                 static int16_t s_mono[sizeof(g_udpBuf) / sizeof(int16_t)];
                 for (size_t i = 0, o = 0; i + 1 < nSamples; i += 2, o++) {
@@ -734,6 +830,16 @@ void loop() {
                     int16_t s = static_cast<int16_t>(sub * 32767.0f);
                     if (g_delaySub) s = g_delaySub->process(s);
                     s_mono[o] = s;
+
+                    // C3.1: left/right каналы (HPF) → батч → пакеты на сателлиты.
+                    float lf = out.left * gain;
+                    float rf = out.right * gain;
+                    if (lf > 1.0f) lf = 1.0f; else if (lf < -1.0f) lf = -1.0f;
+                    if (rf > 1.0f) rf = 1.0f; else if (rf < -1.0f) rf = -1.0f;
+                    g_txLeft[g_txCount] = static_cast<int16_t>(lf * 32767.0f);
+                    g_txRight[g_txCount] = static_cast<int16_t>(rf * 32767.0f);
+                    g_txCount++;
+                    if (g_txCount >= kBatchSamples) flushTxBatch();
                 }
                 if (g_jitter) g_jitter->push(s_mono, nMono);
             }
@@ -743,6 +849,14 @@ void loop() {
 
     // Драйвер аудио-выхода: вычитываем из jitter-буфера в I2S.
     audioOutTick();
+
+    // C3.1: UDP-режим — discovery-ответы сателлитов (запоминаем их IP для
+    // unicast-отправки аудио; fallback — broadcast).
+    if (g_cfg.transport == TransportMode::Udp) {
+        uint8_t discBuf[kMaxPacketSize];
+        size_t dn = g_udpTx.receive(discBuf, sizeof(discBuf));
+        if (dn > 0) g_udpTx.handleDiscovery(discBuf, dn, g_udpTx.lastFrom());
+    }
 
     // Тестовый тон (C1.4) — не блокирует loop.
     toneTick();
@@ -773,6 +887,25 @@ void loop() {
         g_webServer.clearSaveRequested();
         Logger::info("master", "config saved via Web UI");
         g_logs.addf(LogCat::Config, 1, "config saved via Web UI");
+    }
+
+    // C6.2: авто-переподключение STA при обрыве в рантайме (ТЗ §16.3,
+    // ТЗ_Веб §21). Fallback на setup AP — в существующей логике ниже.
+    if (g_cfg.wifiMode != WifiMode::ApDirect && !g_setupMode) {
+        wl_status_t st = WiFi.status();
+        if (st == WL_CONNECTED) {
+            g_wifiWasConnected = true;
+        } else if (g_wifiWasConnected && !g_reconnectPending) {
+            Logger::warn("wifi", "STA lost — auto reconnect");
+            g_logs.addf(LogCat::Wifi, 2, "STA lost — auto reconnect");
+            WiFi.setAutoReconnect(false);
+            WiFi.disconnect(false, true);
+            delay(200);
+            applyStaticIpFromProfile(); // C5.1
+            WiFi.begin(g_cfg.wifiSsid, g_cfg.wifiPassword);
+            g_reconnectPending = true;
+            g_reconnectAtMs = millis();
+        }
     }
 
     // Интернет-чек (ТЗ_Веб §7.4): выполняется в отдельной задаче, чтобы
@@ -830,5 +963,17 @@ void loop() {
     // Captive portal: обработать DNS-запросы телефона (no-op, если не запущен).
     g_dns.processNextRequest();
 
+    // C5.5: занятость = время до delay; усреднение за 2 с → Web UI.
+    g_cpuBusyUs += (micros() - t0);
     delay(10);
+    g_cpuTotalUs += (micros() - t0);
+    uint32_t cpuNow = millis();
+    if (cpuNow - g_cpuLastReportMs >= 2000) {
+        g_cpuLastReportMs = cpuNow;
+        uint32_t total = g_cpuTotalUs;
+        g_cpuLoadPercent = total ? (uint32_t)((uint64_t)g_cpuBusyUs * 100 / total) : 0;
+        g_cpuBusyUs = 0;
+        g_cpuTotalUs = 0;
+        g_webServer.setCpuLoadPercent(g_cpuLoadPercent);
+    }
 }

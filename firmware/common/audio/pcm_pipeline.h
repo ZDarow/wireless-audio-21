@@ -91,6 +91,9 @@ public:
         m_hpf.configure(CrossoverKind::HighPass, CrossoverType::LinkwitzRiley, 4,
                         m_crossoverHz, sampleRate);
         m_volume.resetToSilence();
+        m_volLeft.resetToSilence();
+        m_volRight.resetToSilence();
+        m_volSub.resetToSilence();
     }
 
     void setCrossoverHz(int hz) {
@@ -105,6 +108,14 @@ public:
     void setMute(bool m) { m_volume.setMute(m); }
     void setTone(float bassDb, float trebleDb) { m_tone.configure(bassDb, trebleDb, m_sampleRate); }
 
+    // Покомпонентные громкости каналов (C2.2, ТЗ §7.5): left/right/sub — 0..100,
+    // применяются ПОСЛЕ кроссовера (каждый канал независимо от общего master).
+    void setChannelVolumes(int left, int right, int sub) {
+        m_volLeft.setVolume(left);
+        m_volRight.setVolume(right);
+        m_volSub.setVolume(sub);
+    }
+
     // Обработка стереопары int16 → три выхода (float -1..1).
     PipelineOutput process(int16_t inL, int16_t inR) {
         float l = inL / 32768.0f;
@@ -114,18 +125,23 @@ public:
         l = m_tone.process(l);
         r = m_tone.process(r);
 
-        // limiter (per-channel)
-        l = m_limiter.process(l);
-        r = m_limiter.process(r);
-
         // volume + mute (с плавным фейдом)
         l = m_volume.process(l);
         r = m_volume.process(r);
+
+        // limiter (per-channel) — ПОСЛЕ volume: финальная защита от клиппинга
+        // на выходе (B15), т.к. volume может усилить сигнал до 1.0.
+        l = m_limiter.process(l);
+        r = m_limiter.process(r);
 
         PipelineOutput out;
         out.left = m_hpf.process(l);
         out.right = m_hpf.process(r);
         out.sub = m_lpf.process((l + r) * 0.5f); // моно-микс для сабвуфера
+        // Канальные громкости (C2.2) — после кроссовера, с плавным фейдом.
+        out.left = m_volLeft.process(out.left);
+        out.right = m_volRight.process(out.right);
+        out.sub = m_volSub.process(out.sub);
         return out;
     }
 
@@ -134,6 +150,9 @@ public:
         m_lpf.reset();
         m_hpf.reset();
         m_volume.resetToSilence();
+        m_volLeft.resetToSilence();
+        m_volRight.resetToSilence();
+        m_volSub.resetToSilence();
     }
 
 private:
@@ -142,6 +161,9 @@ private:
     ToneControl m_tone;
     PeakLimiter m_limiter;
     VolumeControl m_volume;
+    VolumeControl m_volLeft;   // C2.2: канальные громкости
+    VolumeControl m_volRight;
+    VolumeControl m_volSub;
     Crossover m_lpf;
     Crossover m_hpf;
 };

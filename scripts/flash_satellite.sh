@@ -9,8 +9,8 @@ SIDE="${1:-left}"
 PORT="${2:-/dev/ttyUSB0}"
 
 case "${SIDE}" in
-  left)  ENV="satellite_left" ;;
-  right) ENV="satellite_right" ;;
+  left)  ENV="satellite_s3_left" ;;
+  right) ENV="satellite_s3_right" ;;
   *) echo "ОШИБКА: сторона должна быть left или right" >&2; exit 1 ;;
 esac
 

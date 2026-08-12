@@ -17,10 +17,10 @@
 #include "timing.h"
 #include "delay_line.h"
 #include "jitter_buffer.h"
+#include "volume_control.h"
 #include "espnow.h"
 #include "udp_transport.h"
 #include "audio_packet.h"
-#include "satellite_config.h"
 #include "i2s_output.h"
 
 using namespace audio21;
@@ -32,6 +32,7 @@ using namespace audio21;
 static NodeConfig g_cfg;
 static DelayLine* g_delay = nullptr;
 static JitterBuffer* g_jitter = nullptr;
+static VolumeControl g_vol; // C3.5: громкость сателлита (§8.6) + fade-in/out
 
 static EspNowTransport g_espnow;
 static UdpTransport g_udp;
@@ -65,13 +66,17 @@ static constexpr uint8_t kEspNowChannel = AUDIO_ESPNOW_CHANNEL;
 // I2S выход сателлита (моно, L=R)
 // ---------------------------------------------------------------------------
 static I2sOutput g_i2sOut;
+static bool g_i2sReady = false; // guard: не писать в неинициализированный I2S (B14)
 
 static bool initI2S(const NodeConfig& cfg) {
     I2sOutputPins pins = {(int)cfg.i2sBck, (int)cfg.i2sWs, (int)cfg.i2sDataOut};
-    return g_i2sOut.init(pins, cfg.sampleRate, /*mono=*/true);
+    bool ok = g_i2sOut.init(pins, cfg.sampleRate, /*mono=*/true);
+    g_i2sReady = ok;
+    return ok;
 }
 
 static void writeSample(int16_t sample) {
+    if (!g_i2sReady) return; // B14: риск зависания i2s_write при провале init
     g_i2sOut.write(&sample, 1);
 }
 
@@ -212,8 +217,14 @@ void setup() {
                                 : static_cast<uint32_t>(g_cfg.delayLeftMs);
     g_delay->setDelayMs(startDelayMs);
 
+    // C3.5: громкость сателлита — из покомпонентной (left/right) или общей.
+    int satVolume = (g_cfg.side == SatelliteSide::Right) ? g_cfg.rightVolume
+                                                         : g_cfg.leftVolume;
+    g_vol.setVolume(satVolume);
+
     g_jitter = new JitterBuffer(g_cfg.sampleRate / 20); // ~50 мс ёмкость
-    g_jitter->setTargetMs(15, g_cfg.sampleRate);        // ~15 мс целевой уровень
+    // Целевой уровень §10.3: 20 мс базовый (40/80 — для нестабильных сетей).
+    g_jitter->setTargetMs(20, g_cfg.sampleRate);
 
     if (!initI2S(g_cfg)) {
         Logger::error("satellite", "I2S init failed");
@@ -283,11 +294,21 @@ void loop() {
         Logger::warn("satellite", "master timeout");
     }
 
-    // Выдаём поток из jitter buffer в I2S.
-    int16_t sample;
-    if (g_jitter->pop(sample)) {
-        int16_t out = g_delay->process(sample);
-        writeSample(out);
+    // Выдаём поток из jitter buffer в I2S. C3.3: на старте ждём накопления
+    // целевого уровня (ready()) — иначе щелчки; после входа в потоковый режим
+    // выдаём всё, при истощении буфера снова ждём накопления.
+    static bool g_streaming = false;
+    if (g_i2sReady) {
+        if (!g_streaming && g_jitter->ready()) g_streaming = true;
+        int16_t sample;
+        if (g_streaming && g_jitter->pop(sample)) {
+            int16_t out = g_delay->process(sample);
+            // C3.5: плавный fade-in/out + громкость канала сателлита.
+            out = (int16_t)(g_vol.process(out / 32768.0f) * 32768.0f);
+            writeSample(out);
+        } else if (g_jitter->available() == 0) {
+            g_streaming = false;
+        }
     }
 
     if (Serial.available()) {

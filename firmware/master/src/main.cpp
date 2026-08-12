@@ -25,7 +25,6 @@
 #include "espnow.h"
 #include "udp_transport.h"
 #include "audio_packet.h"
-#include "master_config.h"
 #include "web_server.h"
 
 using namespace audio21;
@@ -52,7 +51,7 @@ static volatile bool g_a2dpConnected = false;
 static uint32_t g_lastDiscoveryMs = 0;
 
 // Таймаут без подтверждения/ответа — сателлит считается оффлайн.
-static constexpr uint32_t kSatelliteTimeoutMs = 5000;
+// Общая константа kSatelliteTimeoutMs — в audio_packet.h (R14).
 
 static BluetoothA2DPSink g_a2dp;
 

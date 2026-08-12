@@ -124,6 +124,7 @@ public:
     // --- Инъекции из main.cpp ---
     void setInternetChecker(InternetChecker* ic) { m_net = ic; }
     void setLogs(LogRing* logs) { m_logs = logs; }
+    void setCpuLoadPercent(uint32_t p) { m_cpuLoadPercent = p; } // C5.5
 
     // Запустить серверы (Wi-Fi должен быть подключён).
     void begin() {
@@ -145,6 +146,11 @@ public:
     }
 
     void handleClient() {
+        // C5.2: сессия гаснет через kSessionTimeoutMs (ТЗ §11.4/§23.1).
+        if (m_sessionActive && (millis() - m_sessionStartMs > kSessionTimeoutMs)) {
+            m_sessionActive = false;
+            m_sessionToken[0] = '\0';
+        }
         if (m_server) m_server->handleClient();
         if (m_apServer) m_apServer->handleClient();
     }
@@ -218,9 +224,30 @@ private:
     // ------------------------------------------------------------------
     // Авторизация (ТЗ §18, §23)
     // ------------------------------------------------------------------
+    // C5.7: адрес клиента в подсети STA или AP (ТЗ_Веб §23.2).
+    static bool ipInSubnet(IPAddress ip, IPAddress net, IPAddress mask) {
+        for (int i = 0; i < 4; i++) {
+            if ((ip[i] & mask[i]) != (net[i] & mask[i])) return false;
+        }
+        return true;
+    }
+
+    static bool clientIsLocal(WebServer& s) {
+        IPAddress remote = s.client().remoteIP();
+        if (remote == IPAddress(0, 0, 0, 0)) return false;
+        bool localSta = (WiFi.status() == WL_CONNECTED) &&
+                        ipInSubnet(remote, WiFi.localIP(), WiFi.subnetMask());
+        bool localAp = (WiFi.getMode() & WIFI_AP) &&
+                       ipInSubnet(remote, WiFi.softAPIP(), IPAddress(255, 255, 255, 0));
+        return localSta || localAp;
+    }
+
     // Авторизован только обладатель cookie текущей сессии (m_sessionActive
     // — глобальный флаг «сессия создана», но не заменяет cookie).
     bool isAuthed(WebServer& s) const {
+        // C5.7: Web UI доступен только из локальной подсети (STA/AP) — блок
+        // для запросов извне (например, с интернета через проброшенный порт).
+        if (!clientIsLocal(s)) return false;
         if (!m_cfg.authEnabled) return true;
         if (!m_sessionActive) return false;
         String cookie = s.header("Cookie");
@@ -290,6 +317,18 @@ private:
         doc["system"]["uptime_sec"] = millis() / 1000;
         doc["system"]["heap_free"] = ESP.getFreeHeap();
         doc["system"]["psram_free"] = ESP.getFreePsram();
+        doc["system"]["cpu_load_percent"] = m_cpuLoadPercent; // C5.5
+        doc["system"]["mac"] = WiFi.macAddress();              // C5.5
+        if (m_cfg.ntpEnabled) {                                // C5.5: NTP-время
+            time_t now = time(nullptr);
+            if (now > 0) {
+                struct tm tmv;
+                localtime_r(&now, &tmv);
+                char buf[32];
+                strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &tmv);
+                doc["system"]["time"] = buf;
+            }
+        }
         doc["system"]["auth_enabled"] = m_cfg.authEnabled;
         doc["system"]["authed"] = isAuthed(s);
         if (m_cfg.authEnabled && isAuthed(s)) {
@@ -312,6 +351,9 @@ private:
         doc["audio"]["bits"] = m_cfg.bitsPerSample;
         doc["audio"]["channels"] = m_cfg.channels;
         doc["audio"]["volume"] = m_cfg.masterVolume;
+        doc["audio"]["left_volume"] = m_cfg.leftVolume;
+        doc["audio"]["right_volume"] = m_cfg.rightVolume;
+        doc["audio"]["sub_volume"] = m_cfg.subVolume;
         doc["audio"]["mute"] = m_cfg.mute;
         doc["audio"]["crossover_hz"] = m_cfg.crossoverHz;
 
@@ -350,6 +392,16 @@ private:
     // GET /api/wifi/scan (ТЗ §15.2) — кеш до старта AP (B9) или живой скан.
     // ------------------------------------------------------------------
     void handleWifiScan(WebServer& s) {
+        // C5.3: rate limit живого сканирования — не чаще 5 с (скан отключает
+        // радио и рвёт соединение; кеш (B9) отдаётся без ограничения).
+        if (m_wifiCache.empty()) {
+            uint32_t nowMs = millis();
+            if (nowMs - m_lastScanMs < kScanMinIntervalMs) {
+                s.send(429, "application/json", "{\"ok\":false,\"error\":\"scan rate limited\"}");
+                return;
+            }
+            m_lastScanMs = nowMs;
+        }
         JsonDocument doc;
         JsonArray nets = doc["networks"].to<JsonArray>();
         if (!m_wifiCache.empty()) {
@@ -528,8 +580,21 @@ private:
         if (!doc["volume"].is<int>()) { sendErr(s, "missing volume|mute"); return; }
         int v = doc["volume"].as<int>();
         if (v < kVolumeMin || v > kVolumeMax) { sendErr(s, "volume out of range"); return; }
-        m_cfg.masterVolume = v;
-        if (m_pipeline) m_pipeline->setVolume(v);
+        // Покомпонентные громкости (C2.2, ТЗ §7.5): channel = master|left|right|sub.
+        const char* chan = doc["channel"] | "master";
+        if (strcmp(chan, "left") == 0) {
+            m_cfg.leftVolume = v;
+            if (m_pipeline) m_pipeline->setChannelVolumes(v, m_cfg.rightVolume, m_cfg.subVolume);
+        } else if (strcmp(chan, "right") == 0) {
+            m_cfg.rightVolume = v;
+            if (m_pipeline) m_pipeline->setChannelVolumes(m_cfg.leftVolume, v, m_cfg.subVolume);
+        } else if (strcmp(chan, "sub") == 0) {
+            m_cfg.subVolume = v;
+            if (m_pipeline) m_pipeline->setChannelVolumes(m_cfg.leftVolume, m_cfg.rightVolume, v);
+        } else {
+            m_cfg.masterVolume = v;
+            if (m_pipeline) m_pipeline->setVolume(v);
+        }
         sendOk(s);
     }
 
@@ -715,19 +780,56 @@ private:
     }
 
     // ------------------------------------------------------------------
-    // GET /api/logs (ТЗ §17.5)
+    // GET /api/logs (ТЗ §17.5) — фильтры level (0..3) и module (C5.4)
     // ------------------------------------------------------------------
     void handleLogs(WebServer& s) {
         JsonDocument doc;
         int limit = s.hasArg("limit") ? s.arg("limit").toInt() : 200;
         if (limit <= 0 || limit > 500) limit = 200;
+        int minLevel = s.hasArg("level") ? s.arg("level").toInt() : 0;
+        if (minLevel < 0 || minLevel > 3) minLevel = 0;
+        String module = s.hasArg("module") ? s.arg("module") : "";
+        module.toUpperCase();
         JsonArray arr = doc["logs"].to<JsonArray>();
         if (m_logs) {
-            const char* lines[64];
-            int n = m_logs->tail(lines, limit > 64 ? 64 : limit);
-            for (int i = 0; i < n; i++) arr.add(lines[i]);
+            const char* lines[96];
+            int n = m_logs->tail(lines, limit > 96 ? 96 : limit);
+            for (int i = 0; i < n; i++) {
+                const char* line = lines[i];
+                if (parseLogSeverity(line) < minLevel) continue;
+                if (module.length() > 0 && !logLineHasModule(line, module)) continue;
+                arr.add(line);
+            }
         }
         sendJson(s, 200, doc);
+    }
+
+    // "[ts] [LEVEL] [CAT] msg" — уровень после второго '['
+    static int parseLogSeverity(const char* line) {
+        const char* p = strchr(line, '[');
+        if (!p) return 1;
+        p = strchr(p + 1, '[');
+        if (!p) return 1;
+        p++;
+        if (strncmp(p, "DEBUG", 5) == 0) return 0;
+        if (strncmp(p, "WARN", 4) == 0) return 2;
+        if (strncmp(p, "ERROR", 5) == 0) return 3;
+        return 1; // INFO
+    }
+
+    // "[ts] [LEVEL] [CAT] msg" — категория после третьего '['
+    static bool logLineHasModule(const char* line, const String& module) {
+        const char* p = strchr(line, '[');
+        if (!p) return false;
+        p = strchr(p + 1, '[');
+        if (!p) return false;
+        p = strchr(p + 1, '[');
+        if (!p) return false;
+        p++;
+        const char* end = strchr(p, ']');
+        if (!end) return false;
+        int len = (int)(end - p);
+        return len == (int)module.length() && strncasecmp(p, module.c_str(), len) == 0;
     }
 
     // ------------------------------------------------------------------
@@ -739,6 +841,7 @@ private:
         doc["heap_min_free"] = ESP.getMinFreeHeap();
         doc["psram_free"] = ESP.getFreePsram();
         doc["psram_min_free"] = ESP.getMinFreePsram();
+        doc["cpu_load_percent"] = m_cpuLoadPercent; // C5.5
         doc["wifi_rssi"] = WiFi.RSSI();
         doc["internet"] = m_net ? m_net->statusName() : "disabled";
         doc["uptime_sec"] = millis() / 1000;
@@ -752,15 +855,27 @@ private:
     // ------------------------------------------------------------------
     void handleLogin(WebServer& s) {
         if (!m_cfg.authEnabled) { sendOk(s, "no password required"); return; }
+        // C5.3: блокировка на kLoginLockMs после kMaxLoginFails неудач (ТЗ §23.1).
+        if (millis() < m_loginLockUntilMs) {
+            s.send(429, "application/json", "{\"ok\":false,\"error\":\"too many attempts\"}");
+            return;
+        }
         JsonDocument doc;
         if (deserializeJson(doc, s.arg("plain"))) { sendErr(s, "bad json"); return; }
         const char* pass = doc["password"] | "";
         if (!Auth::checkPassword(pass, m_cfg.adminPasswordHash)) {
+            m_loginFails++;
+            if (m_loginFails >= kMaxLoginFails) {
+                m_loginLockUntilMs = millis() + kLoginLockMs;
+                m_loginFails = 0;
+            }
             s.send(401, "application/json", "{\"ok\":false,\"error\":\"bad password\"}");
             return;
         }
+        m_loginFails = 0;
         Auth::newSessionToken(m_sessionToken);
         m_sessionActive = true;
+        m_sessionStartMs = millis(); // C5.2: старт отсчёта таймаута сессии
 
         s.sendHeader("Set-Cookie", String("session=") + m_sessionToken + "; Path=/");
         sendOk(s, "logged in");
@@ -790,6 +905,7 @@ private:
         ConfigStorage::save(m_cfg);
         Auth::newSessionToken(m_sessionToken);
         m_sessionActive = true;
+        m_sessionStartMs = millis(); // C5.2
 
         s.sendHeader("Set-Cookie", String("session=") + m_sessionToken + "; Path=/");
         sendOk(s, "admin configured");
@@ -863,6 +979,16 @@ private:
     char m_sessionToken[Auth::kTokenLen + 1] = "";
     bool m_sessionActive = false;
     bool m_updateActive = false;
+    uint32_t m_sessionStartMs = 0;   // C5.2: момент создания сессии
+    uint32_t m_loginFails = 0;       // C5.3: счётчик неудачных логинов
+    uint32_t m_loginLockUntilMs = 0; // C5.3: до этого времени логин заблокирован
+    uint32_t m_lastScanMs = 0;       // C5.3: rate limit живого сканирования
+    uint32_t m_cpuLoadPercent = 0;   // C5.5: заполняется из main.cpp
+
+    static constexpr uint32_t kSessionTimeoutMs = 3600 * 1000UL; // ТЗ §11.4/§23.1
+    static constexpr uint32_t kMaxLoginFails = 5;                // C5.3
+    static constexpr uint32_t kLoginLockMs = 60 * 1000UL;        // C5.3: 60 с
+    static constexpr uint32_t kScanMinIntervalMs = 5000;         // C5.3: 5 с
 
     static const char kPageHtml[];
 };
@@ -930,7 +1056,10 @@ const char MasterWebServer::kPageHtml[] = R"rawliteral(
     <h2>Статус</h2>
     <table>
       <tr><td>Система</td><td id="d_system">-</td></tr>
+      <tr><td>Время (NTP)</td><td id="d_time">-</td></tr>
       <tr><td>Wi-Fi</td><td id="d_wifi">-</td></tr>
+      <tr><td>RSSI</td><td id="d_rssi">-</td></tr>
+      <tr><td>MAC</td><td id="d_mac">-</td></tr>
       <tr><td>Интернет</td><td id="d_internet">-</td></tr>
       <tr><td>IP-адрес</td><td id="d_ip">-</td></tr>
       <tr><td>Hostname</td><td id="d_host">-</td></tr>
@@ -939,6 +1068,7 @@ const char MasterWebServer::kPageHtml[] = R"rawliteral(
       <tr><td>Кроссовер</td><td id="d_crossover">-</td></tr>
       <tr><td>Задержки</td><td id="d_delays">-</td></tr>
       <tr><td>Сателлиты</td><td id="d_sats">-</td></tr>
+      <tr><td>CPU load</td><td id="d_cpu">-</td></tr>
       <tr><td>Свободный heap</td><td id="d_heap">-</td></tr>
       <tr><td>Свободный PSRAM</td><td id="d_psram">-</td></tr>
       <tr><td>Версия</td><td id="d_ver">-</td></tr>
@@ -1005,8 +1135,14 @@ const char MasterWebServer::kPageHtml[] = R"rawliteral(
 <div id="p-audio" class="page">
   <div class="card">
     <h2>Громкость</h2>
-    <label>Громкость: <span id="a_volLabel" class="val">50</span></label>
+    <label>Master: <span id="a_volLabel" class="val">50</span></label>
     <input type="range" id="a_volume" min="0" max="100" value="50">
+    <label>Left: <span id="a_volLeftLabel" class="val">50</span></label>
+    <input type="range" id="a_volLeft" min="0" max="100" value="50">
+    <label>Right: <span id="a_volRightLabel" class="val">50</span></label>
+    <input type="range" id="a_volRight" min="0" max="100" value="50">
+    <label>Sub: <span id="a_volSubLabel" class="val">50</span></label>
+    <input type="range" id="a_volSub" min="0" max="100" value="50">
     <div class="row">
       <button id="aMuteBtn">Mute</button>
       <button id="aUnmuteBtn">Unmute</button>
@@ -1113,6 +1249,9 @@ const char MasterWebServer::kPageHtml[] = R"rawliteral(
     <input type="file" id="uFile" accept=".bin">
     <button id="uBtn">Обновить</button>
     <div id="uMsg" style="font-size:13px;color:#aaa"></div>
+    <div id="uBarWrap" style="display:none;height:8px;background:#222;border-radius:4px;margin-top:6px;overflow:hidden">
+      <div id="uBar" style="height:100%;width:0%;background:#4caf50;transition:width .2s"></div>
+    </div>
     <p style="font-size:12px;color:#777">Не прерывайте питание во время обновления. Устройство перезагрузится автоматически.</p>
   </div>
 </div>
@@ -1182,7 +1321,10 @@ async function refresh() {
     if (!s.system.authed) { showLogin(); return; }
     hideLogin();
     $('d_system').textContent = 'OK';
-    $('d_wifi').textContent = s.wifi.mode + ' ' + (s.wifi.ip || '-');
+    $('d_time').textContent = s.system.time || '-';
+    $('d_wifi').textContent = s.wifi.mode + ' ' + (s.wifi.ssid || '') + ' ' + (s.wifi.ip || '-');
+    $('d_rssi').textContent = (s.wifi.rssi || 0) + ' dBm';
+    $('d_mac').textContent = s.system.mac || '-';
     $('d_internet').textContent = s.wifi.internet;
     $('d_ip').textContent = s.wifi.ip || '-';
     $('d_host').textContent = s.system.hostname;
@@ -1191,11 +1333,18 @@ async function refresh() {
     $('d_crossover').textContent = s.audio.crossover_hz + ' Гц';
     $('d_delays').textContent = 'L ' + s.delays.left_ms + ' / R ' + s.delays.right_ms + ' / Sub ' + s.delays.sub_ms + ' мс';
     $('d_sats').textContent = 'L ' + s.satellites.left + ' | R ' + s.satellites.right;
+    $('d_cpu').textContent = (s.system.cpu_load_percent || 0) + ' %';
     $('d_heap').textContent = s.system.heap_free;
     $('d_psram').textContent = s.system.psram_free;
     $('d_ver').textContent = s.system.version;
     $('a_volLabel').textContent = s.audio.volume;
     $('a_volume').value = s.audio.volume;
+    $('a_volLeftLabel').textContent = s.audio.left_volume;
+    $('a_volLeft').value = s.audio.left_volume;
+    $('a_volRightLabel').textContent = s.audio.right_volume;
+    $('a_volRight').value = s.audio.right_volume;
+    $('a_volSubLabel').textContent = s.audio.sub_volume;
+    $('a_volSub').value = s.audio.sub_volume;
     $('a_xoLabel').textContent = s.audio.crossover_hz;
     $('a_crossover').value = s.audio.crossover_hz;
     $('a_source').textContent = s.audio.source;
@@ -1324,6 +1473,9 @@ $('aMuteBtn').onclick = async () => api('/api/mute', {mute: true});
 $('aUnmuteBtn').onclick = async () => api('/api/mute', {mute: false});
 $('aSaveBtn').onclick = async () => { await api('/api/save', {}); toast('Сохранено'); };
 $('a_volume').oninput = async e => { $('a_volLabel').textContent = e.target.value; await api('/api/volume', {volume: +e.target.value}, 'PUT'); };
+$('a_volLeft').oninput = async e => { $('a_volLeftLabel').textContent = e.target.value; await api('/api/volume', {channel:'left', volume: +e.target.value}, 'PUT'); };
+$('a_volRight').oninput = async e => { $('a_volRightLabel').textContent = e.target.value; await api('/api/volume', {channel:'right', volume: +e.target.value}, 'PUT'); };
+$('a_volSub').oninput = async e => { $('a_volSubLabel').textContent = e.target.value; await api('/api/volume', {channel:'sub', volume: +e.target.value}, 'PUT'); };
 $('a_crossover').oninput = async e => { $('a_xoLabel').textContent = e.target.value; await api('/api/crossover', {crossover_hz: +e.target.value}, 'PUT'); };
 $('dlyLeft').oninput = async e => { $('dly_l').textContent = e.target.value; await api('/api/delay', {channel: 'left', delay_ms: +e.target.value}, 'PUT'); };
 $('dlyRight').oninput = async e => { $('dly_r').textContent = e.target.value; await api('/api/delay', {channel: 'right', delay_ms: +e.target.value}, 'PUT'); };
@@ -1379,17 +1531,33 @@ $('loginBtn').onclick = async () => {
     location.reload();
   } catch (e) { toast('Ошибка'); }
 };
-$('uBtn').onclick = async () => {
+// C5.6: прогресс-бар OTA. XHR даёт upload-прогресс (fetch — нет).
+$('uBtn').onclick = () => {
   const f = $('uFile').files[0];
   if (!f) { $('uMsg').textContent = 'Выберите файл .bin'; return; }
-  $('uMsg').textContent = 'Загрузка...';
   const form = new FormData();
   form.append('firmware', f);
-  try {
-    const r = await fetch('/api/update', {method: 'POST', body: form});
-    const d = await r.json();
-    $('uMsg').textContent = d.status || d.error || 'Готово';
-  } catch (e) { $('uMsg').textContent = 'Ошибка загрузки'; }
+  $('uBarWrap').style.display = 'block';
+  $('uBar').style.width = '0%';
+  $('uMsg').textContent = 'Загрузка: 0%';
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/update');
+  xhr.upload.onprogress = (e) => {
+    if (e.lengthComputable) {
+      const pct = Math.round(e.loaded / e.total * 100);
+      $('uBar').style.width = pct + '%';
+      $('uMsg').textContent = 'Загрузка: ' + pct + '%';
+    }
+  };
+  xhr.onload = () => {
+    try {
+      const d = JSON.parse(xhr.responseText);
+      $('uMsg').textContent = d.status || d.error || 'Готово';
+      $('uBar').style.width = '100%';
+    } catch (e) { $('uMsg').textContent = 'Готово'; }
+  };
+  xhr.onerror = () => { $('uMsg').textContent = 'Ошибка загрузки'; };
+  xhr.send(form);
 };
 
 // Первый запуск: нет пароля — показать настройку администратора.

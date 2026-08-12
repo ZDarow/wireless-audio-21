@@ -205,21 +205,30 @@ docs/                       # PLAN.md, TASKS.md, architecture.md, hardware.md, w
 | `master_s3_wifi` | мастер (S3) | `+<master_s3/src>` | Wi-Fi UDP источник, ESP-NOW/UDP, PSRAM, 16MB |
 | `satellite_s3_left` | левый сателлит (S3) | `+<satellite/src>` | `-DAUDIO_SATELLITE_SIDE=0` |
 | `satellite_s3_right` | правый сателлит (S3) | `+<satellite/src>` | `-DAUDIO_SATELLITE_SIDE=1` |
+| `master_a2dp` | мастер (legacy, A2DP) | `+<master/src>` | отладочный стенд, вне поставки (C0.2) |
+| `satellite_left` | левый сателлит (legacy) | `+<satellite/src>` | `-DAUDIO_SATELLITE_SIDE=0` |
+| `satellite_right` | правый сателлит (legacy) | `+<satellite/src>` | `-DAUDIO_SATELLITE_SIDE=1` |
 
 - Платформа: `espressif32@6.9.0`, фреймворк Arduino, плата `esp32-s3-devkitc-1`.
+- Мастер `master_s3_wifi` собирается на pioarduino-платформе (Arduino core
+  3.3.11 / IDF 5.5.5, тег `55.03.311`) через `platformio.master.ini`
+  (изолированный core-каталог `.pio-core-master`) — только там lwip собран
+  с NAPT (режим репитера APSTA, F21).
 - Мастер: flash 16 MB (`default_16MB.csv`), `memory_type=qio_opi`, PSRAM
   (`-DBOARD_HAS_PSRAM`), `CORE_DEBUG_LEVEL=2`.
 - Сателлиты: flash/PSRAM — дефолты платы `esp32-s3-devkitc-1`.
-- Библиотеки: Preferences, WebServer (мастер), ArduinoJson, arduino-audio-tools
-  (git-URL, I2S/аудиопотоки). ESP32-A2DP не используется (S3 без A2DP).
-- Старые env (`master_a2dp`, `satellite_left/right`) сохранены в git-истории
-  для перехода; новые env — единственные в `platformio.ini`.
+- Библиотеки: ArduinoJson (мастер). WebServer/Preferences/HTTPClient/Update/
+  Network встроены в Arduino core (T22); arduino-audio-tools и ESP32-A2DP —
+  только в legacy `master_a2dp` (отладочный стенд).
+- Legacy env (`master_a2dp`, `satellite_left/right`) остаются в `platformio.ini`
+  как отладочный стенд (C0.2), вне поставки; целевые — S3-окружения.
 
 ## 10. Известные ограничения (MVP)
 
 - Источник аудио — Wi-Fi UDP PCM со смартфона (мастер — приёмник UDP,
   magic 0xA210, см. ТЗ §10). A2DP недоступен на ESP32-S3.
-- Синхронизация по `timestampMs` (компенсация дрейфа часов) — этап 4 (F14).
+- Синхронизация по `timestampMs` (компенсация дрейфа часов) — этап 3 (C3.2/F14).
 - OLED-меню + энкодер — этап 4 (F12).
-- Fade-in/out при старте/остановке — этап 4 (F15).
-- mDNS (`http://audio-master.local`) — этап 4 (F16).
+- Fade-in/out: реализован в `VolumeControl` (мастер-конвейер, сателлит C3.5);
+  полная схема «разное время старта каналов» (ТЗ §8.2) — этап 3 (F18).
+- mDNS (`http://audio-master.local`) — реализовано (F16).

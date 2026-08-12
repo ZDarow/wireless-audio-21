@@ -18,6 +18,10 @@ public:
         : m_capacity(capacity) {
         m_buffer = new int16_t[m_capacity];
         clear();
+        // Дефолт целевого уровня — 50% ёмкости (B13): ready() осмыслен сразу
+        // после создания без явной конфигурации. Иначе m_targetLevel=0 →
+        // ready() всегда true → щелчки/прерывания на старте потока.
+        m_targetLevel = m_capacity / 2;
     }
 
     ~JitterBuffer() { delete[] m_buffer; }

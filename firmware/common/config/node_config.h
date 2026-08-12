@@ -168,8 +168,12 @@ struct NodeConfig {
     uint8_t channels = AUDIO_CHANNELS;
 
     // --- DSP ---
-    int masterVolume = 50;        // 0..100
+    int masterVolume = 50;        // 0..100 (общая громкость)
     bool mute = false;
+    // Покомпонентные громкости (C2.2, ТЗ §7.5): 0..100, множители к master.
+    int leftVolume = 50;
+    int rightVolume = 50;
+    int subVolume = 50;
     int crossoverHz = kCrossoverDefaultHz;
     int delayLeftMs = AUDIO_DELAY_LEFT_MS;
     int delayRightMs = AUDIO_DELAY_RIGHT_MS;
@@ -213,6 +217,12 @@ struct NodeConfig {
     void clamp() {
         if (masterVolume < kVolumeMin) masterVolume = kVolumeMin;
         if (masterVolume > kVolumeMax) masterVolume = kVolumeMax;
+        if (leftVolume < kVolumeMin) leftVolume = kVolumeMin;
+        if (leftVolume > kVolumeMax) leftVolume = kVolumeMax;
+        if (rightVolume < kVolumeMin) rightVolume = kVolumeMin;
+        if (rightVolume > kVolumeMax) rightVolume = kVolumeMax;
+        if (subVolume < kVolumeMin) subVolume = kVolumeMin;
+        if (subVolume > kVolumeMax) subVolume = kVolumeMax;
         if (crossoverHz < kCrossoverMinHz) crossoverHz = kCrossoverMinHz;
         if (crossoverHz > kCrossoverMaxHz) crossoverHz = kCrossoverMaxHz;
         if (delayLeftMs < kMinDelayMs) delayLeftMs = kMinDelayMs;
