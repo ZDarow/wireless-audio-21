@@ -46,16 +46,17 @@ wireless-audio-21/
 │   │   ├── audio/    crossover.h, delay_line.h, volume_control.h,
 │   │   │            pcm_pipeline.h, jitter_buffer.h, udp_audio_receiver.h,
 │   │   │            i2s_output.h
-│   │   ├── transport/ audio_packet.h, espnow.h, udp_transport.h, udp_audio_packet.h
+│   │   ├── transport/ audio_packet.h, espnow.h, udp_transport.h,
+│   │   │            udp_audio_packet.h, broadcast_ip.h
 │   │   ├── ui/       display.h, encoder.h
-│   │   ├── web/      logs.h, wifi_store.h
+│   │   ├── web/      auth.h, internet_check.h, logs.h, wifi_store.h
 │   │   └── util/     logger.h, timing.h
-│   ├── master_s3/    src/main.cpp, include/master_s3_config.h
-│   ├── master/       src/main.cpp, include/web_server.h (legacy A2DP-стенд)
+│   ├── master_s3/    src/main.cpp, include/master_s3_config.h (целевой, S3)
+│   ├── master/       src/main.cpp, include/web_server.h (общий Web UI, legacy A2DP)
 │   └── satellite/    src/main.cpp
 ├── scripts/                    # generate_config.py, flash_master.sh, flash_satellite.sh
-├── test/                       # host-тесты (make test)
-└── docs/                       # PLAN.md, TASKS.md, architecture.md, hardware.md, wiring.md
+├── test/                       # host-тесты (make test) + stubs/
+└── docs/                       # PLAN, TASKS, architecture, hardware, wiring, REPO_AUDIT
 ```
 
 ## Быстрый старт
@@ -103,15 +104,29 @@ GET  /api/status            # состояние узла (JSON)
 PUT  /api/volume            # {"volume":60} | {"channel":"sub","volume":50} | {"mute":true}
 PUT  /api/crossover         # {"hz":90}
 PUT  /api/delay             # {"channel":"left","ms":10}
+POST /api/mute              # {"mute":true}
 POST /api/transport         # {"mode":"espnow"}
 POST /api/pair              # {"side":"left","mac":"AA:BB:CC:DD:EE:01"}
 POST /api/save              # сохранить в NVS
-POST /api/reboot            # перезагрузка
+POST /api/system/reboot     # перезагрузка
+POST /api/system/factory_reset  # сброс к заводским настройкам
+GET  /api/system/config/export  # экспорт конфига (JSON)
+POST /api/system/config/import  # импорт конфига (JSON)
+GET  /api/wifi/status       # состояние Wi-Fi
+GET  /api/wifi/scan         # скан сетей
+POST /api/wifi/connect      # {"ssid","password"}
+POST /api/wifi/save|forget  # управление профилями
+GET  /api/wifi/profiles     # сохранённые сети
+GET  /api/net/internet      # статус интернета
 GET  /api/logs?level=1&module=WIFI   # логи с фильтрами
 GET  /api/diagnostics       # heap/PSRAM/cpu_load/uptime
+POST /api/login|logout      # аутентификация (SHA-256+соль, CSRF, rate limit)
+POST /api/update            # OTA-прошивка (с прогресс-баром)
 ```
 
-Готовые примеры запросов для REST Client (VS Code): [docs/api.http](docs/api.http).
+Web UI доступен только из локальной подсети (STA/AP); API защищён CSRF-токеном
+и rate limit. Готовые примеры запросов для REST Client (VS Code):
+[docs/api.http](docs/api.http).
 
 ### 5. Serial-консоль мастера
 
@@ -139,3 +154,4 @@ reboot
 - [docs/hardware.md](docs/hardware.md) — железо, GPIO, питание
 - [docs/wiring.md](docs/wiring.md) — схемы подключения
 - [docs/TASKS.md](docs/TASKS.md) — файл задач (техдолг, тесты, фичи)
+- [docs/REPO_AUDIT.md](docs/REPO_AUDIT.md) — аудит репозитория (стандарты, безопасность, ресурсы для лендинга)

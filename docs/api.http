@@ -24,6 +24,13 @@ Content-Type: application/json
 
 ### Выход (сбрасывает сессию)
 POST {{baseUrl}}/api/logout
+
+### Установка пароля администратора (при authEnabled, до первого логина)
+POST {{baseUrl}}/api/admin/setup
+Content-Type: application/json
+X-CSRF-Token: {{csrfToken}}
+
+{"password": "super-secret"}
 Content-Type: application/json
 X-CSRF-Token: {{csrfToken}}
 
@@ -109,6 +116,13 @@ Content-Type: application/json
 X-CSRF-Token: {{csrfToken}}
 
 {"volume": 150}
+
+### Громкость канала sub 50 (PUT; каналы left/right/sub, C2.2)
+PUT {{baseUrl}}/api/volume
+Content-Type: application/json
+X-CSRF-Token: {{csrfToken}}
+
+{"channel": "sub", "volume": 50}
 
 ### Кроссовер 90 Гц (PUT; поле crossover_hz, 70..120)
 PUT {{baseUrl}}/api/crossover

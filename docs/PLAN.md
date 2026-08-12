@@ -79,58 +79,68 @@ Smartphone (A2DP / Wi-Fi)
 
 ```
 wireless-audio-21/
-├── platformio.ini              # 3 env: master_a2dp, satellite_left/right
-├── config.example.env          # переменные окружения
-├── config.example.h            # ручная конфигурация
+├── platformio.ini              # env: master_s3_wifi, satellite_s3_left/right (+ legacy)
+├── platformio.master.ini       # master_s3_wifi: изолированный core 3.x (pioarduino)
+├── config.example.env          # переменные окружения → generated_config.h
+├── config.example.h            # ручной аналог (синхронизирован, T6)
 ├── firmware/
 │   ├── common/                 # header-only, общий код
-│   │   ├── config/  node_config.h, storage.h
-│   │   ├── audio/   crossover.h, delay_line.h, volume_control.h, pcm_pipeline.h
-│   │   ├── transport/ audio_packet.h, espnow.h, udp_transport.h
-│   │   ├── ui/       display.h, encoder.h
+│   │   ├── config/   node_config.h, storage.h (NVS, миграции v1..v4)
+│   │   ├── audio/    crossover.h, delay_line.h, volume_control.h, pcm_pipeline.h,
+│   │   │            jitter_buffer.h, udp_audio_receiver.h, i2s_output.h
+│   │   ├── transport/ audio_packet.h, espnow.h, udp_transport.h,
+│   │   │            udp_audio_packet.h, broadcast_ip.h
+│   │   ├── web/      auth.h, internet_check.h, logs.h, wifi_store.h
+│   │   ├── ui/       display.h, encoder.h (для F12, Этап 4)
 │   │   └── util/     logger.h, timing.h
-│   ├── master/  include/master_config.h, src/main.cpp
-│   └── satellite/ include/satellite_config.h, src/main.cpp (TODO)
-├── scripts/                    # generate_config.py, flash_*.sh (TODO)
-├── test/                       # audio_filter_test, delay_line_test, transport_packet_test (TODO)
-├── docs/                       # architecture.md, hardware.md, wiring.md (TODO)
-└── README.md                   # (TODO)
+│   ├── master_s3/  src/main.cpp, include/master_s3_config.h   # целевой мастер (S3)
+│   ├── master/     src/main.cpp, include/web_server.h         # legacy A2DP-стенд (C0.2)
+│   └── satellite/  src/main.cpp                               # сателлиты (S3 + legacy)
+├── scripts/                    # generate_config.py, flash_master.sh, flash_satellite.sh
+├── test/                       # host-тесты (make test) + stubs/
+├── docs/                       # PLAN, TASKS, architecture, hardware, wiring, REPO_AUDIT
+├── .github/workflows/ci.yml    # CI: host-тесты + сборка S3
+└── README.md
 ```
 
 ---
 
 ## 4. Поэтапный план
 
-### Этап 1 — Каркас и общий код (текущий)
+### Этап 1 — Каркас и общий код
 - [x] Структура каталогов
-- [x] `platformio.ini` (3 env)
+- [x] `platformio.ini` (6 env: S3-целевые + legacy-стенд)
 - [x] `config.example.env` / `config.example.h`
 - [x] `common/config`: `node_config.h`, `storage.h`
 - [x] `common/util`: `logger.h`, `timing.h`
-- [x] `common/audio`: `crossover.h`, `delay_line.h`, `volume_control.h`, `pcm_pipeline.h`, `jitter_buffer.h`
-- [x] `common/transport`: `audio_packet.h`, `espnow.h`, `udp_transport.h`
-- [x] `common/ui`: `display.h`, `encoder.h`
-- [x] `master/main.cpp` (A2DP + DSP + батчевый TX + I2S + консоль)
-- [x] `satellite/main.cpp` (приём + jitter + задержка + I2S)
+- [x] `common/audio`: `crossover.h`, `delay_line.h`, `volume_control.h`, `pcm_pipeline.h`, `jitter_buffer.h`, `udp_audio_receiver.h`, `i2s_output.h`
+- [x] `common/transport`: `audio_packet.h`, `espnow.h`, `udp_transport.h`, `udp_audio_packet.h`, `broadcast_ip.h`
+- [x] `common/web`: `auth.h`, `internet_check.h`, `logs.h`, `wifi_store.h`
+- [x] `common/ui`: `display.h`, `encoder.h` (зарезервированы для F12)
+- [x] `master_s3/main.cpp` (Wi-Fi UDP + DSP + канальные громкости + батчевый TX + I2S + консоль)
+- [x] `master/main.cpp` (legacy A2DP-стенд, C0.2)
+- [x] `satellite/main.cpp` (приём + jitter + задержка + громкость/fade + I2S)
 
 ### Этап 2 — Скрипты и тесты
 - [x] `scripts/generate_config.py` (config.env → generated_config.h)
-- [x] `scripts/flash_master.sh`, `scripts/flash_satellite.sh`
+- [x] `scripts/flash_master.sh`, `scripts/flash_satellite.sh` (S3-целевые, C6.4)
 - [x] `test/audio_filter_test.cpp` (host: кроссовер LR4, volume, delay, jitter, pipeline)
 - [x] `test/transport_packet_test.cpp` (host: формат пакета, границы)
-- [x] `test/Makefile` (автозависимости -MMD, make test)
+- [x] `test/Makefile` (автозависимости -MMD, make test) + `test/stubs/` (T21)
 
 ### Этап 3 — Документация
 - [x] `README.md`
-- [x] `docs/PLAN.md`
-- [ ] `docs/architecture.md`, `docs/hardware.md`, `docs/wiring.md`
+- [x] `docs/PLAN.md`, `docs/architecture.md`, `docs/hardware.md`, `docs/wiring.md`, `docs/TASKS.md`
+- [x] `docs/REPO_AUDIT.md` (аудит репозитория, 12.08.2026)
 
 ### Этап 4 — Расширения (следующие итерации)
-- [x] REST API + Web UI (встроенный WebServer ESP32 + ArduinoJson)
-- [ ] OLED-меню + энкодер
-- [ ] Wi-Fi UDP источник
-- [ ] Синхронизация воспроизведения (timestamp в пакете)
-- [ ] Защита от щелчков при включении/остановке (fade-in/out)
+- [x] REST API + Web UI (встроенный WebServer ESP32 + ArduinoJson, auth + CSRF)
+- [x] Wi-Fi UDP источник (мастер-S3, magic 0xA210, §10)
+- [x] TX аудио мастер→сателлиты (ESP-NOW/UDP, батч 117, C3.1/C3.2)
+- [x] Канальные громкости L/R/Sub (C2.2), fade-in/out (C3.5)
+- [x] OTA с прогресс-баром (C5.6), доступ из локальной подсети (C5.7)
+- [ ] OLED-меню + энкодер (F12/C4.x)
+- [ ] Синхронизация воспроизведения — коррекция дрейфа (C3.4)
 
 ---
 
