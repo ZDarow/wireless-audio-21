@@ -9,9 +9,9 @@ CXXFLAGS ?= -std=c++17 -Wall -Wextra -O2
 # T21: заглушки Arduino вынесены в stubs/ — системное имя Arduino.h больше не
 # перекрывается файлом в test/ (риск подхвата не той версии заголовка).
 INC       = -Istubs -I../firmware/common/audio -I../firmware/common/transport \
-            -I../firmware/common/util -I../firmware/common/config
+            -I../firmware/common/util -I../firmware/common/config -I../firmware/common/web
 
-TESTS = audio_filter_test transport_packet_test util_test udp_audio_receiver_test
+TESTS = audio_filter_test transport_packet_test util_test udp_audio_receiver_test auth_test
 BINS  = $(addsuffix _bin,$(TESTS))
 DEPS  = $(addsuffix .d,$(TESTS))
 

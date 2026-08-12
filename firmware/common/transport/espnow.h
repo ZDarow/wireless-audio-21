@@ -24,6 +24,14 @@ public:
     bool begin() {
         if (esp_now_init() != ESP_OK) return false;
 
+        // Ключи шифрования (REPO_AUDIT V1): PMK обязателен до добавления
+        // шифрованных пиров; длина строго 16 байт.
+        static_assert(sizeof(AUDIO_ESPNOW_PMK) - 1 == 16, "AUDIO_ESPNOW_PMK: ровно 16 байт");
+        static_assert(sizeof(AUDIO_ESPNOW_LMK) - 1 == 16, "AUDIO_ESPNOW_LMK: ровно 16 байт");
+        if (esp_now_set_pmk(reinterpret_cast<const uint8_t*>(AUDIO_ESPNOW_PMK)) != ESP_OK) {
+            return false;
+        }
+
         // ESP-IDF требует зарегистрированный peer для broadcast-отправки:
         // без записи FF:FF:FF:FF:FF:FF esp_now_send() возвращает
         // ESP_ERR_ESPNOW_NOT_FOUND. Пир с channel=0 использует текущий канал.
@@ -31,7 +39,8 @@ public:
         memset(bc.peer_addr, 0xFF, 6);
         bc.channel = 0;
         bc.ifidx = WIFI_IF_STA;
-        bc.encrypt = false;
+        bc.encrypt = true;
+        memcpy(bc.lmk, AUDIO_ESPNOW_LMK, 16);
         esp_now_add_peer(&bc);
 
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
@@ -75,13 +84,16 @@ public:
         return true;
     }
 
-    // Добавить пира по MAC (сателлит или мастер).
+    // Добавить пира по MAC (сателлит или мастер). Шифрование включено
+    // (encrypt + LMK) — ESP-NOW без шифрования был открытой уязвимостью
+    // (REPO_AUDIT V1): любой ESP32 в эфире мог подписаться на аудиопоток.
     bool addPeer(const MacAddr& mac) {
         esp_now_peer_info_t peer = {};
         memcpy(peer.peer_addr, mac.bytes, 6);
         peer.channel = 0;
         peer.ifidx = WIFI_IF_STA;
-        peer.encrypt = false;
+        peer.encrypt = true;
+        memcpy(peer.lmk, AUDIO_ESPNOW_LMK, 16);
         return esp_now_add_peer(&peer) == ESP_OK;
     }
 

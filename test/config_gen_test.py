@@ -28,6 +28,8 @@ AUDIO_WIFI_AP_PASSWORD=audio21master
 AUDIO_WIFI_SSID=My "Quoted" Net\\WithSlash
 AUDIO_WIFI_PASSWORD=p@ss"word
 AUDIO_HOSTNAME=audio-master
+AUDIO_ESPNOW_PMK=audio21-espnow-1
+AUDIO_ESPNOW_LMK=audio21-espnow-2
 AUDIO_UDP_PORT=5004
 AUDIO_LEFT_SAT_MAC=AA:BB:CC:DD:EE:01
 AUDIO_RIGHT_SAT_MAC=0a:1b:2c:3d:4e:5f
@@ -62,6 +64,8 @@ EXPECTED = {
     'AUDIO_WIFI_AP_SSID': '"Audio21-Master"',
     'AUDIO_WIFI_AP_PASSWORD': '"audio21master"',
     'AUDIO_HOSTNAME': '"audio-master"',
+    'AUDIO_ESPNOW_PMK': '"audio21-espnow-1"',
+    'AUDIO_ESPNOW_LMK': '"audio21-espnow-2"',
     # числа
     "AUDIO_UDP_PORT": "5004",
     "AUDIO_SAMPLE_RATE": "48000",

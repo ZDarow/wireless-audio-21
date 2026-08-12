@@ -318,6 +318,15 @@ static void enableNapt() {
 #endif
 }
 
+// S-1 (REPO_AUDIT V3): предупреждение, пока AP мастера использует заводской
+// пароль из дефолтов — сменить через Web UI (Wi-Fi → AP) или config.env.
+static void logDefaultPasswordWarning() {
+    if (strcmp(g_cfg.wifiApPassword, AUDIO_WIFI_AP_PASSWORD) == 0) {
+        Logger::warn("wifi",
+                     "AP password is DEFAULT ('audio21master') — change it via Web UI / config.env!");
+    }
+}
+
 // Поднять AP настройки (используется при неудачном STA-подключении).
 static bool startSetupAp() {
     if (WiFi.getMode() == WIFI_AP) return true; // AP уже поднят (ApSta)
@@ -332,6 +341,7 @@ static bool startSetupAp() {
     Logger::infof("wifi", "setup AP '%s' on channel %d, IP: %s",
                   g_cfg.wifiApSsid, kDefaultWifiChannel,
                   WiFi.softAPIP().toString().c_str());
+    logDefaultPasswordWarning();
     return true;
 }
 
@@ -367,6 +377,7 @@ static bool initWifi() {
         Logger::infof("wifi", "AP '%s' on channel %d, IP: %s",
                       g_cfg.wifiApSsid, kDefaultWifiChannel,
                       WiFi.softAPIP().toString().c_str());
+        logDefaultPasswordWarning();
         return true;
     }
 

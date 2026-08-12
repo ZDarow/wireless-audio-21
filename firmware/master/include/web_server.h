@@ -331,6 +331,10 @@ private:
         }
         doc["system"]["auth_enabled"] = m_cfg.authEnabled;
         doc["system"]["authed"] = isAuthed(s);
+        // S-1: дефолтный пароль AP мастера не сменён — требование смены
+        // перед публичным использованием (REPO_AUDIT V3/S-1).
+        doc["system"]["default_ap_password"] =
+            strcmp(m_cfg.wifiApPassword, AUDIO_WIFI_AP_PASSWORD) == 0;
         if (m_cfg.authEnabled && isAuthed(s)) {
             char csrf[65];
             Auth::csrfToken(m_sessionToken, csrf);
@@ -1031,6 +1035,11 @@ const char MasterWebServer::kPageHtml[] = R"rawliteral(
 </head>
 <body>
 <h1>Audio 2.1 Master</h1>
+<div id="defaultPwBanner" class="banner" style="display:none">
+  <b>Внимание:</b> используется заводской пароль точки доступа
+  (<span class="mono">audio21master</span>). Смените его в настройках
+  Wi-Fi мастера — любой в зоне действия может подключиться к системе.
+</div>
 <div id="loginBanner" class="banner" style="display:none">
   <h2>Требуется вход</h2>
   <label>Пароль администратора</label>
@@ -1564,6 +1573,8 @@ $('uBtn').onclick = () => {
 async function bootCheck() {
   try {
     const s = await api('/api/status');
+    // S-1: предупреждение о заводском пароле AP (пока не сменён).
+    if (s.system.default_ap_password) { $('defaultPwBanner').style.display = 'block'; }
     if (s.system.authed) { hideLogin(); }
     else if (!s.system.auth_enabled) {
       const pass = prompt('Первый запуск. Задайте пароль администратора (мин 4 символа):');

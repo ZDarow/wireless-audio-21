@@ -21,6 +21,11 @@
 #define AUDIO_HOSTNAME       "audio-master"
 #define AUDIO_UDP_PORT       5004
 
+// --- ESP-NOW шифрование ---
+// Ровно 16 символов; должны совпадать у мастера и всех сателлитов.
+#define AUDIO_ESPNOW_PMK     "audio21-espnow-1"
+#define AUDIO_ESPNOW_LMK     "audio21-espnow-2"
+
 // --- Сателлиты (MAC) ---
 #define AUDIO_LEFT_SAT_MAC   {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01}
 #define AUDIO_RIGHT_SAT_MAC  {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x02}

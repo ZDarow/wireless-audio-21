@@ -124,18 +124,119 @@ inline void sha256Hex(const void* data, size_t n, char out[65]) {
     Sha256::hexEncode(digest, out);
 }
 
+// HMAC-SHA256 (RFC 2104): out — 32 байта.
+inline void hmacSha256(const uint8_t* key, size_t keyLen,
+                       const uint8_t* msg, size_t msgLen, uint8_t out[32]) {
+    uint8_t k[64] = {};
+    if (keyLen > 64) {
+        Sha256 ctx;
+        ctx.init();
+        ctx.update(key, keyLen);
+        ctx.final(k);  // k[0..32] = SHA-256(key)
+    } else {
+        memcpy(k, key, keyLen);
+    }
+    uint8_t ipad[64], opad[64];
+    for (int i = 0; i < 64; i++) {
+        ipad[i] = k[i] ^ 0x36;
+        opad[i] = k[i] ^ 0x5c;
+    }
+    Sha256 inner;
+    inner.init();
+    inner.update(ipad, 64);
+    inner.update(msg, msgLen);
+    uint8_t idig[32];
+    inner.final(idig);
+    Sha256 outer;
+    outer.init();
+    outer.update(opad, 64);
+    outer.update(idig, 32);
+    outer.final(out);
+}
+
+// PBKDF2-HMAC-SHA256 (RFC 2898), dkLen = 20 байт (один блок, 160 бит).
+// out — 20 байт.
+inline void pbkdf2HmacSha256(const char* password, const char* salt,
+                             uint32_t iterations, uint8_t out[20]) {
+    const size_t plen = strlen(password);
+    const size_t slen = strlen(salt);
+    uint8_t u[32];
+    // U1 = HMAC(P, S || INT(1)), INT — 4-байта big-endian.
+    uint8_t block[128 + 4] = {};
+    memcpy(block, salt, slen);
+    block[slen + 3] = 1;
+    hmacSha256(reinterpret_cast<const uint8_t*>(password), plen, block, slen + 4, u);
+    uint8_t t[32];
+    memcpy(t, u, 32);
+    for (uint32_t i = 1; i < iterations; i++) {
+        hmacSha256(reinterpret_cast<const uint8_t*>(password), plen, u, 32, u);
+        for (int j = 0; j < 32; j++) t[j] ^= u[j];
+    }
+    memcpy(out, t, 20);
+}
+
+// Hex-кодирование произвольной длины (out: 2*n+1 байт).
+inline void hexEncodeN(const uint8_t* data, size_t n, char* out) {
+    static const char* hex = "0123456789abcdef";
+    for (size_t i = 0; i < n; i++) {
+        out[i * 2] = hex[data[i] >> 4];
+        out[i * 2 + 1] = hex[data[i] & 0x0f];
+    }
+    out[n * 2] = '\0';
+}
+
 // Авторизация: пароль, сессия, CSRF.
 class Auth {
 public:
     static constexpr int kTokenLen = 32;
     static constexpr int kMaxSessionAgeSec = 3600;
 
-    // Фиксированная соль приложения (SHA-256(password + salt), ТЗ §22.3).
-    // Не секрет, но исключает rainbow-таблицы для коротких паролей.
+    // Соль приложения для PBKDF2 (см. hashPassword). Не секрет — защищает
+    // от rainbow-таблиц; случайная per-device соль — техдолг T22 (NVS v5).
     static constexpr const char* kSalt = "audio21-master-salt-v1";
 
-    // Вычислить хэш пароля: hex SHA-256(kSalt + password). out — 65 байт.
+    // Итерации PBKDF2-HMAC-SHA256 (REPO_AUDIT V2): замедляет брутфорс в
+    // 10000 раз относительно одиночного SHA-256 при том же пароле.
+    static constexpr uint32_t kPbkdf2Iterations = 10000;
+    // dkLen = 20 байт (160 бит) — хэш умещается в поле adminPasswordHash[65]:
+    // "pbkdf2$10000$" (13) + 40 hex + null = 54. Случайная соль потребует
+    // расширения поля — техдолг (T22, миграция NVS v5).
+    static constexpr int kPbkdf2DkLen = 20;
+
+    // Вычислить хэш пароля: "pbkdf2$<итерации>$<hex(PBKDF2)>". out — 65 байт.
     static void hashPassword(const char* password, char out[65]) {
+        uint8_t dk[kPbkdf2DkLen];
+        pbkdf2HmacSha256(password, kSalt, kPbkdf2Iterations, dk);
+        char hex[kPbkdf2DkLen * 2 + 1];
+        hexEncodeN(dk, kPbkdf2DkLen, hex);
+        snprintf(out, 65, "pbkdf2$%u$%s", (unsigned)kPbkdf2Iterations, hex);
+    }
+
+    // Проверить пароль против сохранённого хэша. Поддерживает оба формата:
+    // pbkdf2$ (текущий) и 64-hex SHA-256 (v1, обратная совместимость —
+    // сохраняется до первой смены пароля, после неё пишется pbkdf2$).
+    static bool checkPassword(const char* password, const char* savedHashHex) {
+        if (!savedHashHex || !savedHashHex[0]) return false;
+        if (strncmp(savedHashHex, "pbkdf2$", 7) == 0) {
+            uint32_t iter = 0;
+            const char* p = savedHashHex + 7;
+            while (*p && *p != '$') {
+                if (*p < '0' || *p > '9') return false;
+                iter = iter * 10 + (uint32_t)(*p - '0');
+                p++;
+            }
+            if (*p != '$' || iter == 0) return false;
+            const char* hex = p + 1;
+            if (strlen(hex) != (size_t)kPbkdf2DkLen * 2) return false;
+            uint8_t dk[kPbkdf2DkLen];
+            pbkdf2HmacSha256(password, kSalt, iter, dk);
+            char computed[kPbkdf2DkLen * 2 + 1];
+            hexEncodeN(dk, kPbkdf2DkLen, computed);
+            return strcmp(computed, hex) == 0;
+        }
+        // Старый формат v1: SHA-256(kSalt + password), 64 hex.
+        if (strlen(savedHashHex) != 64) return false;
+        char hash[65];
         char input[128];
         int n = 0;
         size_t slen = strlen(kSalt);
@@ -145,14 +246,7 @@ public:
         size_t plen = strlen(password);
         if (plen > sizeof(input) - (size_t)n - 1) plen = sizeof(input) - (size_t)n - 1;
         memcpy(input + n, password, plen);
-        sha256Hex(input, (size_t)n + plen, out);
-    }
-
-    // Проверить пароль против сохранённого hex-хэша.
-    static bool checkPassword(const char* password, const char* savedHashHex) {
-        if (!savedHashHex || strlen(savedHashHex) != 64) return false;
-        char hash[65];
-        hashPassword(password, hash);
+        sha256Hex(input, (size_t)n + plen, hash);
         return strcmp(hash, savedHashHex) == 0;
     }
 

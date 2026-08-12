@@ -50,6 +50,15 @@
 #ifndef AUDIO_ESPNOW_CHANNEL
 #define AUDIO_ESPNOW_CHANNEL 6
 #endif
+// Ключи шифрования ESP-NOW (REPO_AUDIT V1): PMK (мастер-ключ) и LMK
+// (локальный ключ пиров) — строго 16 байт. Должны совпадать у мастера и
+// всех сателлитов; смените дефолты в config.env перед установкой на железо.
+#ifndef AUDIO_ESPNOW_PMK
+#define AUDIO_ESPNOW_PMK "audio21-espnow-1"
+#endif
+#ifndef AUDIO_ESPNOW_LMK
+#define AUDIO_ESPNOW_LMK "audio21-espnow-2"
+#endif
 
 // Проверка интернета (ТЗ_Веб §7)
 #ifndef AUDIO_NET_CHECK_ENABLED
