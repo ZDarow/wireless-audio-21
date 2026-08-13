@@ -18,6 +18,7 @@
 #include "delay_line.h"
 #include "jitter_buffer.h"
 #include "volume_control.h"
+#include "drift_correction.h"
 #include "espnow.h"
 #include "udp_transport.h"
 #include "audio_packet.h"
@@ -42,6 +43,9 @@ static uint32_t g_lastRxMs = 0;
 static uint32_t g_packetsRx = 0;
 static uint32_t g_lastHeartbeatMs = 0;
 static uint32_t g_heartbeatsSent = 0;
+
+// C3.4: дрейф-коррекция по timestampMs из пакетов мастера.
+static DriftCorrector g_drift;
 
 // Период heartbeat (discovery-response) мастеру — статус online даже без аудио.
 // Общая константа в audio_packet.h (интервал < таймаут мастера).
@@ -90,14 +94,19 @@ static void onPacket(const uint8_t* data, size_t size) {
     size_t payloadSize;
     if (!parsePacket(data, size, hdr, payload, payloadSize)) return;
 
-    // Игнорируем пакеты не нашего канала.
     if (hdr.channel != kMyChannel) return;
 
     g_masterOnline = true;
     g_lastRxMs = millis();
     g_packetsRx++;
 
-    // payloadSize кратен 2 (int16). Кладём в jitter buffer.
+    if (hdr.timestampMs != 0) {
+        int32_t suggested = g_drift.process(hdr.timestampMs, millis());
+        if (suggested > 0) {
+            g_jitter->setTargetMs((uint32_t)suggested, g_cfg.sampleRate);
+        }
+    }
+
     size_t nSamples = payloadSize / sizeof(int16_t);
     g_jitter->push(reinterpret_cast<const int16_t*>(payload), nSamples);
 }
@@ -170,6 +179,7 @@ static void handleConsoleCommand(const String& line) {
         }
         Serial.printf("jitter_available: %u\n", g_jitter->available());
         Serial.printf("delay_ms: %u\n", g_delay->delayMs());
+        Serial.printf("drift_median_ms: %d\n", (int)g_drift.medianMs());
         return;
     }
 

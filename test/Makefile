@@ -11,7 +11,7 @@ CXXFLAGS ?= -std=c++17 -Wall -Wextra -O2
 INC       = -Istubs -I../firmware/common/audio -I../firmware/common/transport \
             -I../firmware/common/util -I../firmware/common/config -I../firmware/common/web
 
-TESTS = audio_filter_test transport_packet_test util_test udp_audio_receiver_test auth_test
+TESTS = audio_filter_test transport_packet_test util_test udp_audio_receiver_test auth_test drift_correction_test
 BINS  = $(addsuffix _bin,$(TESTS))
 DEPS  = $(addsuffix .d,$(TESTS))
 
