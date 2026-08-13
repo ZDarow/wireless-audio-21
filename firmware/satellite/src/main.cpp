@@ -10,6 +10,7 @@
 #include <WiFi.h>
 #include <esp_system.h>
 #include <esp_wifi.h>
+#include <freertos/queue.h>
 
 #include "node_config.h"
 #include "storage.h"
@@ -46,6 +47,18 @@ static uint32_t g_heartbeatsSent = 0;
 
 // C3.4: дрейф-коррекция по timestampMs из пакетов мастера.
 static DriftCorrector g_drift;
+
+// A9: очередь FreeRTOS для RX ESP-NOW — коллбек только копирует пакет
+// в пул и ставит индекс в очередь; обработка (parsePacket + jitter push)
+// происходит в loop, чтобы не держать Wi-Fi task.
+static constexpr size_t kRxPoolSize = 8;
+struct RxPacket {
+    uint16_t size;
+    uint8_t data[250];
+};
+static QueueHandle_t g_rxQueue = nullptr;
+static RxPacket g_rxPool[kRxPoolSize];
+static uint8_t g_rxPoolIdx = 0;
 
 // Период heartbeat (discovery-response) мастеру — статус online даже без аудио.
 // Общая константа в audio_packet.h (интервал < таймаут мастера).
@@ -85,10 +98,22 @@ static void writeSample(int16_t sample) {
 }
 
 // ---------------------------------------------------------------------------
-// Приём пакетов от мастера
-// ---------------------------------------------------------------------------
+// A9: коллбек ESP-NOW — только копирует пакет в пул и ставит индекс в очередь.
+// Обработка (parsePacket + jitter push) происходит в loop, чтобы не держать
+// Wi-Fi task.
+static void onPacketFromIsr(const uint8_t* data, size_t size) {
+    if (!g_rxQueue || size > sizeof(g_rxPool[0].data)) return;
+    uint8_t idx = g_rxPoolIdx++;
+    if (g_rxPoolIdx == kRxPoolSize) g_rxPoolIdx = 0;
+    g_rxPool[idx].size = (uint16_t)size;
+    memcpy(g_rxPool[idx].data, data, size);
+    BaseType_t hpw = pdFALSE;
+    xQueueSendFromISR(g_rxQueue, &idx, &hpw);
+    if (hpw) portYIELD_FROM_ISR();
+}
 
-static void onPacket(const uint8_t* data, size_t size) {
+// Обработка принятого пакета (вызывается из loop, не из ISR).
+static void onPacketProcess(const uint8_t* data, size_t size) {
     AudioPacketHeader hdr;
     const uint8_t* payload;
     size_t payloadSize;
@@ -247,6 +272,10 @@ void setup() {
         WiFi.setSleep(false); // power save выключает приём ESP-NOW
         esp_wifi_set_channel(kEspNowChannel, WIFI_SECOND_CHAN_NONE);
         if (g_espnow.begin()) {
+            g_rxQueue = xQueueCreate(kRxPoolSize, sizeof(uint8_t));
+            if (!g_rxQueue) {
+                Logger::error("satellite", "rx queue create failed");
+            }
             g_espnow.setRxCallback([](const uint8_t* d, size_t s, const MacAddr& from) {
                 AudioPacketHeader hdr;
                 const uint8_t* payload;
@@ -256,7 +285,7 @@ void setup() {
                     onDiscoveryRequest(d, s, from);
                     return;
                 }
-                onPacket(d, s);
+                onPacketFromIsr(d, s);
             });
             Logger::info("satellite", "ESP-NOW ready");
         } else {
@@ -288,13 +317,22 @@ void loop() {
         sendHeartbeat();
     }
 
+    // A9: drain очереди RX ESP-NOW (обработка из loop, не из коллбека).
+    if (g_cfg.transport == TransportMode::EspNow && g_rxQueue) {
+        uint8_t idx;
+        while (xQueueReceive(g_rxQueue, &idx, 0) == pdTRUE) {
+            const RxPacket& pkt = g_rxPool[idx];
+            onPacketProcess(pkt.data, pkt.size);
+        }
+    }
+
     // UDP-режим: опрашиваем сокет. Discovery-запросы мастера обрабатываем
-    // отдельно (ответ unicast-ом), аудио — через onPacket.
+    // отдельно (ответ unicast-ом), аудио — через onPacketProcess.
     if (g_cfg.transport == TransportMode::Udp) {
         uint8_t buf[kMaxPacketSize];
         size_t n = g_udp.receive(buf, sizeof(buf));
         if (n > 0 && !g_udp.handleDiscovery(buf, n, g_udp.lastFrom())) {
-            onPacket(buf, n);
+            onPacketProcess(buf, n);
         }
     }
 
