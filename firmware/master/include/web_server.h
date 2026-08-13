@@ -312,7 +312,7 @@ private:
     // ------------------------------------------------------------------
     void handleStatus(WebServer& s) {
         JsonDocument doc;
-        doc["system"]["version"] = "0.2.0";
+        doc["system"]["version"] = "0.2.1";
         doc["system"]["hostname"] = m_cfg.hostname;
         doc["system"]["uptime_sec"] = millis() / 1000;
         doc["system"]["heap_free"] = ESP.getFreeHeap();

@@ -95,10 +95,11 @@
   Остаются: T1 (CI), B6/B7/B11/B12/B16 (legacy `master_a2dp`), B10 (IPv6 —
   осознанное ограничение), T15 (ITransport), T16 (перенос `web_server.h` в
   `common/web`), T17 (`console.h`), T19 (сателлиты на core 3.x), F12/F14
-  (OLED, синхронизация), C3.4 (дрейф-коррекция), C4.x, C5.7 (MAC-фильтр/
-  проверка источника UDP-аудио), ручная проверка звука на железе (§18).
+  (OLED, синхронизация), C4.x, C5.7 (MAC-фильтр/проверка источника UDP-аудио),
+  ручная проверка звука на железе (§18).
 - Открытые уязвимости (см. `docs/REPO_AUDIT.md`): закрыты V1 (ESP-NOW
-  шифрование PMK/LMK, ключи `AUDIO_ESPNOW_PMK/LMK`) и V2 (PBKDF2-HMAC-SHA256,
+  unicast шифрование PMK/LMK, ключи `AUDIO_ESPNOW_PMK/LMK`; broadcast
+  heartbeat/discovery остаётся открытым по докам ESP-IDF) и V2 (PBKDF2-HMAC-SHA256,
   10000 итераций; остаток — per-device соль в NVS v5). Остаётся: V4 — UDP-аудио
   без аутентификации источника (C5.7), V5 — OTA без подписи, S-1 — дефолтный
   AP-пароль (в прошивке предупреждение, сменить в config.env/Web UI).

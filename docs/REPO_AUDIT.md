@@ -61,7 +61,7 @@
 
 | # | Уязвимость | Severity | Где | Что делать |
 |---|-----------|----------|-----|------------|
-| V1 | **ESP-NOW без шифрования** (`encrypt=false`, LMK/PMK не заданы) | 🔴 Высокий | `espnow.h:34,84` | ✅ (12.08.2026: `esp_now_set_pmk()` + `encrypt=true` + LMK всем пирам, включая broadcast; ключи `AUDIO_ESPNOW_PMK/LMK` в конфиге — дефолты сменить перед установкой) |
+| V1 | **ESP-NOW без шифрования** (`encrypt=false`, LMK/PMK не заданы) | 🔴 Высокий | `espnow.h:34,84` | ✅ (частично: unicast шифрован `encrypt=true` + LMK, broadcast heartbeat/discovery остаётся открытым по докам ESP-IDF — аудио идёт unicast'ом C3.1; ключи `AUDIO_ESPNOW_PMK/LMK` в конфиге) |
 | V2 | **Хэш пароля SHA-256(пароль + фиксированная публичная соль), без итераций; пароль ≥ 4 символа** | 🟠 Средний | `auth.h`, `web_server.h:901` | ✅ (12.08.2026: PBKDF2-HMAC-SHA256, 10000 итераций, формат `pbkdf2$<n>$<hex>`; старый SHA-256-формат принимается до смены пароля. **Остаток**: per-device соль из `esp_random` и мин. пароль 8 — поле `adminPasswordHash[65]` не вмещает соль, нужна миграция NVS v5 — техдолг) |
 | V3 | **`wifiPassword`/`wifiApPassword` открытым текстом в NVS** | 🟠 Средний | `storage.h:39-41` | Осознанное решение (нужен WiFi.begin). Для продакшена — включить flash encryption (esp_flash_encryption) + отметить в docs |
 | V4 | **UDP-аудио без аутентификации источника** (magic 0xA210 — не защита) | 🟠 Средний | `udp_audio_packet.h`, `master_s3/src/main.cpp` | Остаток C5.7: предустановленный общий ключ/токен в пакетах ИЛИ ограничение `remoteIP()` по известному источнику/подсети; шифровать PCM не обязательно (LAN) |

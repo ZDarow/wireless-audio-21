@@ -191,7 +191,7 @@ ESP-NOW/UDP RX → parsePacket → фильтр по каналу (left/right)
 
 ```json
 {
-  "system": { "version": "0.2.0", "hostname": "audio-master", "uptime_sec": 42,
+  "system": { "version": "0.2.1", "hostname": "audio-master", "uptime_sec": 42,
     "heap_free": 123456, "psram_free": 123456, "cpu_load_percent": 12,
     "mac": "AA:BB:CC:DD:EE:FF", "time": "2026-08-12T10:00:00",
     "auth_enabled": true, "authed": true, "csrf": "..." },
