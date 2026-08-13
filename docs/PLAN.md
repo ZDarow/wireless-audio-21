@@ -94,7 +94,7 @@ wireless-audio-21/
 │   │   ├── ui/       display.h, encoder.h (для F12, Этап 4)
 │   │   └── util/     logger.h, timing.h
 │   ├── master_s3/  src/main.cpp, include/master_s3_config.h   # целевой мастер (S3)
-│   ├── master/     src/main.cpp, include/web_server.h         # legacy A2DP-стенд (C0.2)
+│   ├── master/     src/main.cpp, common/web/web_server.h         # legacy A2DP-стенд (C0.2)
 │   └── satellite/  src/main.cpp                               # сателлиты (S3 + legacy)
 ├── scripts/                    # generate_config.py, flash_master.sh, flash_satellite.sh
 ├── test/                       # host-тесты (make test) + stubs/

@@ -43,7 +43,7 @@
 
 | # | Антипаттерн | Где | Риск | Рекомендация |
 |---|------------|-----|------|--------------|
-| A1 | **Монолит `web_server.h` (1594 стр.): C++ + HTML + CSS + JS в одном header** | `firmware/master/include/web_server.h` | Высокий: сложность, время компиляции, невозможно переиспользовать SPA | Разбить: HTML/CSS/JS → `PROGMEM`-массивы в отдельных `.inc`; класс → `.cpp`. Модуль `common/web/` (T16) |
+| A1 | **Монолит `web_server.h` (1594 стр.): C++ + HTML + CSS + JS в одном header** | `firmware/common/web/web_server.h` | Высокий: сложность, время компиляции, невозможно переиспользовать SPA | Разбить: HTML/CSS/JS → `PROGMEM`-массивы в отдельных `.inc`; класс → `.cpp`. Модуль `common/web/` (T16) |
 | A2 | **Header-only всё в `common/`** | `firmware/common/**` | Средний: перекомпиляция, нет ODR-контроля, риск дублирования символов | Оставить для DSP (embed-friendly), но транспорт/веб перевести на `.cpp` |
 | A3 | **Дублирование мастеров: `master/` (legacy) и `master_s3/`** | `firmware/master/src/main.cpp`, `firmware/master_s3/src/main.cpp` | Средний: два источника правды по Wi-Fi/web/audio | Legacy — стенд C0.2: заморозить, вынести общую логику (web, wifi) в `common/` (T15/T16), legacy оставить тонким |
 | A4 | **Глобальные `static`-состояния в `main.cpp`** | оба main.cpp | Средний: нет инкапсуляции, сложно тестировать | Сгруппировать в структуры `MasterApp`/`SatelliteApp` |

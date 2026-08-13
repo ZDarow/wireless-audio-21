@@ -3,7 +3,7 @@
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/).
 Версии — по [SemVer](https://semver.org/lang/ru/).
 
-## [0.2.1] — 2026-08-12 (фаза 1 аудита безопасности)
+## [0.2.1] — 2026-08-13 (фаза 1-2 аудита безопасности + синхронизация)
 
 ### Безопасность
 - ESP-NOW шифрование: PMK/LMK + `encrypt=true` (V1; ключи `AUDIO_ESPNOW_PMK/LMK`).
@@ -11,8 +11,15 @@
   старый формат принимается до смены пароля.
 - Предупреждение о заводском пароле AP: баннер Web UI + serial (S-1).
 
+### Рефакторинг / процессы
+- T16: перенос `web_server.h` из `master/include` → `common/web/` (общий модуль).
+- CI hardening: permissions, timeout-minutes, concurrency, SHA-пины actions.
+- LICENSE (GPL-3.0), dependabot, .yamllint, .editorconfig, .gitattributes.
+- Шаблоны issue/PR, SECURITY.md, CONTRIBUTING.md, CHANGELOG.md.
+
 ### Тесты
 - Новый host-тест `auth_test` (SHA-256, HMAC-SHA256 RFC 4231, PBKDF2 RFC 7914).
+- C3.4: дрейф-коррекция сателлита (`drift_correction.h`) + host-тест.
 
 ### Известные ограничения
 - Per-device соль PBKDF2 — техдолг (NVS v5).

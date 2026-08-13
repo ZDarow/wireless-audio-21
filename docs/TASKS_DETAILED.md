@@ -289,7 +289,7 @@ CI: `.github/workflows/ci.yml` (собирает master_s3_wifi + сателли
   2. В аудио-задаче: `PipelineOutput o = g_pipeline.process(l, r);` → `o.sub` в I2S мастера.
   3. Передать `&g_pipeline` в конструктор `MasterWebServer` вместо `nullptr`.
   4. Применить `g_cfg.masterVolume`/`mute`/`crossoverHz` из конфига.
-- **Файлы:** `master_s3/src/main.cpp`, `master/include/web_server.h` (тип параметра), `common/audio/pcm_pipeline.h`.
+- **Файлы:** `master_s3/src/main.cpp`, `common/web/web_server.h` (тип параметра), `common/audio/pcm_pipeline.h`.
 - **Зависимости:** C1.5.
 - **Критерий:** §18 Этап 3 — сабвуфер играет только НЧ (90 Гц LR4).
 - **Оценка:** 4 ч.
@@ -303,7 +303,7 @@ CI: `.github/workflows/ci.yml` (собирает master_s3_wifi + сателли
   2. В `PcmPipeline`: `setChannelVolumes(l, r, sub)` (после кроссовера) или `VolumeControl` на каждый выход.
   3. В `web_server.h`: `handleVolume` принимает `channel` (`master|left|right|sub`), `/api/status` отдаёт `audio.volume{master,left,right,sub}`.
   4. SPA: 4 слайдера.
-- **Файлы:** `common/config/node_config.h`, `common/audio/pcm_pipeline.h`, `master/include/web_server.h`, `master_s3/src/main.cpp`.
+- **Файлы:** `common/config/node_config.h`, `common/audio/pcm_pipeline.h`, `common/web/web_server.h`, `master_s3/src/main.cpp`.
 - **Зависимости:** C2.1.
 - **Критерий:** §19.3 — 4 громкости меняются и сохраняются после перезагрузки.
 - **Оценка:** 4 ч.
@@ -327,7 +327,7 @@ CI: `.github/workflows/ci.yml` (собирает master_s3_wifi + сателли
 - **План:**
   1. В `loop()` мастера: если `g_cfg` изменился — применить к pipeline (volume/mute/crossover/delays).
   2. Либо передать в `MasterWebServer` колбэк-интерфейс `AudioBackend` (`setVolume`, `setCrossoverHz`, `setDelay`), который вызывает pipeline напрямую.
-- **Файлы:** `master/include/web_server.h`, `master_s3/src/main.cpp`.
+- **Файлы:** `common/web/web_server.h`, `master_s3/src/main.cpp`.
 - **Зависимости:** C2.1–C2.3.
 - **Критерий:** слайдер громкости в Web UI слышимо меняет звук без reboot.
 - **Оценка:** 3 ч.
@@ -480,7 +480,7 @@ CI: `.github/workflows/ci.yml` (собирает master_s3_wifi + сателли
 - **План:**
   1. Завести `m_sessionStartMs` (фиксировать при логине/настройке администратора); в `isAuthed()`/`handleClient`: если `millis() - m_sessionStartMs > kMaxSessionAgeSec * 1000` — разлогинить (сбросить токен и cookie).
   2. Опционально: слайдинг-окно (продлевать при активности).
-- **Файлы:** `master/include/web_server.h`.
+- **Файлы:** `common/web/web_server.h`.
 - **Критерий:** через 3600 с без активности сессия недействительна.
 - **Оценка:** 2 ч.
 
@@ -491,7 +491,7 @@ CI: `.github/workflows/ci.yml` (собирает master_s3_wifi + сателли
 - **План:**
   1. Счётчик неудачных входов по IP клиента; после 5 неудач — блок 60 с (429).
   2. `/api/wifi/scan` — не чаще 1 раза в 10 с на IP.
-- **Файлы:** `master/include/web_server.h`.
+- **Файлы:** `common/web/web_server.h`.
 - **Критерий:** после N неудач логин отвечает 429.
 - **Оценка:** 3 ч.
 
@@ -502,7 +502,7 @@ CI: `.github/workflows/ci.yml` (собирает master_s3_wifi + сателли
   1. `g_logStorage[128][192]` = 24 КБ (или 256×192 = 48 КБ), в PSRAM при наличии.
   2. `GET /api/logs?limit=&level=&module=` — фильтрация по severity и категории.
   3. Не логировать пароли/полные HTTP-ответы (уже ограничено `kLineSize`).
-- **Файлы:** `master_s3/src/main.cpp`, `common/web/logs.h`, `master/include/web_server.h` (`handleLogs`).
+- **Файлы:** `master_s3/src/main.cpp`, `common/web/logs.h`, `common/web/web_server.h` (`handleLogs`).
 - **Критерий:** §13.4/§17.5: объём 16–64 КБ, фильтры работают.
 - **Оценка:** 3 ч.
 
@@ -512,7 +512,7 @@ CI: `.github/workflows/ci.yml` (собирает master_s3_wifi + сателли
 - **План:**
   1. Измерение idle-time задачи loop (`esp_timer_get_time()` между итерациями) → `cpu_load_percent`.
   2. В `/api/status` и SPA: `uptime`, `ntp_time` (из `time()`), `wifi_ssid`, `rssi`, `mac`.
-- **Файлы:** `master/include/web_server.h` (`handleStatus`), SPA-блок.
+- **Файлы:** `common/web/web_server.h` (`handleStatus`), SPA-блок.
 - **Критерий:** §5.2/§24.1 — метрики видны.
 - **Оценка:** 3 ч.
 
@@ -521,7 +521,7 @@ CI: `.github/workflows/ci.yml` (собирает master_s3_wifi + сателли
 - **Проблема:** `Update` (lib_deps) подключён, но прогресс в SPA не отображается.
 - **Требование:** ТЗВ §12.3–12.4.
 - **План:** при `Update.write` — слать `{progress}` через `WebServer` (poll `/api/ota/status` или SSE); в SPA — прогресс-бар.
-- **Файлы:** `master/include/web_server.h`, SPA.
+- **Файлы:** `common/web/web_server.h`, SPA.
 - **Критерий:** при OTA виден прогресс.
 - **Оценка:** 3 ч.
 
@@ -532,7 +532,7 @@ CI: `.github/workflows/ci.yml` (собирает master_s3_wifi + сателли
 - **План:**
   1. В Web: проверять `client().remoteIP()` — разрешены подсети AP (192.168.4.x) и STA.
   2. В `UdpAudioReceiver`: белый список IP/сетей источника (§17).
-- **Файлы:** `master/include/web_server.h`, `common/audio/udp_audio_receiver.h`.
+- **Файлы:** `common/web/web_server.h`, `common/audio/udp_audio_receiver.h`.
 - **Критерий:** доступ извне блокируется.
 - **Оценка:** 3 ч.
 

@@ -57,7 +57,7 @@ wireless-audio-21/
 │   │   ├── web/      auth.h, internet_check.h, logs.h, wifi_store.h
 │   │   └── util/     logger.h, timing.h
 │   ├── master_s3/    src/main.cpp, include/master_s3_config.h (целевой, S3)
-│   ├── master/       src/main.cpp, include/web_server.h (общий Web UI, legacy A2DP)
+│   ├── master/       src/main.cpp, common/web/web_server.h (общий Web UI, legacy A2DP)
 │   └── satellite/    src/main.cpp
 ├── scripts/                    # generate_config.py, flash_master.sh, flash_satellite.sh
 ├── test/                       # host-тесты (make test) + stubs/

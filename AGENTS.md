@@ -54,7 +54,7 @@
 - Пакет мастер→сателлит: 16-байт заголовок `AudioPacketHeader` + payload ≤ 234 байт.
   Пакет смартфон→мастер — отдельный (magic 0xA210, см. ТЗ §10).
 - Управление: serial-консоль, Web UI + REST API — `web_server.h` **общий** для
-  `master_s3` и legacy `master` (`firmware/master/include/web_server.h`), включает
+  `master_s3` и legacy `master` (`firmware/common/web/web_server.h`), включает
   auth (SHA-256+соль, CSRF, rate limit), Wi-Fi-профили, OTA, логи, диагностику.
 - Режим Wi-Fi мастера: `AP_DIRECT` (AP без интернета), `STA` (клиент домашней сети)
   или `APSTA` — репитер: смартфон → AP мастера → NAT → домашняя сеть (интернет).
