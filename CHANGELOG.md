@@ -21,6 +21,11 @@
 - Новый host-тест `auth_test` (SHA-256, HMAC-SHA256 RFC 4231, PBKDF2 RFC 7914).
 - C3.4: дрейф-коррекция сателлита (`drift_correction.h`) + host-тест.
 
+### Рефакторинг / стабильность
+- A9: FreeRTOS-очередь для RX ESP-NOW на сателлите (коллбек → пул 8 буферов → drain в loop).
+- T16: `web_server.h` перенесён в `common/web/` (общий модуль для S3 и legacy).
+- CI: добавлен `clang-format --dry-run` check (`.clang-format` конфиг, без массового реформата).
+
 ### Зависимости
 - Зафиксирован `ArduinoJson` на `7.4.3` (раньше `^7.0.0`).
 
