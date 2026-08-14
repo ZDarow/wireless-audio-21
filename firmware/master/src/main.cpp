@@ -66,6 +66,7 @@ static MasterWebServer g_webServer(g_cfg, &g_pipeline,
 // I2S выход сабвуфера (моно)
 // ---------------------------------------------------------------------------
 static i2s_port_t g_subPort = I2S_NUM_0;
+static bool g_i2sReady = false; // guard: не писать в неинициализированный I2S
 
 static bool initI2SSub(const NodeConfig& cfg) {
     i2s_config_t conf = {};
@@ -86,12 +87,21 @@ static bool initI2SSub(const NodeConfig& cfg) {
     pins.data_out_num = cfg.i2sDataOut;
     pins.data_in_num = I2S_PIN_NO_CHANGE;
 
-    if (i2s_driver_install(g_subPort, &conf, 0, nullptr) != ESP_OK) return false;
-    if (i2s_set_pin(g_subPort, &pins) != ESP_OK) return false;
+    if (i2s_driver_install(g_subPort, &conf, 0, nullptr) != ESP_OK) {
+        g_i2sReady = false;
+        return false;
+    }
+    if (i2s_set_pin(g_subPort, &pins) != ESP_OK) {
+        i2s_driver_uninstall(g_subPort);
+        g_i2sReady = false;
+        return false;
+    }
+    g_i2sReady = true;
     return true;
 }
 
 static void writeSubSample(int16_t sample) {
+    if (!g_i2sReady) return; // guard: риск зависания i2s_write при провале init
     int16_t frame[2] = {sample, sample};
     size_t written = 0;
     i2s_write(g_subPort, frame, sizeof(frame), &written, portMAX_DELAY);

@@ -33,3 +33,4 @@ test/*.d
 firebase-debug.log
 *.firebaserc
 Новый текстовый документ*.txt
+*.orig

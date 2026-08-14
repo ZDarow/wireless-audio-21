@@ -30,11 +30,16 @@ class I2sOutput {
 public:
     // init: инициализация I2S в master-TX режиме. mono=true — write() принимает
     // моно-сэмплы и дублирует в стерео; mono=false — write() принимает пары {L,R}.
+    // При любой ошибке — жёсткий restart, чтобы не уйти в невалидное состояние.
     bool init(const I2sOutputPins& pins, uint32_t sampleRate, bool mono) {
         m_mono = mono;
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
         i2s_chan_config_t chanCfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
-        if (i2s_new_channel(&chanCfg, &m_tx, nullptr) != ESP_OK) return false;
+        if (i2s_new_channel(&chanCfg, &m_tx, nullptr) != ESP_OK) {
+            Logger::error("audio", "I2S new_channel failed");
+            ESP.restart();
+            return false;
+        }
 
         i2s_std_config_t stdCfg = {
             .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(sampleRate),
@@ -46,11 +51,19 @@ public:
                 .ws = static_cast<gpio_num_t>(pins.ws),
                 .dout = static_cast<gpio_num_t>(pins.data),
                 .din = I2S_GPIO_UNUSED,
-                .invert_flags = {0, 0, 0},
+                .invert_flags = {},
             },
         };
-        if (i2s_channel_init_std_mode(m_tx, &stdCfg) != ESP_OK) return false;
-        if (i2s_channel_enable(m_tx) != ESP_OK) return false;
+        if (i2s_channel_init_std_mode(m_tx, &stdCfg) != ESP_OK) {
+            Logger::error("audio", "I2S init_std_mode failed");
+            ESP.restart();
+            return false;
+        }
+        if (i2s_channel_enable(m_tx) != ESP_OK) {
+            Logger::error("audio", "I2S channel_enable failed");
+            ESP.restart();
+            return false;
+        }
 #else
         i2s_config_t conf = {};
         conf.mode = static_cast<i2s_mode_t>(I2S_MODE_MASTER | I2S_MODE_TX);
@@ -70,15 +83,25 @@ public:
         pinsCfg.data_out_num = pins.data;
         pinsCfg.data_in_num = I2S_PIN_NO_CHANGE;
 
-        if (i2s_driver_install(I2S_NUM_0, &conf, 0, nullptr) != ESP_OK) return false;
-        if (i2s_set_pin(I2S_NUM_0, &pinsCfg) != ESP_OK) return false;
+        if (i2s_driver_install(I2S_NUM_0, &conf, 0, nullptr) != ESP_OK) {
+            Logger::error("audio", "I2S driver_install failed");
+            ESP.restart();
+            return false;
+        }
+        if (i2s_set_pin(I2S_NUM_0, &pinsCfg) != ESP_OK) {
+            Logger::error("audio", "I2S set_pin failed");
+            ESP.restart();
+            return false;
+        }
         m_port = I2S_NUM_0;
 #endif
+        m_initialized = true;
         return true;
     }
 
     // n — число моно-сэмплов (mono) или стерео-пар (stereo).
     void write(const int16_t* samples, size_t n) {
+        if (!m_initialized) return; // guard: не писать в неинициализированный I2S
         if (m_mono) {
             int16_t frame[2];
             for (size_t i = 0; i < n; i++) {
@@ -93,6 +116,7 @@ public:
 
     // Активность без реального потока — тишина.
     void silence(size_t nFrames) {
+        if (!m_initialized) return; // guard
         int16_t zero = 0;
         for (size_t i = 0; i < nFrames; i++) write(&zero, 1);
     }
@@ -114,6 +138,7 @@ private:
     }
 
     bool m_mono = true;
+    bool m_initialized = false;
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
     i2s_chan_handle_t m_tx = nullptr;
 #else

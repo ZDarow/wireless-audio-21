@@ -18,9 +18,10 @@
   ```
 - **Сборка прошивки** (PlatformIO, целевые S3 env + legacy-стенд):
   ```
-  pio run -c platformio.master.ini            # master_s3_wifi (pioarduino, core 3.x)
-  pio run -e satellite_s3_left
-  pio run -e satellite_s3_right
+  pio run -c platformio.master.ini            # master_s3_wifi + satellite_s3_left/right (pioarduino, core 3.x)
+  pio run -e master_a2dp
+  pio run -e satellite_left
+  pio run -e satellite_right
   ```
   Legacy env (`master_a2dp`, `satellite_left/right`, espressif32@6.9.0 core
   2.0.17) — отладочный стенд (C0.2), в CI не собираются; оставлять рабочими.

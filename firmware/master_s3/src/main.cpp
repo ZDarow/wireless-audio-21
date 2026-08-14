@@ -633,9 +633,16 @@ static void handleConsoleCommand(const String& line) {
 static DelayLine* createDelayLinePsram(uint32_t capacityMs, uint32_t sampleRate) {
     uint32_t samples = (capacityMs * sampleRate) / 1000;
     if (samples < 1) samples = 1;
-    int16_t* buf = static_cast<int16_t*>(ps_malloc(samples * sizeof(int16_t)));
+    int16_t* buf = nullptr;
+    if (ESP.getPsramSize() > 0) {
+        buf = static_cast<int16_t*>(ps_malloc(samples * sizeof(int16_t)));
+    }
     if (!buf) {
-        Logger::error("audio", "DelayLine PSRAM alloc failed");
+        buf = static_cast<int16_t*>(malloc(samples * sizeof(int16_t)));
+    }
+    if (!buf) {
+        Logger::error("audio", "DelayLine alloc failed (PSRAM=%u)",
+                      (unsigned)(ESP.getPsramSize() / (1024 * 1024)));
         return nullptr;
     }
     return new DelayLine(capacityMs, sampleRate, buf);
@@ -735,8 +742,9 @@ void setup() {
         Logger::error("audio", "I2S init failed");
     }
 
-    // Jitter-буфер в PSRAM (C1.3, §7.6): 60 мс ёмкость, целевая задержка 30 мс.
-    g_jitter = new (ps_malloc(kMasterJitterCapacity * sizeof(int16_t))) JitterBuffer(kMasterJitterCapacity);
+    // Jitter-буфер (C1.3, §7.6): 60 мс ёмкость, целевая задержка 30 мс.
+    // PSRAM на этой плате не обнаружен — fallback на обычный heap.
+    g_jitter = new JitterBuffer(kMasterJitterCapacity);
     if (g_jitter) {
         g_jitter->setTargetMs(30, g_cfg.sampleRate);
         Logger::infof("audio", "Jitter buffer: cap=%u samples (%u ms), target=30 ms",

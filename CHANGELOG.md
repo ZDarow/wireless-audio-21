@@ -3,6 +3,28 @@
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/).
 Версии — по [SemVer](https://semver.org/lang/ru/).
 
+## [0.2.2] — 2026-08-14 (адаптация под ESP32-S3-DevKitC-1 N8R2)
+
+### Железо / платформа
+- Целевая плата: `esp32-s3-devkitc1-n8r2` (8MB flash, без PSRAM) для всех S3 env.
+- I2S пины: BCK=GPIO14, WS=GPIO13, DIN=GPIO12 (переопределены через build_flags).
+- PSRAM fallback: jitter buffer и delay lines используют heap при отсутствии PSRAM.
+- I2S hardening: `ESP.restart()` при ошибках инициализации (предотвращает
+  невалидное состояние), `g_i2sReady` guard в legacy master.
+
+### Конфигурация
+- `generate_config.py`: добавлены `#ifndef`/`#endif` guards вокруг каждого
+  макроса — позволяет переопределять значения через `build_flags` без редактирования
+  `generated_config.h`.
+
+### Зависимости / CI
+- Зафиксирован `ArduinoJson` на `7.4.3`.
+- Добавлен `clang-format --dry-run` check в CI.
+
+### Известные ограничения
+- Per-device соль PBKDF2 — техдолг (NVS v5).
+- UDP-аудио без аутентификации источника (V4/C5.7), OTA без подписи (V5).
+
 ## [0.2.1] — 2026-08-13 (фаза 1-2 аудита безопасности + синхронизация)
 
 ### Безопасность

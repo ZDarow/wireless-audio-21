@@ -248,15 +248,15 @@ docs/                       # PLAN, TASKS, architecture, hardware, wiring, REPO_
 | `satellite_left` | левый сателлит (legacy) | `+<satellite/src>` | `-DAUDIO_SATELLITE_SIDE=0` |
 | `satellite_right` | правый сателлит (legacy) | `+<satellite/src>` | `-DAUDIO_SATELLITE_SIDE=1` |
 
-- Платформа: `espressif32@6.9.0`, фреймворк Arduino, плата `esp32-s3-devkitc-1`.
-- Мастер `master_s3_wifi` собирается на pioarduino-платформе (Arduino core
-  3.3.11 / IDF 5.5.5, тег `55.03.311`) через `platformio.master.ini`
-  (изолированный core-каталог `.pio-core-master`) — только там lwip собран
-  с NAPT (режим репитера APSTA, F21).
-- Мастер: flash 16 MB (`default_16MB.csv`), `memory_type=qio_opi`, PSRAM
-  (`-DBOARD_HAS_PSRAM`), `CORE_DEBUG_LEVEL=2`.
-- Сателлиты: flash/PSRAM — дефолты платы `esp32-s3-devkitc-1`.
-- Библиотеки: ArduinoJson (мастер). WebServer/Preferences/HTTPClient/Update/
+- Платформа: `pioarduino 55.03.311` (Arduino core 3.3.11 / IDF 5.5.5) для
+  S3-окружений, `espressif32@6.9.0` (core 2.0.17) для legacy; плата
+  `esp32-s3-devkitc1-n8r2` (8MB flash, без PSRAM).
+- Мастер `master_s3_wifi` и сателлиты `satellite_s3_left/right` собираются
+  через `platformio.master.ini` (изолированный core-каталог `.pio-core-master`)
+  — только там lwip собран с NAPT (режим репитера APSTA, F21).
+- Мастер/сателлиты S3: flash 8MB (`default_8MB.csv`), `memory_type=qio_opi`,
+  без PSRAM, `CORE_DEBUG_LEVEL=2`, I2S пины 14/13/12.
+- Библиотеки: ArduinoJson 7.4.3 (мастер). WebServer/Preferences/HTTPClient/Update/
   Network встроены в Arduino core (T22); arduino-audio-tools и ESP32-A2DP —
   только в legacy `master_a2dp` (отладочный стенд), зафиксированы по SHA (T11).
 - Legacy env (`master_a2dp`, `satellite_left/right`) остаются в `platformio.ini`

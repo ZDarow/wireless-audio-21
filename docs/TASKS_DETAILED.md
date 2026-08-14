@@ -199,31 +199,22 @@ CI: `.github/workflows/ci.yml` (собирает master_s3_wifi + сателли
   wrap sequence; без пакетов с момента старта → standby.
 - **Зависимости:** C1.1.
 
-#### C1.3 — Jitter buffer мастера в PSRAM (20–60 мс)
+#### C1.3 — Jitter buffer мастера (20–60 мс, fallback без PSRAM)
 
-- **Проблема:** `jitter_buffer.h:19` аллоцирует `new int16_t[]` — внутренняя RAM (S3-N16R8: 512 КБ), 60 мс стерео 48 кГц ≈ 11,5 КБ, но конвейеру нужны ещё delay lines. По ТЗ §16.2 большие буферы — из PSRAM.
-- **Требование:** §7.6, §16.2 — буфер в PSRAM.
+- **Проблема:** `jitter_buffer.h` аллоцирует `new int16_t[]` — внутренняя RAM.
+  На целевой плате ESP32-S3-DevKitC-1 N8R2 (8MB flash, без PSRAM) PSRAM
+  отсутствует — fallback на обычный heap.
+- **Требование:** §7.6, §16.2 — буфер работает на любой RAM; при наличии PSRAM
+  — предпочитать его.
 - **План:**
-  1. Добавить в `JitterBuffer` выделение через `ps_malloc` (обёртка `heap_caps_malloc`), с fallback на `malloc`.
-  2. Выделять в `master_s3` буфер 40 мс (дефолт), диапазон 20–60 мс.
-- **Код-скетч:**
-  ```cpp
-  explicit JitterBuffer(uint32_t capacity)
-      : m_capacity(capacity) {
-  #ifdef ESP32
-      void* p = heap_caps_malloc(capacity * sizeof(int16_t),
-                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-      m_buffer = (int16_t*)(p ? p : malloc(capacity * sizeof(int16_t)));
-  #else
-      m_buffer = new int16_t[capacity];
-  #endif
-      clear();
-  }
-  ```
+  1. В `master_s3/src/main.cpp`: `createDelayLinePsram` — `ps_malloc` с fallback
+     на `malloc` (реализовано 14.08.2026).
+  2. Jitter buffer мастера: `new JitterBuffer` (heap), без `ps_malloc`.
 - **Файлы:** `common/audio/jitter_buffer.h`, `master_s3/src/main.cpp`.
 - **Зависимости:** —
-- **Критерий:** диагностика показывает PSRAM-аллокацию (логировать адрес через `heap_caps_get_info`); jitter 20/40/60 мс работает.
-- **Оценка:** 2 ч.
+- **Критерий:** jitter 20/40/60 мс работает; диагностика показывает `psram_free=0`
+  на N8R2, heap-аллокации стабильны.
+- **Оценка:** 2 ч. ✅ (14.08.2026: fallback реализован, сборка SUCCESS).
 
 #### C1.4 — I2S-выход мастера (BCK=4, WS=5, DATA=6) — ✅
 
@@ -308,17 +299,17 @@ CI: `.github/workflows/ci.yml` (собирает master_s3_wifi + сателли
 - **Критерий:** §19.3 — 4 громкости меняются и сохраняются после перезагрузки.
 - **Оценка:** 4 ч.
 
-#### C2.3 — Delay lines мастера (0–200 мс) в PSRAM
+#### C2.3 — Delay lines мастера (0–200 мс, fallback без PSRAM)
 
 - **Проблема:** `delay_line.h` используется только сателлитом; на мастере задержки из конфига никуда не применяются (только печатаются в диагностике `master_s3/src/main.cpp:196-197`).
 - **Требование:** §7.4, §6.9 (0–200 мс), §18 Этап 5.
 - **План:**
-  1. Создать `DelayLine` на каждый канал (L/R/Sub) в `master_s3`; память — `ps_malloc` (200 мс × 48 кГц = 9600 сэмплов/канал).
+  1. Создать `DelayLine` на каждый канал (L/R/Sub) в `master_s3`; память — `ps_malloc` с fallback на `malloc` (200 мс × 48 кГц = 9600 сэмплов/канал).
   2. Применять `g_cfg.delayLeftMs/RightMs/SubMs`; хендлер `/api/delay` обновляет в рантайме (C2.4).
 - **Файлы:** `common/audio/delay_line.h`, `master_s3/src/main.cpp`.
 - **Зависимости:** C2.1.
 - **Критерий:** §19.5 — регулировка 0–200 мс слышима и без артефактов.
-- **Оценка:** 3 ч.
+- **Оценка:** 3 ч. ✅ (12.08.2026: delay lines созданы через `createDelayLinePsram` с fallback на heap; `/api/delay` применяет в рантайме).
 
 #### C2.4 — Web-хендлеры → живой pipeline
 
@@ -558,14 +549,18 @@ CI: `.github/workflows/ci.yml` (собирает master_s3_wifi + сателли
 - **Критерий:** после потери сети — авто-восстановление.
 - **Оценка:** 3 ч.
 
-#### C6.3 — PSRAM-аллокации + метрики heap
+#### C6.3 — PSRAM-аллокации + метрики heap (fallback без PSRAM)
 
-- **Проблема:** jitter/delay могут уйти во внутреннюю RAM.
+- **Проблема:** jitter/delay могут уйти во внутреннюю RAM; на N8R2 PSRAM
+  отсутствует — fallback на heap.
 - **Требование:** §16.2, §14.3.
-- **План:** все большие буферы — `ps_malloc`; в `/api/diagnostics` — `heap_caps_get_free_size(MALLOC_CAP_SPIRAM)` и `ESP.getMinFreeHeap()`.
+- **План:** большие буферы — `ps_malloc` с fallback на `malloc`; в
+  `/api/diagnostics` — `ESP.getFreePsram()`/`ESP.getMinFreePsram()` (0 на N8R2)
+  и `ESP.getFreeHeap()`/`ESP.getMinFreeHeap()`.
 - **Файлы:** `master_s3/src/main.cpp`, `common/audio/*`.
-- **Критерий:** 30 минут проигрывания — heap/PSRAM не деградируют (§19.4).
-- **Оценка:** 3 ч.
+- **Критерий:** 30 минут проигрывания — heap не деградирует (§19.4).
+- **Оценка:** 3 ч. ✅ (14.08.2026: `createDelayLinePsram` с fallback, jitter на heap,
+  диагностика heap/PSRAM в `/api/status` и `/api/diagnostics`).
 
 #### C6.4 — Скрипты прошивки → S3 env
 

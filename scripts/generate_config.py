@@ -112,8 +112,10 @@ def generate(values, source_path):
     lines.append("#pragma once")
     lines.append("")
     for macro, val in sorted(values, key=lambda kv: kv[0]):
+        lines.append(f"#ifndef {macro}")
         lines.append(f"#define {macro} {val}")
-    lines.append("")
+        lines.append(f"#endif // {macro}")
+        lines.append("")
     return "\n".join(lines)
 
 

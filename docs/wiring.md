@@ -1,12 +1,14 @@
 # Подключение (wiring) Wireless Audio 2.1
 
-> Версия документа: 1.2 (11.08.2026). Все пины — по умолчанию из
-> `config.example.env`. Платформа — **ESP32-S3**: GPIO22–25 невалидны
-> (внутренний SPI-флеш), I2S используется на GPIO4/5/6.
-> Усилитель — **TPA3110 XH-A232** (класс D, аналоговый вход) — требует ЦАП
-> между ESP32 и усилителем. Цепочка: ESP32 I2S → ЦАП PCM5102A → TPA3110 → динамик.
-> При изменении GPIO не забудьте перегенерировать
-> конфиг: `python3 scripts/generate_config.py config.env`.
+> Версия документа: 1.3 (14.08.2026). Все пины — по целевой плате
+> ESP32-S3-DevKitC-1 N8R2 (8MB flash, без PSRAM). I2S: BCK=GPIO14,
+> WS=GPIO13, DIN=GPIO12 (переопределены через build_flags в `platformio.ini`;
+> в `config.example.env` дефолты — 4/5/6). GPIO22–25 на S3 невалидны
+> (внутренний SPI-флеш). Усилитель — **TPA3110 XH-A232** (класс D,
+> аналоговый вход) — требует ЦАП между ESP32 и усилителем. Цепочка:
+> ESP32 I2S → ЦАП PCM5102A → TPA3110 → динамик. При изменении GPIO
+> не забудьте перегенерировать конфиг:
+> `python3 scripts/generate_config.py config.env`.
 
 ## 0. ЦАП → усилитель (TPA3110 XH-A232)
 
@@ -39,9 +41,9 @@ GND  ────────────────────────►
   GND  ──────────┤ GND          │
                  │              │
   ЦАП (PCM5102A) │              │
-  BCK  ←─────────┤ GPIO4 (BCK)  │
-  WS   ←─────────┤ GPIO5 (WS)   │
-  DIN  ←─────────┤ GPIO6 (DIN)  │
+  BCK  ←─────────┤ GPIO14 (BCK)  │
+  WS   ←─────────┤ GPIO13 (WS)   │
+  DIN  ←─────────┤ GPIO12 (DIN)  │
   GND  ←─────────┤ GND          │
                  └──────────────┘
 
@@ -61,9 +63,9 @@ PCM5102A LOUT/ROUT → TPA3110 XH-A232 L-IN / R-IN → динамик сабву
   GND  ──────────┤ GND          │
                  │              │
   ЦАП (PCM5102A) │              │
-  BCK  ←─────────┤ GPIO4 (BCK)  │
-  WS   ←─────────┤ GPIO5 (WS)   │
-  DIN  ←─────────┤ GPIO6 (DIN)  │
+  BCK  ←─────────┤ GPIO14 (BCK)  │
+  WS   ←─────────┤ GPIO13 (WS)   │
+  DIN  ←─────────┤ GPIO12 (DIN)  │
   GND  ←─────────┤ GND          │
                  └──────────────┘
 
@@ -80,9 +82,9 @@ PCM5102A LOUT/ROUT → TPA3110 XH-A232 L-IN / R-IN → динамик
 Если усилитель заменён на MAX98357A, внешний ЦАП не нужен:
 
 ```
-ESP32 GPIO4 (BCK)  →  MAX98357A BCLK
-ESP32 GPIO5 (WS)   →  MAX98357A LRC
-ESP32 GPIO6 (DIN)  →  MAX98357A DIN
+ESP32 GPIO14 (BCK)  →  MAX98357A BCLK
+ESP32 GPIO13 (WS)   →  MAX98357A LRC
+ESP32 GPIO12 (DIN)  →  MAX98357A DIN
 5V (внешний)       →  MAX98357A VIN
 GND (общий)        →  MAX98357A GND
 MAX98357A + / -    →  динамик 4–8 Ом
@@ -111,9 +113,9 @@ MAX98357A + / -    →  динамик 4–8 Ом
 
 | Пин ESP32-S3 | Сигнал | Куда | Примечание |
 |---|---|---|---|
-| GPIO4 | I2S BCK | ЦАП PCM5102A BCK | тактовая |
-| GPIO5 | I2S WS | ЦАП PCM5102A LRCK | слово |
-| GPIO6 | I2S DIN | ЦАП PCM5102A DIN | данные |
+| GPIO14 | I2S BCK | ЦАП PCM5102A BCK | тактовая |
+| GPIO13 | I2S WS | ЦАП PCM5102A LRCK | слово |
+| GPIO12 | I2S DIN | ЦАП PCM5102A DIN | данные |
 | GPIO21 | (OLED SDA) | — | этап 4 |
 | GPIO18 | (OLED SCL) | — | этап 4 |
 | GPIO32 | (ENC A) | — | этап 4 |

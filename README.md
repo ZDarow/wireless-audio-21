@@ -42,8 +42,8 @@ Smartphone ──Wi-Fi UDP PCM──► ┌────────────�
 
 ```
 wireless-audio-21/
-├── platformio.ini              # env: master_s3_wifi, satellite_s3_left/right (+ legacy)
-├── platformio.master.ini       # master_s3_wifi: изолированный core 3.x
+├── platformio.ini              # env: master_a2dp, satellite_left/right (legacy core 2.0.17)
+├── platformio.master.ini       # master_s3_wifi + satellite_s3_left/right: изолированный core 3.x (pioarduino)
 ├── config.example.env          # конфигурация → generated_config.h
 ├── firmware/
 │   ├── common/                 # header-only, общий код

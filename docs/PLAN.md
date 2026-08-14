@@ -79,8 +79,8 @@ Smartphone (A2DP / Wi-Fi)
 
 ```
 wireless-audio-21/
-├── platformio.ini              # env: master_s3_wifi, satellite_s3_left/right (+ legacy)
-├── platformio.master.ini       # master_s3_wifi: изолированный core 3.x (pioarduino)
+├── platformio.ini              # env: master_a2dp, satellite_left/right (legacy core 2.0.17)
+├── platformio.master.ini       # master_s3_wifi + satellite_s3_left/right: изолированный core 3.x (pioarduino)
 ├── config.example.env          # переменные окружения → generated_config.h
 ├── config.example.h            # ручной аналог (синхронизирован, T6)
 ├── firmware/
