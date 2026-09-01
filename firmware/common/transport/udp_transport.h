@@ -15,24 +15,26 @@
 #include "audio_packet.h"
 #include "node_config.h"
 #include "broadcast_ip.h"
+#include "transport.h"
 
 namespace audio21 {
 
-// Callback при получении UDP-пакета (сателлит).
-using UdpRxCallback = void (*)(const uint8_t* data, size_t size, IPAddress from);
-
-class UdpTransport {
+class UdpTransport : public ITransport {
 public:
-    static constexpr uint16_t kDefaultPort = 4210;
+    static constexpr uint16_t kDefaultPort = AUDIO_UDP_PORT;
+    static constexpr uint8_t kAddrLen = 4;
 
-    bool begin(uint16_t localPort = kDefaultPort) {
+    bool begin(uint16_t localPort = kDefaultPort) override {
         m_leftIp = IPAddress(0, 0, 0, 0);
         m_rightIp = IPAddress(0, 0, 0, 0);
         return m_udp.begin(localPort);
     }
 
-    // Приём: вызывать периодически. Возвращает размер полученного пакета
-    // (0 — пакета нет) и заполняет data буфером.
+    void end() override { m_udp.stop(); }
+
+    void setRxCallback(RxCallback cb) override { m_rxCallback = cb; }
+    void setSentCallback(SentCallback cb) override { m_sentCallback = cb; }
+
     size_t receive(uint8_t* data, size_t maxSize) {
         int packetSize = m_udp.parsePacket();
         if (packetSize <= 0) return 0;
@@ -42,55 +44,60 @@ public:
         return n;
     }
 
-    // Отправка мастером на конкретный IP сателлита.
-    bool sendTo(IPAddress ip, uint16_t port, const uint8_t* data, size_t size) {
-        m_udp.beginPacket(ip, port);
-        m_udp.write(data, size);
+    bool sendTo(const void* addr, size_t addrLen, const uint8_t* data, size_t len) override {
+        if (addrLen != kAddrLen || !addr) return false;
+        IPAddress ip(static_cast<const uint8_t*>(addr)[0],
+                     static_cast<const uint8_t*>(addr)[1],
+                     static_cast<const uint8_t*>(addr)[2],
+                     static_cast<const uint8_t*>(addr)[3]);
+        m_udp.beginPacket(ip, kDefaultPort);
+        m_udp.write(data, len);
         return m_udp.endPacket() == 1;
     }
 
-    // Отправка широковещательно (для discovery). Broadcast вычисляется по
-    // маске подсети (корректно для любой маски, не только /24).
-    // IPAddress::operator[] доступен и в core 2.x, и в core 3.x.
-    bool broadcast(uint16_t port, const uint8_t* data, size_t size) {
+    bool broadcast(const uint8_t* data, size_t len) override {
         IPAddress lip = WiFi.localIP();
         IPAddress lmask = WiFi.subnetMask();
         uint8_t ip[4] = {lip[0], lip[1], lip[2], lip[3]};
         uint8_t mask[4] = {lmask[0], lmask[1], lmask[2], lmask[3]};
         uint8_t bc[4];
         computeBroadcastAddress(ip, mask, bc);
-        IPAddress bcIp(bc[0], bc[1], bc[2], bc[3]);
-        return sendTo(bcIp, port, data, size);
+        return sendTo(bc, kAddrLen, data, len);
     }
 
-    // Отправка мастером аудио: unicast на запомненный IP сателлита канала,
-    // либо broadcast, пока IP не известен (discovery не завершён).
-    bool sendToChannel(uint8_t channel, uint16_t port, const uint8_t* data, size_t size) {
+    bool sendToChannel(uint8_t channel, const uint8_t* data, size_t len) override {
         IPAddress ip = (channel == kChannelLeft) ? m_leftIp : m_rightIp;
-        if (ip != IPAddress(0, 0, 0, 0)) return sendTo(ip, port, data, size);
-        return broadcast(port, data, size);
+        if (ip != IPAddress(0, 0, 0, 0)) {
+            const uint8_t* bytes = reinterpret_cast<const uint8_t*>(&ip);
+            return sendTo(bytes, kAddrLen, data, len);
+        }
+        return broadcast(data, len);
     }
 
-    // Мастер: broadcast discovery-запрос (сателлиты отвечают unicast-ом).
-    bool sendDiscoveryRequest(uint16_t port) {
+    void addPeer(const void* /*addr*/, size_t /*addrLen*/) override {}
+    void update() override {
+        uint8_t buf[kMaxPacketSize];
+        size_t n = receive(buf, sizeof(buf));
+        if (n == 0) return;
+        IPAddress from = m_lastFrom;
+        if (m_rxCallback) m_rxCallback(buf, n, &from, sizeof(from));
+    }
+
+    bool sendDiscoveryRequest(uint16_t port = kDefaultPort) {
         uint8_t buf[kMaxPacketSize];
         size_t n = buildPacket(buf, sizeof(buf), 0x00, kSampleFormatInt16,
                                nullptr, 0, 0, 0, kFlagDiscoveryRequest);
         return broadcast(port, buf, n);
     }
 
-    // Сателлит: unicast discovery-ответ со своим каналом.
-    bool sendDiscoveryResponse(IPAddress to, uint16_t port, uint8_t channel) {
+    bool sendDiscoveryResponse(IPAddress to, uint8_t channel) {
         uint8_t buf[kMaxPacketSize];
         size_t n = buildPacket(buf, sizeof(buf), channel, kSampleFormatInt16,
                                nullptr, 0, 0, 0, kFlagDiscoveryResponse);
-        return sendTo(to, port, buf, n);
+        const uint8_t* bytes = reinterpret_cast<const uint8_t*>(&to);
+        return sendTo(bytes, kAddrLen, buf, n);
     }
 
-    // Обработка discovery-пакета. Возвращает true, если пакет был discovery
-    // (аудио обрабатывать не нужно).
-    //   - мастер: запоминает IP сателлита из response;
-    //   - сателлит: отвечает на request (m_myChannel должен быть задан).
     bool handleDiscovery(const uint8_t* data, size_t size, IPAddress from) {
         AudioPacketHeader hdr;
         const uint8_t* payload;
@@ -98,7 +105,7 @@ public:
         if (!parsePacket(data, size, hdr, payload, payloadSize)) return false;
 
         if (hdr.flags & kFlagDiscoveryRequest) {
-            if (m_myChannel != 0) sendDiscoveryResponse(from, kDefaultPort, m_myChannel);
+            if (m_myChannel != 0) sendDiscoveryResponse(from, m_myChannel);
             return true;
         }
         if (hdr.flags & kFlagDiscoveryResponse) {
@@ -110,29 +117,24 @@ public:
         return false;
     }
 
-    // Канал последнего discovery-ответа (0, если ответа не было).
     uint8_t lastDiscoveryChannel() const { return m_lastDiscChannel; }
-
-    // Сателлит: задать свой канал для ответа на discovery-запросы.
     void setMyChannel(uint8_t channel) { m_myChannel = channel; }
-
-    // Мастер: известен ли IP сателлита канала.
     bool hasSatellite(uint8_t channel) const {
         IPAddress ip = (channel == kChannelLeft) ? m_leftIp : m_rightIp;
         return ip != IPAddress(0, 0, 0, 0);
     }
-
     IPAddress lastFrom() const { return m_lastFrom; }
-
     void stop() { m_udp.stop(); }
 
 private:
     WiFiUDP m_udp;
     IPAddress m_lastFrom;
-    IPAddress m_leftIp;   // IP левого сателлита (после discovery)
-    IPAddress m_rightIp;  // IP правого сателлита (после discovery)
-    uint8_t m_myChannel = 0; // канал сателлита (0 = мастер, не отвечает)
-    uint8_t m_lastDiscChannel = 0; // канал последнего discovery-ответа
+    IPAddress m_leftIp;
+    IPAddress m_rightIp;
+    uint8_t m_myChannel = 0;
+    uint8_t m_lastDiscChannel = 0;
+    RxCallback m_rxCallback = nullptr;
+    SentCallback m_sentCallback = nullptr;
 };
 
 } // namespace audio21
