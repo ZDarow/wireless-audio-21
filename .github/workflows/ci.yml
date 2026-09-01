@@ -49,6 +49,9 @@ jobs:
             .pio-core-master
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini', 'platformio.master.ini') }}
 
+      - name: Generate config
+        run: python3 scripts/generate_config.py config.env
+
       - name: Host tests (gcc, без железа)
         run: make -C test test
 
