@@ -48,6 +48,7 @@
 #include "pcm_pipeline.h"
 #include "delay_line.h"
 #include "i2s_output.h"
+#include "console.h"
 
 using namespace audio21;
 
@@ -94,6 +95,8 @@ static WiFiUDP g_udp;            // приём аудио от смартфон�
 static UdpTransport g_udpTx;     // C3.1: TX аудио на сателлиты (порт 4210)
 static uint32_t g_packetsRx = 0;
 static uint32_t g_packetBytesRx = 0;
+
+static MasterS3Console g_console{g_cfg};
 
 // I2S-выход (C1.4): сабвуфер — моно (L=R), пины BCK=4/WS=5/DATA=6.
 static I2sOutput g_i2sOut;
@@ -477,12 +480,16 @@ static bool pingHost(const IPAddress& ip, uint32_t count, uint32_t timeoutMs) {
     return false;
 }
 
-static void handleConsoleCommand(const String& line) {
-    String cmd = line;
-    cmd.trim();
-    if (cmd.length() == 0) return;
+// ---------------------------------------------------------------------------
+// Serial-консоль S3-мастера (T17).
+// ---------------------------------------------------------------------------
 
-    if (cmd == "status") {
+class MasterS3Console : public Console {
+public:
+    using Console::Console;
+
+protected:
+    void cmdStatus() override {
         Serial.println("role: master (s3)");
         Serial.printf("source: %s\n", sourceToString(g_cfg.source));
         Serial.printf("wifi_mode: %s\n", wifiModeToString(g_cfg.wifiMode));
@@ -506,121 +513,97 @@ static void handleConsoleCommand(const String& line) {
                       g_rightOnline ? "online" : "offline",
                       (unsigned long)g_heartbeatsRx);
         Serial.printf("psram: %u MB\n", ESP.getPsramSize() / (1024 * 1024));
-        return;
     }
 
-    // Ручная настройка Wi-Fi через консоль: `wifi <ssid> <password>`
-    if (cmd.startsWith("wifi ")) {
-        String rest = cmd.substring(5);
-        rest.trim();
-        int sp = rest.indexOf(' ');
-        if (sp <= 0) { Serial.println("usage: wifi <ssid> <password>"); return; }
-        String ssid = rest.substring(0, sp);
-        String pass = rest.substring(sp + 1);
-        ssid.trim();
-        pass.trim();
-        if (ssid.length() == 0 || ssid.length() >= sizeof(g_cfg.wifiSsid)) { Serial.println("err: bad ssid"); return; }
-        if (pass.length() >= sizeof(g_cfg.wifiPassword)) { Serial.println("err: bad password"); return; }
-        strlcpy(g_cfg.wifiSsid, ssid.c_str(), sizeof(g_cfg.wifiSsid));
-        strlcpy(g_cfg.wifiPassword, pass.c_str(), sizeof(g_cfg.wifiPassword));
-        ConfigStorage::save(g_cfg);
-        Serial.println("saved, rebooting...");
-        delay(200);
-        ESP.restart();
-        return;
-    }
-
-    if (cmd.startsWith("setsat ")) {
-        String rest = cmd.substring(7);
-        rest.trim();
-        int sp = rest.indexOf(' ');
-        if (sp <= 0) { Serial.println("usage: setsat <left|right> <MAC>"); return; }
-        String side = rest.substring(0, sp);
-        String macStr = rest.substring(sp + 1);
-        macStr.trim();
-        MacAddr mac;
-        if (!MacAddr::parse(macStr.c_str(), mac)) { Serial.println("err: bad mac"); return; }
-        if (side == "left") {
-            g_cfg.leftSatMac = mac;
-            Serial.println("left sat mac set");
-        } else if (side == "right") {
-            g_cfg.rightSatMac = mac;
-            Serial.println("right sat mac set");
-        } else {
-            Serial.println("err: side must be left or right");
+    bool handleCommand(const String& cmd) override {
+        if (cmd.startsWith("wifi ")) {
+            String rest = cmd.substring(5);
+            rest.trim();
+            int sp = rest.indexOf(' ');
+            if (sp <= 0) { Serial.println("usage: wifi <ssid> <password>"); return true; }
+            String ssid = rest.substring(0, sp);
+            String pass = rest.substring(sp + 1);
+            ssid.trim();
+            pass.trim();
+            if (ssid.length() == 0 || ssid.length() >= sizeof(g_cfg.wifiSsid)) { Serial.println("err: bad ssid"); return true; }
+            if (pass.length() >= sizeof(g_cfg.wifiPassword)) { Serial.println("err: bad password"); return true; }
+            strlcpy(g_cfg.wifiSsid, ssid.c_str(), sizeof(g_cfg.wifiSsid));
+            strlcpy(g_cfg.wifiPassword, pass.c_str(), sizeof(g_cfg.wifiPassword));
+            ConfigStorage::save(g_cfg);
+            Serial.println("saved, rebooting...");
+            delay(200);
+            ESP.restart();
+            return true;
         }
-        return;
-    }
-
-    if (cmd == "net") {
-        Serial.printf("sta_ip: %s\n", WiFi.localIP().toString().c_str());
-        Serial.printf("ap_ip: %s\n", WiFi.softAPIP().toString().c_str());
-        Serial.printf("ap_stations: %u\n", WiFi.softAPgetStationNum());
-        Serial.printf("gateway: %s\n", WiFi.gatewayIP().toString().c_str());
-        Serial.printf("netmask: %s\n", WiFi.subnetMask().toString().c_str());
-        Serial.printf("dns: %s\n", WiFi.dnsIP().toString().c_str());
-        Serial.printf("wifi_channel: %u\n", (unsigned)WiFi.channel());
-        // Проверка AP-интерфейса: пинг первого клиента (192.168.4.x)
-        {
-            esp_netif_ip_info_t ip;
-            esp_netif_t* ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
-            if (ap && esp_netif_get_ip_info(ap, &ip) == ESP_OK) {
-                IPAddress apIp(ip.ip.addr);
-                Serial.printf("ap_netif: %s\n", apIp.toString().c_str());
-                IPAddress apGw(ip.gw.addr);
-                Serial.printf("ping ap_gw: %s\n", pingHost(apGw, 2, 1500) ? "OK" : "FAIL");
-            } else {
-                Serial.println("ap_netif: not found");
+        if (cmd.startsWith("setsat ")) {
+            String rest = cmd.substring(7);
+            rest.trim();
+            int sp = rest.indexOf(' ');
+            if (sp <= 0) { Serial.println("usage: setsat <left|right> <MAC>"); return true; }
+            String side = rest.substring(0, sp);
+            String macStr = rest.substring(sp + 1);
+            macStr.trim();
+            MacAddr mac;
+            if (!MacAddr::parse(macStr.c_str(), mac)) { Serial.println("err: bad mac"); return true; }
+            if (side == "left") { g_cfg.leftSatMac = mac; Serial.println("left sat mac set"); }
+            else if (side == "right") { g_cfg.rightSatMac = mac; Serial.println("right sat mac set"); }
+            else Serial.println("err: side must be left or right");
+            return true;
+        }
+        if (cmd == "net") {
+            Serial.printf("sta_ip: %s\n", WiFi.localIP().toString().c_str());
+            Serial.printf("ap_ip: %s\n", WiFi.softAPIP().toString().c_str());
+            Serial.printf("ap_stations: %u\n", WiFi.softAPgetStationNum());
+            Serial.printf("gateway: %s\n", WiFi.gatewayIP().toString().c_str());
+            Serial.printf("netmask: %s\n", WiFi.subnetMask().toString().c_str());
+            Serial.printf("dns: %s\n", WiFi.dnsIP().toString().c_str());
+            Serial.printf("wifi_channel: %u\n", (unsigned)WiFi.channel());
+            {
+                esp_netif_ip_info_t ip;
+                esp_netif_t* ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+                if (ap && esp_netif_get_ip_info(ap, &ip) == ESP_OK) {
+                    IPAddress apIp(ip.ip.addr);
+                    Serial.printf("ap_netif: %s\n", apIp.toString().c_str());
+                    IPAddress apGw(ip.gw.addr);
+                    Serial.printf("ping ap_gw: %s\n", pingHost(apGw, 2, 1500) ? "OK" : "FAIL");
+                } else {
+                    Serial.println("ap_netif: not found");
+                }
             }
+            Serial.printf("ping gateway: %s\n", pingHost(WiFi.gatewayIP(), 3, 2000) ? "OK" : "FAIL");
+            Serial.printf("ping 8.8.8.8: %s\n", pingHost(IPAddress(8, 8, 8, 8), 3, 2000) ? "OK" : "FAIL");
+            Serial.printf("ping 1.1.1.1: %s\n", pingHost(IPAddress(1, 1, 1, 1), 3, 2000) ? "OK" : "FAIL");
+            return true;
         }
-        Serial.printf("ping gateway: %s\n", pingHost(WiFi.gatewayIP(), 3, 2000) ? "OK" : "FAIL");
-        Serial.printf("ping 8.8.8.8: %s\n", pingHost(IPAddress(8, 8, 8, 8), 3, 2000) ? "OK" : "FAIL");
-        Serial.printf("ping 1.1.1.1: %s\n", pingHost(IPAddress(1, 1, 1, 1), 3, 2000) ? "OK" : "FAIL");
-        return;
-    }
-
-    if (cmd == "save") {
-        ConfigStorage::save(g_cfg);
-        Serial.println("ok");
-        return;
-    }
-
-    if (cmd == "erase") {
-        ConfigStorage::erase();
-        Serial.println("config erased, rebooting...");
-        delay(200);
-        ESP.restart();
-        return;
-    }
-
-    if (cmd == "reboot") {
-        Serial.println("rebooting");
-        ESP.restart();
-        return;
-    }
-
-    // Тестовый тон на I2S (C1.4): `tone 440`, `tone off`. Проверка PCM5102A без смартфона.
-    if (cmd.startsWith("tone")) {
-        String rest = cmd.substring(4);
-        rest.trim();
-        if (rest.length() == 0 || rest == "off") {
-            g_toneUntilMs = 0;
-            Serial.println("tone: off");
-            return;
+        if (cmd == "erase") {
+            ConfigStorage::erase();
+            Serial.println("config erased, rebooting...");
+            delay(200);
+            ESP.restart();
+            return true;
         }
-        long freq = rest.toInt();
-        if (freq <= 0 || !g_i2sOn) {
-            Serial.println("usage: tone <freq> | tone off  (i2s must be on)");
-            return;
+        if (cmd.startsWith("tone")) {
+            String rest = cmd.substring(4);
+            rest.trim();
+            if (rest.length() == 0 || rest == "off") {
+                g_toneUntilMs = 0;
+                Serial.println("tone: off");
+                return true;
+            }
+            long freq = rest.toInt();
+            if (freq <= 0 || !g_i2sOn) {
+                Serial.println("usage: tone <freq> | tone off  (i2s must be on)");
+                return true;
+            }
+            g_toneFreq = (uint32_t)freq;
+            g_tonePhase = 0;
+            g_toneUntilMs = millis() + kToneDurationMs;
+            Serial.printf("tone: %lu Hz, %u s\n", g_toneFreq, kToneDurationMs / 1000);
+            return true;
         }
-        g_toneFreq = (uint32_t)freq;
-        g_tonePhase = 0;
-        g_toneUntilMs = millis() + kToneDurationMs;
-        Serial.printf("tone: %lu Hz, %u s\n", g_toneFreq, kToneDurationMs / 1000);
-        return;
+        return false;
     }
-
-    Serial.println("unknown");
+};
 }
 
 // ---------------------------------------------------------------------------
@@ -917,10 +900,7 @@ void loop() {
         sendDiscoveryRequest();
     }
 
-    if (Serial.available()) {
-        String line = Serial.readStringUntil('\n');
-        handleConsoleCommand(line);
-    }
+    g_console.update();
 
     // Web UI: обработка запросов и сохранение конфига по кнопке.
     g_webServer.handleClient();

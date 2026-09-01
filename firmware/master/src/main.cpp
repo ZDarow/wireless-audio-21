@@ -26,6 +26,7 @@
 #include "udp_transport.h"
 #include "audio_packet.h"
 #include "web_server.h"
+#include "console.h"
 
 using namespace audio21;
 
@@ -49,6 +50,8 @@ static volatile uint32_t g_lastLeftSeenMs = 0;
 static volatile uint32_t g_lastRightSeenMs = 0;
 static volatile bool g_a2dpConnected = false;
 static uint32_t g_lastDiscoveryMs = 0;
+
+static LegacyMasterConsole g_console{g_cfg};
 
 // Таймаут без подтверждения/ответа — сателлит считается оффлайн.
 // Общая константа kSatelliteTimeoutMs — в audio_packet.h (R14).
@@ -175,12 +178,16 @@ static void a2dpConnectionState(esp_a2d_connection_state_t state, void*) {
 // Serial-консоль
 // ---------------------------------------------------------------------------
 
-static void handleConsoleCommand(const String& line) {
-    String cmd = line;
-    cmd.trim();
-    if (cmd.length() == 0) return;
+// ---------------------------------------------------------------------------
+// Serial-консоль legacy-мастера (T17).
+// ---------------------------------------------------------------------------
 
-    if (cmd == "status") {
+class LegacyMasterConsole : public Console {
+public:
+    using Console::Console;
+
+protected:
+    void cmdStatus() override {
         Serial.println("role: master");
         Serial.printf("source: %s\n", sourceToString(g_cfg.source));
         Serial.printf("connected: %s\n", g_a2dpConnected ? "yes" : "no");
@@ -194,82 +201,66 @@ static void handleConsoleCommand(const String& line) {
         Serial.printf("delay_sub_ms: %d\n", g_cfg.delaySubMs);
         Serial.printf("left_satellite: %s\n", g_leftOnline ? "online" : "offline");
         Serial.printf("right_satellite: %s\n", g_rightOnline ? "online" : "offline");
-        return;
     }
 
-    if (cmd.startsWith("volume")) {
-        String arg = cmd.substring(7);
-        arg.trim();
-        if (arg == "mute") { g_cfg.mute = true; g_pipeline.setMute(true); Serial.println("ok"); }
-        else if (arg == "unmute") { g_cfg.mute = false; g_pipeline.setMute(false); Serial.println("ok"); }
-        else { int v = arg.toInt(); if (v >= 0 && v <= 100) { g_cfg.masterVolume = v; g_pipeline.setVolume(v); Serial.println("ok"); } else Serial.println("err"); }
-        return;
-    }
-
-    if (cmd.startsWith("crossover")) {
-        int hz = cmd.substring(9).toInt();
-        if (hz >= kCrossoverMinHz && hz <= kCrossoverMaxHz) {
-            g_cfg.crossoverHz = hz;
-            g_pipeline.setCrossoverHz(hz);
+    bool handleCommand(const String& cmd) override {
+        if (cmd.startsWith("volume")) {
+            String arg = cmd.substring(7);
+            arg.trim();
+            if (arg == "mute") { g_cfg.mute = true; g_pipeline.setMute(true); Serial.println("ok"); }
+            else if (arg == "unmute") { g_cfg.mute = false; g_pipeline.setMute(false); Serial.println("ok"); }
+            else { int v = arg.toInt(); if (v >= 0 && v <= 100) { g_cfg.masterVolume = v; g_pipeline.setVolume(v); Serial.println("ok"); } else Serial.println("err"); }
+            return true;
+        }
+        if (cmd.startsWith("crossover")) {
+            int hz = cmd.substring(9).toInt();
+            if (hz >= kCrossoverMinHz && hz <= kCrossoverMaxHz) {
+                g_cfg.crossoverHz = hz;
+                g_pipeline.setCrossoverHz(hz);
+                Serial.println("ok");
+            } else Serial.println("err");
+            return true;
+        }
+        if (cmd.startsWith("delay")) {
+            String rest = cmd.substring(6);
+            rest.trim();
+            int sp = rest.indexOf(' ');
+            if (sp < 0) { Serial.println("err"); return true; }
+            String chan = rest.substring(0, sp);
+            int ms = rest.substring(sp + 1).toInt();
+            if (ms < kMinDelayMs || ms > kMaxDelayMs) { Serial.println("err"); return true; }
+            if (chan == "left") { g_cfg.delayLeftMs = ms; g_delayLeft->setDelayMs(ms); }
+            else if (chan == "right") { g_cfg.delayRightMs = ms; g_delayRight->setDelayMs(ms); }
+            else if (chan == "sub") { g_cfg.delaySubMs = ms; g_delaySub->setDelayMs(ms); }
+            else { Serial.println("err"); return true; }
             Serial.println("ok");
-        } else Serial.println("err");
-        return;
+            return true;
+        }
+        if (cmd.startsWith("transport")) {
+            String t = cmd.substring(10);
+            t.trim();
+            if (t == "espnow") { g_cfg.transport = TransportMode::EspNow; Serial.println("ok"); }
+            else if (t == "udp") { g_cfg.transport = TransportMode::Udp; Serial.println("ok"); }
+            else Serial.println("err");
+            return true;
+        }
+        if (cmd.startsWith("pair")) {
+            String rest = cmd.substring(5);
+            rest.trim();
+            int sp = rest.indexOf(' ');
+            if (sp < 0) { Serial.println("err"); return true; }
+            String side = rest.substring(0, sp);
+            String macStr = rest.substring(sp + 1);
+            MacAddr mac;
+            if (!MacAddr::parse(macStr.c_str(), mac)) { Serial.println("err"); return true; }
+            if (side == "left") { g_cfg.leftSatMac = mac; g_espnow.addPeer(mac); Serial.println("ok"); }
+            else if (side == "right") { g_cfg.rightSatMac = mac; g_espnow.addPeer(mac); Serial.println("ok"); }
+            else Serial.println("err");
+            return true;
+        }
+        return false;
     }
-
-    if (cmd.startsWith("delay")) {
-        String rest = cmd.substring(6);
-        rest.trim();
-        int sp = rest.indexOf(' ');
-        if (sp < 0) { Serial.println("err"); return; }
-        String chan = rest.substring(0, sp);
-        int ms = rest.substring(sp + 1).toInt();
-        if (ms < kMinDelayMs || ms > kMaxDelayMs) { Serial.println("err"); return; }
-        if (chan == "left") { g_cfg.delayLeftMs = ms; g_delayLeft->setDelayMs(ms); }
-        else if (chan == "right") { g_cfg.delayRightMs = ms; g_delayRight->setDelayMs(ms); }
-        else if (chan == "sub") { g_cfg.delaySubMs = ms; g_delaySub->setDelayMs(ms); }
-        else { Serial.println("err"); return; }
-        Serial.println("ok");
-        return;
-    }
-
-    if (cmd.startsWith("transport")) {
-        String t = cmd.substring(10);
-        t.trim();
-        if (t == "espnow") { g_cfg.transport = TransportMode::EspNow; Serial.println("ok"); }
-        else if (t == "udp") { g_cfg.transport = TransportMode::Udp; Serial.println("ok"); }
-        else Serial.println("err");
-        return;
-    }
-
-    if (cmd.startsWith("pair")) {
-        String rest = cmd.substring(5);
-        rest.trim();
-        int sp = rest.indexOf(' ');
-        if (sp < 0) { Serial.println("err"); return; }
-        String side = rest.substring(0, sp);
-        String macStr = rest.substring(sp + 1);
-        MacAddr mac;
-        if (!MacAddr::parse(macStr.c_str(), mac)) { Serial.println("err"); return; }
-        if (side == "left") { g_cfg.leftSatMac = mac; g_espnow.addPeer(mac); Serial.println("ok"); }
-        else if (side == "right") { g_cfg.rightSatMac = mac; g_espnow.addPeer(mac); Serial.println("ok"); }
-        else Serial.println("err");
-        return;
-    }
-
-    if (cmd == "save") {
-        ConfigStorage::save(g_cfg);
-        Serial.println("ok");
-        return;
-    }
-
-    if (cmd == "reboot") {
-        Serial.println("rebooting");
-        ESP.restart();
-        return;
-    }
-
-    Serial.println("unknown");
-}
+};
 
 // ---------------------------------------------------------------------------
 // Setup / Loop
@@ -360,10 +351,7 @@ void setup() {
 }
 
 void loop() {
-    if (Serial.available()) {
-        String line = Serial.readStringUntil('\n');
-        handleConsoleCommand(line);
-    }
+    g_console.update();
 
     // UDP-режим: приём discovery-ответов (online-статус сателлитов) и
     // периодический discovery-запрос (широковещательно, пока не известны IP,

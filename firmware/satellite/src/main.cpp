@@ -24,6 +24,7 @@
 #include "udp_transport.h"
 #include "audio_packet.h"
 #include "i2s_output.h"
+#include "console.h"
 
 using namespace audio21;
 
@@ -59,6 +60,8 @@ struct RxPacket {
 static QueueHandle_t g_rxQueue = nullptr;
 static RxPacket g_rxPool[kRxPoolSize];
 static uint8_t g_rxPoolIdx = 0;
+
+static SatelliteConsole g_console{g_cfg};
 
 // Период heartbeat (discovery-response) мастеру — статус online даже без аудио.
 // Общая константа в audio_packet.h (интервал < таймаут мастера).
@@ -178,12 +181,16 @@ static void onDiscoveryRequest(const uint8_t* data, size_t size, const MacAddr& 
 // Serial-консоль
 // ---------------------------------------------------------------------------
 
-static void handleConsoleCommand(const String& line) {
-    String cmd = line;
-    cmd.trim();
-    if (cmd.length() == 0) return;
+// ---------------------------------------------------------------------------
+// Serial-консоль сателлита (T17).
+// ---------------------------------------------------------------------------
 
-    if (cmd == "status") {
+class SatelliteConsole : public Console {
+public:
+    using Console::Console;
+
+protected:
+    void cmdStatus() override {
         Serial.printf("role: satellite (%s)\n", sideToString(g_cfg.side));
         Serial.printf("transport: %s\n", transportToString(g_cfg.transport));
         uint8_t ch = 0; wifi_second_chan_t sec = WIFI_SECOND_CHAN_NONE;
@@ -205,29 +212,22 @@ static void handleConsoleCommand(const String& line) {
         Serial.printf("jitter_available: %u\n", g_jitter->available());
         Serial.printf("delay_ms: %u\n", g_delay->delayMs());
         Serial.printf("drift_median_ms: %d\n", (int)g_drift.medianMs());
-        return;
     }
 
-    if (cmd.startsWith("delay")) {
-        int ms = cmd.substring(6).toInt();
-        if (ms >= kMinDelayMs && ms <= kMaxDelayMs) {
-            // Храним задержку в поле, соответствующем стороне сателлита.
-            if (g_cfg.side == SatelliteSide::Right) g_cfg.delayRightMs = ms;
-            else g_cfg.delayLeftMs = ms;
-            g_delay->setDelayMs(ms);
-            Serial.println("ok");
-        } else Serial.println("err");
-        return;
+    bool handleCommand(const String& cmd) override {
+        if (cmd.startsWith("delay")) {
+            int ms = cmd.substring(6).toInt();
+            if (ms >= kMinDelayMs && ms <= kMaxDelayMs) {
+                if (g_cfg.side == SatelliteSide::Right) g_cfg.delayRightMs = ms;
+                else g_cfg.delayLeftMs = ms;
+                g_delay->setDelayMs(ms);
+                Serial.println("ok");
+            } else Serial.println("err");
+            return true;
+        }
+        return false;
     }
-
-    if (cmd == "save") {
-        ConfigStorage::save(g_cfg);
-        Serial.println("ok");
-        return;
-    }
-
-    Serial.println("unknown");
-}
+};
 
 // ---------------------------------------------------------------------------
 // Setup / Loop
@@ -359,10 +359,7 @@ void loop() {
         }
     }
 
-    if (Serial.available()) {
-        String line = Serial.readStringUntil('\n');
-        handleConsoleCommand(line);
-    }
+    g_console.update();
 
     delay(1);
 }
