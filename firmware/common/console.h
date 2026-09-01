@@ -21,6 +21,8 @@ public:
         }
     }
 
+    explicit Console(NodeConfig& cfg) : g_cfg(cfg) {}
+
 protected:
     void handleLine(const String& line) {
         String cmd = line;
@@ -51,7 +53,6 @@ protected:
     virtual bool handleCommand(const String& cmd) = 0;
 
     NodeConfig& g_cfg;
-    explicit Console(NodeConfig& cfg) : g_cfg(cfg) {}
 };
 
 } // namespace audio21
