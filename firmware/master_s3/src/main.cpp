@@ -178,7 +178,7 @@ static void sendDiscoveryRequest() {
     uint8_t buf[kMaxPacketSize];
     size_t n = buildPacket(buf, sizeof(buf), 0x00, kSampleFormatInt16,
                            nullptr, 0, (uint32_t)millis(), 0, kFlagDiscoveryRequest);
-    g_espnow.broadcast(buf, n);
+    g_espnow.broadcastEspNow(buf, n);
 }
 
 static void onEspNowPacket(const uint8_t* data, size_t size, const MacAddr& from) {

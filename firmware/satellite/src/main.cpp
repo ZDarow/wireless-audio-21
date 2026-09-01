@@ -155,7 +155,7 @@ static void sendHeartbeat() {
     if (g_hasMasterMac) {
         err = g_espnow.sendTo(g_masterMac, buf, n);
     } else {
-        err = g_espnow.broadcast(buf, n);
+        err = g_espnow.broadcastEspNow(buf, n);
     }
     if (err == ESP_OK) {
         g_heartbeatsSent++;

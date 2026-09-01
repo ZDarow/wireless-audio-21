@@ -107,7 +107,7 @@ public:
     }
 
     // Широковещательная отправка (мастер → все сателлиты).
-    esp_err_t broadcast(const uint8_t* data, size_t size) {
+    esp_err_t broadcastEspNow(const uint8_t* data, size_t size) {
         if (size > 250) return ESP_ERR_INVALID_SIZE;
         static const uint8_t bc[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
         return esp_now_send(bc, data, size);
