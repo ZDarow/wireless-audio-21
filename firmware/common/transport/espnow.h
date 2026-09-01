@@ -9,26 +9,34 @@
 
 #include "audio_packet.h"
 #include "node_config.h"
-#include "transport.h"
 
 namespace audio21 {
 
-// Внутренние типы колбэков (совместимость с существующим кодом).
+// Callback при получении пакета от мастера (используется сателлитами).
 using EspNowRxCallback = void (*)(const uint8_t* data, size_t size, const MacAddr& from);
+
+// Callback при подтверждении отправки (необязательный): MAC пира + статус.
 using EspNowSentCallback = void (*)(const MacAddr& from, bool success);
 
-class EspNowTransport : public ITransport {
+class EspNowTransport {
 public:
     // Инициализация в режиме станции (Wi-Fi должен быть уже инициализирован).
-    bool begin() override {
+    bool begin() {
         if (esp_now_init() != ESP_OK) return false;
 
+        // Ключи шифрования (REPO_AUDIT V1): PMK обязателен до добавления
+        // шифрованных пиров; длина строго 16 байт.
         static_assert(sizeof(AUDIO_ESPNOW_PMK) - 1 == 16, "AUDIO_ESPNOW_PMK: ровно 16 байт");
         static_assert(sizeof(AUDIO_ESPNOW_LMK) - 1 == 16, "AUDIO_ESPNOW_LMK: ровно 16 байт");
         if (esp_now_set_pmk(reinterpret_cast<const uint8_t*>(AUDIO_ESPNOW_PMK)) != ESP_OK) {
             return false;
         }
 
+        // ESP-IDF требует зарегистрированного peer для broadcast-отправки:
+        // без записи FF:FF:FF:FF:FF:FF esp_now_send() возвращает
+        // ESP_ERR_ESPNOW_NOT_FOUND. Пир с channel=0 использует текущий канал.
+        // Примечание: шифрование multicast/broadcast в ESP-NOW не поддерживается
+        // (см. ESP-IDF Programming Guide, ESP-NOW Security), поэтому encrypt=false.
         esp_now_peer_info_t bc = {};
         memset(bc.peer_addr, 0xFF, 6);
         bc.channel = 0;
@@ -38,6 +46,8 @@ public:
         esp_now_add_peer(&bc);
 
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
+        // IDF 5.x: esp_now_recv_cb_t — (const esp_now_recv_info_t*, data, len);
+        // MAC источника — src_addr.
         esp_now_register_recv_cb([](const esp_now_recv_info_t* info, const uint8_t* data, int len) {
             if (g_rxCallback) {
                 MacAddr from;
@@ -45,6 +55,8 @@ public:
                 g_rxCallback(data, static_cast<size_t>(len), from);
             }
         });
+        // IDF 5.x: esp_now_send_cb_t — (const wifi_tx_info_t*, status);
+        // MAC получателя — des_addr.
         esp_now_register_send_cb([](const wifi_tx_info_t* info, esp_now_send_status_t status) {
             if (g_sentCallback) {
                 MacAddr from;
@@ -53,6 +65,7 @@ public:
             }
         });
 #else
+        // core 2.x: esp_now_recv_cb_t — (mac, data, len).
         esp_now_register_recv_cb([](const uint8_t* mac, const uint8_t* data, int len) {
             if (g_rxCallback) {
                 MacAddr from;
@@ -60,6 +73,7 @@ public:
                 g_rxCallback(data, static_cast<size_t>(len), from);
             }
         });
+        // core 2.x: esp_now_send_cb_t — (mac, status).
         esp_now_register_send_cb([](const uint8_t* mac, esp_now_send_status_t status) {
             if (g_sentCallback) {
                 MacAddr from;
@@ -72,51 +86,9 @@ public:
         return true;
     }
 
-    void end() override {
-        g_rxCallback = nullptr;
-        g_sentCallback = nullptr;
-        esp_now_deinit();
-    }
-
-    void setRxCallback(RxCallback cb) override { g_rxCallback = cb; }
-    void setSentCallback(SentCallback cb) override { g_sentCallback = cb; }
-
-    bool sendTo(const void* addr, size_t addrLen, const uint8_t* data, size_t len) override {
-        if (addrLen != 6 || !addr) return false;
-        if (len > 250) return false;
-        return esp_now_send(static_cast<const uint8_t*>(addr), data, len) == ESP_OK;
-    }
-
-    bool broadcast(const uint8_t* data, size_t len) override {
-        if (len > 250) return false;
-        static const uint8_t bc[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-        return esp_now_send(bc, data, len) == ESP_OK;
-    }
-
-    bool sendToChannel(uint8_t channel, const uint8_t* data, size_t len) override {
-        if (channel == kChannelLeft && g_hasLeftSatMac) {
-            return sendTo(g_leftSatMac.bytes, 6, data, len);
-        }
-        if (channel == kChannelRight && g_hasRightSatMac) {
-            return sendTo(g_rightSatMac.bytes, 6, data, len);
-        }
-        return broadcast(data, len);
-    }
-
-    void addPeer(const void* addr, size_t addrLen) override {
-        if (addrLen != 6 || !addr) return;
-        esp_now_peer_info_t peer = {};
-        memcpy(peer.peer_addr, addr, 6);
-        peer.channel = 0;
-        peer.ifidx = WIFI_IF_STA;
-        peer.encrypt = true;
-        memcpy(peer.lmk, AUDIO_ESPNOW_LMK, 16);
-        esp_now_add_peer(&peer);
-    }
-
-    void update() override {}
-
-    // Совместимость со старым API (используется в legacy master и satellite).
+    // Добавить пира по MAC (сателлит или мастер). Шифрование включено
+    // (encrypt + LMK) — ESP-NOW без шифрования был открытой уязвимостью
+    // (REPO_AUDIT V1): любой ESP32 в эфире мог подписаться на аудиопоток.
     bool addPeer(const MacAddr& mac) {
         esp_now_peer_info_t peer = {};
         memcpy(peer.peer_addr, mac.bytes, 6);
@@ -127,38 +99,39 @@ public:
         return esp_now_add_peer(&peer) == ESP_OK;
     }
 
+    // Удалить пира.
     void removePeer(const MacAddr& mac) {
         esp_now_del_peer(mac.bytes);
     }
 
+    // Отправить пакет конкретному пиру. Возвращает ESP_OK/ошибку.
     esp_err_t sendTo(const MacAddr& mac, const uint8_t* data, size_t size) {
         if (size > 250) return ESP_ERR_INVALID_SIZE;
         return esp_now_send(mac.bytes, data, size);
     }
 
+    // Широковещательная отправка (мастер → все сателлиты).
     esp_err_t broadcast(const uint8_t* data, size_t size) {
         if (size > 250) return ESP_ERR_INVALID_SIZE;
         static const uint8_t bc[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
         return esp_now_send(bc, data, size);
     }
 
-    void setLeftSatMac(const MacAddr& mac) { g_leftSatMac = mac; g_hasLeftSatMac = true; }
-    void setRightSatMac(const MacAddr& mac) { g_rightSatMac = mac; g_hasRightSatMac = true; }
+    void setRxCallback(EspNowRxCallback cb) { g_rxCallback = cb; }
+    void setSentCallback(EspNowSentCallback cb) { g_sentCallback = cb; }
+
+    void end() {
+        g_rxCallback = nullptr;
+        g_sentCallback = nullptr;
+        esp_now_deinit();
+    }
 
 private:
     static EspNowRxCallback g_rxCallback;
     static EspNowSentCallback g_sentCallback;
-    static MacAddr g_leftSatMac;
-    static MacAddr g_rightSatMac;
-    static bool g_hasLeftSatMac;
-    static bool g_hasRightSatMac;
 };
 
 inline EspNowRxCallback EspNowTransport::g_rxCallback = nullptr;
 inline EspNowSentCallback EspNowTransport::g_sentCallback = nullptr;
-inline MacAddr EspNowTransport::g_leftSatMac = {};
-inline MacAddr EspNowTransport::g_rightSatMac = {};
-inline bool EspNowTransport::g_hasLeftSatMac = false;
-inline bool EspNowTransport::g_hasRightSatMac = false;
 
 } // namespace audio21
