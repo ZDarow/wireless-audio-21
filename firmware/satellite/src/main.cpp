@@ -61,8 +61,6 @@ static QueueHandle_t g_rxQueue = nullptr;
 static RxPacket g_rxPool[kRxPoolSize];
 static uint8_t g_rxPoolIdx = 0;
 
-static SatelliteConsole g_console{g_cfg};
-
 // Период heartbeat (discovery-response) мастеру — статус online даже без аудио.
 // Общая константа в audio_packet.h (интервал < таймаут мастера).
 
@@ -228,6 +226,8 @@ protected:
         return false;
     }
 };
+
+static SatelliteConsole g_console{g_cfg};
 
 // ---------------------------------------------------------------------------
 // Setup / Loop

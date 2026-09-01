@@ -96,8 +96,6 @@ static UdpTransport g_udpTx;     // C3.1: TX аудио на сателлиты 
 static uint32_t g_packetsRx = 0;
 static uint32_t g_packetBytesRx = 0;
 
-static MasterS3Console g_console{g_cfg};
-
 // I2S-выход (C1.4): сабвуфер — моно (L=R), пины BCK=4/WS=5/DATA=6.
 static I2sOutput g_i2sOut;
 static bool g_i2sOn = false;
@@ -604,7 +602,8 @@ protected:
         return false;
     }
 };
-}
+
+static MasterS3Console g_console{g_cfg};
 
 // ---------------------------------------------------------------------------
 // Setup / Loop

@@ -51,8 +51,6 @@ static volatile uint32_t g_lastRightSeenMs = 0;
 static volatile bool g_a2dpConnected = false;
 static uint32_t g_lastDiscoveryMs = 0;
 
-static LegacyMasterConsole g_console{g_cfg};
-
 // Таймаут без подтверждения/ответа — сателлит считается оффлайн.
 // Общая константа kSatelliteTimeoutMs — в audio_packet.h (R14).
 
@@ -261,6 +259,8 @@ protected:
         return false;
     }
 };
+
+static LegacyMasterConsole g_console{g_cfg};
 
 // ---------------------------------------------------------------------------
 // Setup / Loop
