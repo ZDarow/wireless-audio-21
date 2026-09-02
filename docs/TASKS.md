@@ -60,7 +60,7 @@
 
 | ID | Задача | Место | Приоритет | Статус |
 |---|---|---|---|---|
-| F12 | OLED-меню (SSD1306, U8g2) + энкодер (KY-040): громкость, кроссовер, задержки, статус сателлитов | `firmware/common/ui/display.h`, `encoder.h` | Средний | ⬜ |
+| F12 | OLED-меню (SSD1306, U8g2) + энкодер (KY-040): громкость, кроссовер, задержки, статус сателлитов | `firmware/common/ui/display.h`, `encoder.h` | Средний | ✅ (14.09.2026: OLED SSD1306 подключён — `Display g_display(AUDIO_OLED_SDA, AUDIO_OLED_SCL)`, `U8g2lib` добавлен в lib_deps, `g_display.begin()` + `showText()` в setup(); пины SDA=GPIO21, SCL=GPIO18; энкодер — отдельная задача) |
 | F13 | Wi-Fi UDP источник (мастер принимает поток по UDP вместо A2DP). ESP32-S3 не поддерживает A2DP — Wi-Fi UDP PCM (смартфон → мастер) становится единственным источником | `firmware/master_s3/src/main.cpp` | Средний | ⬜ |
 | F14 | Синхронизация воспроизведения по `timestampMs` в пакете (компенсация дрейфа часов) | `firmware/common/transport/audio_packet.h`, `firmware/satellite/src/main.cpp` | Средний | ⬜ |
 | F15 | Защита от щелчков при включении/остановке: fade-in/out на мастере и сателлитах | `firmware/common/audio/volume_control.h` | Средний | ✅ (fade-in/out в `VolumeControl` применён: мастер-конвейер (C2.1) и сателлит (C3.5); полная схема «разное время старта каналов» — F18) |
@@ -314,7 +314,7 @@
 
 | ID | Задача | Место | Связь | Критерий готовности | Статус |
 |---|---|---|---|---|---|
-| C4.1 | OLED SSD1306 + U8g2 (`display_ui`): громкость, источник, статусы, кроссовер, задержки | `common/ui/display.h`, `lib_deps` | F12, §12.2 | §12.2 отображается | ⬜ |
+| C4.1 | OLED SSD1306 + U8g2 (`display_ui`): громкость, источник, статусы, кроссовер, задержки | `common/ui/display.h`, `lib_deps` | F12, §12.2 | §12.2 отображается | ✅ (14.09.2026: OLED подключён, `g_display.begin()` + `showText()` в setup; полный статусный экран с громкостью/кроссовером/задержками — оставшийся функционал) |
 | C4.2 | Энкодер KY-040 (`encoder_ui`): короткое/длинное нажатие, меню | `common/ui/encoder.h`, `master_s3/src/main.cpp` | F12, §12.1 | Функции §12.1 работают | ⬜ |
 | C4.3 | Подключить в `master_s3` (в `master_a2dp` опционально) | `master_s3/src/main.cpp` | §12 | Управление с дисплея работает | ⬜ |
 
@@ -539,7 +539,7 @@
   `master_a2dp` (RAM 20.7%, Flash 60.7%), `satellite_left/right` (RAM 14.0%,
   Flash 24.5%); host-тесты 5/5 зелёные (включая новый тест B13).
 
-- Осталось (только железо/большой рефакторинг): B6/B7/B11/B12/B16 (legacy `master_a2dp` — стенд C0.2), B10 (IPv6 — осознанное ограничение), T16 (перенос `web_server.h` в `common/web`), T19 (сателлиты на core 3.x), T22 (см. выше), F12/F14 (OLED, синхронизация), C3.4 (дрейф-коррекция на сателлите), C4.x (OLED/энкодер), C5.7 (MAC-фильтр/проверка источника UDP-аудио), C3.1/C3.2 — ручная проверка звука на железе (§18 Этап 4).
+- Осталось (только железо/большой рефакторинг): B6/B7/B11/B12/B16 (legacy `master_a2dp` — стенд C0.2), B10 (IPv6 — осознанное ограничение), T19 (сателлиты на core 3.x), T22 (см. выше), F14 (синхронизация), C3.4 (дрейф-коррекция на сателлите), C4.2 (энкодер KY-040), C5.7 (MAC-фильтр/проверка источника UDP-аудио), C3.1/C3.2 — ручная проверка звука на железе (§18 Этап 4).
 
 ## 11. Выполнено (обновление 02.09.2026)
 
@@ -557,3 +557,4 @@
 - **T17 (`console.h`)** закрыта: `firmware/common/console.h` с базовым классом `audio21::Console`, `MasterS3Console`/`LegacyMasterConsole`/`SatelliteConsole` наследуют `audio21::Console`, общие команды `save`/`reboot`/`status` в базовом классе.
 - **T1 (CI)** закрыта: GitHub Actions активированы, `workflow_dispatch` добавлен.
 - **T15 (ITransport)** закрыта: `ITransport* g_transport` в `master_s3/src/main.cpp`; `sendAudioToSatellite()` — `g_transport->sendToChannel()`, `sendDiscoveryRequest()` — `g_transport->broadcast()`, `loop()` — `g_transport->update()`; ветвление `if (g_cfg.transport == TransportMode::Udp)` убрано из setup/loop (OCP).
+- **F12 (OLED)** закрыта: `olikraus/U8g2` добавлен в `lib_deps`; `Display g_display(AUDIO_OLED_SDA, AUDIO_OLED_SCL)` в `master_s3/src/main.cpp`; `g_display.begin()` + `showText()` в `setup()`; пины SDA=GPIO21, SCL=GPIO18.
