@@ -93,6 +93,8 @@ static DelayLine* g_delaySub = nullptr;
 static NodeConfig g_cfg;
 static WiFiUDP g_udp;            // приём аудио от смартфона (порт 5004)
 static UdpTransport g_udpTx;     // C3.1: TX аудио на сателлиты (порт 4210)
+static EspNowTransport g_espnow; // C3.1: ESP-NOW транспорт
+static ITransport* g_transport = nullptr; // C3.1: абстрактный транспорт
 static uint32_t g_packetsRx = 0;
 static uint32_t g_packetBytesRx = 0;
 
@@ -109,7 +111,6 @@ static constexpr float kToneAmp = 0.2f;
 
 // ESP-NOW: приём heartbeat от сателлитов (discovery-response) для статуса
 // online даже без аудио-потока. Аудио-конвейер — Этап 2+.
-static EspNowTransport g_espnow;
 static volatile bool g_leftOnline = false;
 static volatile bool g_rightOnline = false;
 static uint32_t g_leftLastSeenMs = 0;
@@ -178,7 +179,7 @@ static void sendDiscoveryRequest() {
     uint8_t buf[kMaxPacketSize];
     size_t n = buildPacket(buf, sizeof(buf), 0x00, kSampleFormatInt16,
                            nullptr, 0, (uint32_t)millis(), 0, kFlagDiscoveryRequest);
-    g_espnow.broadcastEspNow(buf, n);
+    g_transport->broadcast(buf, n);
 }
 
 static void onEspNowPacket(const uint8_t* data, size_t size, const MacAddr& from) {
@@ -220,14 +221,9 @@ static void sendAudioToSatellite(uint8_t channel, const int16_t* samples, size_t
     if (n == 0) return;
     uint8_t buf[kMaxPacketSize];
     size_t len = buildPacket(buf, sizeof(buf), channel, kSampleFormatInt16,
-                             samples, (uint16_t)(n * sizeof(int16_t)),
-                             (uint32_t)millis(), g_txPacketId++);
-    if (g_cfg.transport == TransportMode::EspNow) {
-        MacAddr mac = (channel == kChannelLeft) ? g_cfg.leftSatMac : g_cfg.rightSatMac;
-        if (mac != MacAddr{}) g_espnow.sendTo(mac, buf, len);
-    } else {
-        g_udpTx.sendToChannel(channel, UdpTransport::kDefaultPort, buf, len);
-    }
+                              samples, (uint16_t)(n * sizeof(int16_t)),
+                              (uint32_t)millis(), g_txPacketId++);
+    g_transport->sendToChannel(channel, buf, len);
 }
 
 static void flushTxBatch() {
@@ -714,6 +710,13 @@ void setup() {
         }
     }
 
+    // C3.1: установить указатель на транспорт для унифицированного вызова.
+    if (g_cfg.transport == TransportMode::EspNow) {
+        g_transport = &g_espnow;
+    } else {
+        g_transport = &g_udpTx;
+    }
+
     // I2S-выход (C1.4): PCM5102A на пинах BCK/WS/DATA, сабвуфер — моно (L=R).
     I2sOutputPins i2sPins = {(int)g_cfg.i2sBck, (int)g_cfg.i2sWs, (int)g_cfg.i2sDataOut};
     if (g_i2sOut.init(i2sPins, g_cfg.sampleRate, /*mono=*/true)) {
@@ -874,13 +877,8 @@ void loop() {
     // Драйвер аудио-выхода: вычитываем из jitter-буфера в I2S.
     audioOutTick();
 
-    // C3.1: UDP-режим — discovery-ответы сателлитов (запоминаем их IP для
-    // unicast-отправки аудио; fallback — broadcast).
-    if (g_cfg.transport == TransportMode::Udp) {
-        uint8_t discBuf[kMaxPacketSize];
-        size_t dn = g_udpTx.receive(discBuf, sizeof(discBuf));
-        if (dn > 0) g_udpTx.handleDiscovery(discBuf, dn, g_udpTx.lastFrom());
-    }
+    // C3.1: обновление транспорта (UDP receive+discovery или ESP-NOW no-op).
+    g_transport->update();
 
     // Тестовый тон (C1.4) — не блокирует loop.
     toneTick();
