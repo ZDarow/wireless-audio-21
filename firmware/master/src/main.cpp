@@ -26,7 +26,7 @@
 #include "udp_transport.h"
 #include "audio_packet.h"
 #include "web_server.h"
-#include "console.h"
+#include "common/console.h"
 
 using namespace audio21;
 
@@ -180,9 +180,9 @@ static void a2dpConnectionState(esp_a2d_connection_state_t state, void*) {
 // Serial-консоль legacy-мастера (T17).
 // ---------------------------------------------------------------------------
 
-class LegacyMasterConsole : public Console {
+class LegacyMasterConsole : public audio21::Console {
 public:
-    using Console::Console;
+    using audio21::Console::Console;
 
 protected:
     void cmdStatus() override {

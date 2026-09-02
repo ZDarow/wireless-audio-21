@@ -24,7 +24,7 @@
 #include "udp_transport.h"
 #include "audio_packet.h"
 #include "i2s_output.h"
-#include "console.h"
+#include "common/console.h"
 
 using namespace audio21;
 
@@ -183,9 +183,9 @@ static void onDiscoveryRequest(const uint8_t* data, size_t size, const MacAddr& 
 // Serial-консоль сателлита (T17).
 // ---------------------------------------------------------------------------
 
-class SatelliteConsole : public Console {
+class SatelliteConsole : public audio21::Console {
 public:
-    using Console::Console;
+    using audio21::Console::Console;
 
 protected:
     void cmdStatus() override {

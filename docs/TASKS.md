@@ -12,7 +12,7 @@
 
 | ID | Задача | Место | Приоритет | Статус |
 |---|---|---|---|---|
-| T1 | **CI не запускается**: на GitHub 0 runs при активном workflow и включённых Actions. Вероятно, Actions не активированы в настройках репозитория (Settings → Actions → Enable). В `ci.yml` добавлен `workflow_dispatch` | `.github/workflows/ci.yml` | Высокий | ⬜ (workflow_dispatch добавлен) |
+| T1 | **CI не запускается**: на GitHub 0 runs при активном workflow и включённых Actions. Вероятно, Actions не активированы в настройках репозитория (Settings → Actions → Enable). В `ci.yml` добавлен `workflow_dispatch` | `.github/workflows/ci.yml` | Высокий | ✅ (workflow_dispatch добавлен, Actions активированы) |
 
 ---
 
@@ -234,7 +234,7 @@
 | T14 | 🟠 | Дублирование I2S-обвязки (`initI2S`/`writeSample` vs `initI2SSub`/`writeSubSample`) — вынести в `firmware/common/audio/i2s_output.h` с guard-ами core 2.x/3.x | `master/src/main.cpp`, `satellite/src/main.cpp` | ✅ (закрыто через C1.4: `common/audio/i2s_output.h`, сателлит и master_s3 переведены на обёртку) |
 | T15 | 🟠 | Ввести транспорт-интерфейс (`ITransport` с `sendTo/sendToChannel/broadcast`): убрать ветвления `if (transport == EspNow/Udp)` из `flushSatelliteBatches`/setup/loop (OCP) | `firmware/common/transport`, `master/src/main.cpp`, `satellite/src/main.cpp` | ⬜ |
 | T16 | 🟠 | `web_server.h` лежит в `master/include`, используется `master_s3` — перенести в `firmware/common/web/`; разбить на web-core + опциональные audio-хендлеры; сгруппировать 9 параметров конструктора в `struct AudioContext` (ISP) | `firmware/common/web/web_server.h`, `platformio.ini` | ✅ (13.08.2026: файл перенесён; include-пути покрываются существующими `-I firmware/common/web` в build_flags; декомпозиция SPA/класса — отдельная задача A1) |
-| T17 | 🟡 | Serial-консоль дублируется в 3 main.cpp — выделить общий парсер команд в `firmware/common/console.h` | `firmware/*/src/main.cpp` | ⬜ |
+| T17 | 🟡 | Serial-консоль дублируется в 3 main.cpp — выделить общий парсер команд в `firmware/common/console.h` | `firmware/*/src/main.cpp` | ✅ (12.09.2026: `common/console.h` создан, `MasterS3Console`/`LegacyMasterConsole`/`SatelliteConsole` наследуют `audio21::Console`; `#include "console.h"` → `#include "common/console.h"` во всех main.cpp; конфликт с Arduino `Console` библиотекой решен квалификацией `audio21::Console`) |
 | T18 | 🟡 | CI: зафиксировать версию PlatformIO (`pipx install platformio==6.1.19`), добавить кэширование `~/.platformio` и `.pio-core-master` | `.github/workflows/ci.yml` | ✅ (12.08.2026: версия зафиксирована, кэш пакетов + core-каталога) |
 | T19 | 🟡 | Миграция сателлитов на Arduino core 3.x (`driver/i2s_std.h`) → единый core-каталог, удаление `platformio.master.ini` (снимает конфликт фреймворков, legacy I2S в IDF 5.x deprecated) | `platformio.ini`, `platformio.master.ini`, `satellite/src/main.cpp` | ⬜ |
 | T20 | 🟡 | Синхронизировать документацию: `architecture.md` §9 («старые env в истории» — неверно, они в файле), §10 (mDNS реализован — F16), структура §8 без `master_s3`; `flash_master.sh`/`README.md` ведут на `master_a2dp` вместо `master_s3_wifi` (`hardware.md`/`wiring.md` уже синхронизированы — B17) | `docs/`, `scripts/flash_master.sh`, `README.md` | ✅ (12.08.2026: architecture.md §9/§10, README (структура, env, REST, требования), flash-скрипты → S3 env) |
@@ -539,10 +539,20 @@
   `master_a2dp` (RAM 20.7%, Flash 60.7%), `satellite_left/right` (RAM 14.0%,
   Flash 24.5%); host-тесты 5/5 зелёные (включая новый тест B13).
 
-- Осталось (только железо/большой рефакторинг): T1 (активация CI на GitHub),
-  B6/B7/B11/B12/B16 (legacy `master_a2dp` — стенд C0.2), B10 (IPv6 — осознанное
-  ограничение), T15 (ITransport), T16 (перенос
-  `web_server.h` в `common/web`), T17 (`console.h`), T19 (сателлиты на core 3.x),
-  T22 (см. выше), F12/F14 (OLED, синхронизация), C3.4 (дрейф-коррекция на
-  сателлите), C4.x (OLED/энкодер), C5.7 (MAC-фильтр/проверка источника UDP-аудио),
-  C3.1/C3.2 — ручная проверка звука на железе (§18 Этап 4).
+- Осталось (только железо/большой рефакторинг): B6/B7/B11/B12/B16 (legacy `master_a2dp` — стенд C0.2), B10 (IPv6 — осознанное ограничение), T15 (ITransport), T16 (перенос `web_server.h` в `common/web`), T19 (сателлиты на core 3.x), T22 (см. выше), F12/F14 (OLED, синхронизация), C3.4 (дрейф-коррекция на сателлите), C4.x (OLED/энкодер), C5.7 (MAC-фильтр/проверка источника UDP-аудио), C3.1/C3.2 — ручная проверка звука на железе (§18 Этап 4).
+
+## 11. Выполнено (обновление 02.09.2026)
+
+- **Прошивка ESP32-S3 (мастер = сабвуфер)** — `pio run -e master_s3_wifi -t upload --upload-port COM10` — **SUCCESS** (150 с):
+  - COM10: ESP32-S3 (QFN56, rev v0.2), Wi-Fi, BT 5 (LE), Dual Core + LP Core, 240MHz, PSRAM 2MB, MAC `20:6e:f1:d6:03:f0`.
+  - Прошивка: bootloader → partitions → boot_app0 → firmware.bin (1 166 215 байт, Flash 34.9%).
+  - Hard reset через RTS pin после прошивки.
+  - **Баг с кодировкой**: вывод esptool падал с `UnicodeEncodeError: 'charmap' codec can't encode characters` (терминал cp1251). Решение: `cmd /c "set PYTHONUTF8=1& platformio.exe ..."` — запуск через `PYTHONUTF8=1` в cmd.exe.
+- **Конфликт имён `Console` (Arduino `Console @ 3.3.11` vs `audio21::Console`)** — решён:
+  - `#include "console.h"` → `#include "common/console.h"` во всех 3 main.cpp (мастер, legacy, сателлит).
+  - `class X : public Console` → `class X : public audio21::Console`.
+  - `using Console::Console` → `using audio21::Console::Console`.
+  - Без этих исправлений сборка `master_s3_wifi` падала с переопределением `Console` библиотеки Arduino.
+- **Исправлена коррупция `platformio.ini`**: строка `-DAUDIO_I2S_DATA_OUT=12` была повреждена (`12?`), восстановлена из git.
+- **T17 (`console.h`)** закрыта: `firmware/common/console.h` с базовым классом `audio21::Console`, `MasterS3Console`/`LegacyMasterConsole`/`SatelliteConsole` наследуют `audio21::Console`, общие команды `save`/`reboot`/`status` в базовом классе.
+- **T1 (CI)** закрыта: GitHub Actions активированы, `workflow_dispatch` добавлен.

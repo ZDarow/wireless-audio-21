@@ -48,7 +48,7 @@
 #include "pcm_pipeline.h"
 #include "delay_line.h"
 #include "i2s_output.h"
-#include "console.h"
+#include "common/console.h"
 
 using namespace audio21;
 
@@ -482,9 +482,9 @@ static bool pingHost(const IPAddress& ip, uint32_t count, uint32_t timeoutMs) {
 // Serial-консоль S3-мастера (T17).
 // ---------------------------------------------------------------------------
 
-class MasterS3Console : public Console {
+class MasterS3Console : public audio21::Console {
 public:
-    using Console::Console;
+    using audio21::Console::Console;
 
 protected:
     void cmdStatus() override {
