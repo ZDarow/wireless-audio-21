@@ -49,6 +49,7 @@
 #include "delay_line.h"
 #include "i2s_output.h"
 #include "common/console.h"
+#include "common/ui/display.h"
 
 using namespace audio21;
 
@@ -95,6 +96,7 @@ static WiFiUDP g_udp;            // приём аудио от смартфон�
 static UdpTransport g_udpTx;     // C3.1: TX аудио на сателлиты (порт 4210)
 static EspNowTransport g_espnow; // C3.1: ESP-NOW транспорт
 static ITransport* g_transport = nullptr; // C3.1: абстрактный транспорт
+static Display g_display(AUDIO_OLED_SDA, AUDIO_OLED_SCL); // F12: OLED SSD1306
 static uint32_t g_packetsRx = 0;
 static uint32_t g_packetBytesRx = 0;
 
@@ -725,6 +727,14 @@ void setup() {
                       (unsigned)g_cfg.sampleRate, g_cfg.i2sBck, g_cfg.i2sWs, g_cfg.i2sDataOut);
     } else {
         Logger::error("audio", "I2S init failed");
+    }
+
+    // F12: OLED дисплей.
+    if (g_display.begin()) {
+        Logger::info("display", "OLED SSD1306 ready");
+        g_display.showText("Audio 2.1", "Master", "ESP32-S3", "");
+    } else {
+        Logger::warn("display", "OLED init failed");
     }
 
     // Jitter-буфер (C1.3, §7.6): 60 мс ёмкость, целевая задержка 30 мс.
