@@ -2,6 +2,11 @@
 // Вынесен из web_server.h для декомпозиции монолита (A1).
 // Header-only: static const char[] — каждый TU получает свою копию (~6 KB),
 // для проекта это приемлемо (2 TU: master_s3 + legacy master).
+//
+// W-1: URL-обработчики в JS строго соответствуют роутам bindRoutes() в
+// web_server.h (/api/save, /api/system/reboot и т.д.). Перед добавлением
+// нового вызова сверяйтесь со списком роутов — мёртвые эндпоинты давали
+// 404 через onNotFound без явной ошибки в UI.
 #pragma once
 
 namespace audio21 {
@@ -94,6 +99,14 @@ static const char kSpaHtml[] = R"rawliteral(
 </div>
 
 <div id="p-wifi" class="page">
+  <div class="card">
+    <h2>Пароль точки доступа</h2>
+    <label>Новый пароль AP (мин. 8 символов)</label>
+    <input type="password" id="apPass" style="flex:1">
+    <div class="row">
+      <button id="apApply" class="ghost">Сменить пароль AP</button>
+    </div>
+  </div>
   <div class="card">
     <h2>Wi-Fi</h2>
     <label>Режим</label>
@@ -216,6 +229,19 @@ function toast(msg){ const t=$('toast'); t.textContent=msg; t.style.display='blo
 function setVal(id,v){ const el=$(id); if(el) el.textContent=v; }
 
 const pages = { dashboard:'p-dashboard', wifi:'p-wifi', internet:'p-internet', audio:'p-audio', delays:'p-delays', satellites:'p-satellites', system:'p-system', update:'p-update', logs:'p-logs' };
+// W-2: единый helper — проверяет HTTP-статус, показывает ошибку в toast
+// (раньше 401/500 молча игнорировались через пустой catch).
+async function req(path, opts={}) {
+  const r = await fetch(path, Object.assign({headers:{'X-CSRF-Token': csrf}}, opts));
+  let j = null;
+  try { j = await r.json(); } catch (e) {}
+  if (!r.ok || (j && j.ok === false)) {
+    throw new Error((j && j.error) ? j.error : 'HTTP ' + r.status);
+  }
+  return j;
+}
+// W-2: фоновые опросы не должны спамить toast — просто глушим ошибку.
+function safe(fn) { return () => { try { fn(); } catch(e){} }; }
 document.querySelectorAll('nav button[data-p]').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active'));
   document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));
@@ -233,8 +259,9 @@ async function bootCheck() {
     const s = await api('/api/status');
     if (s.system.authed) { hideLogin(); }
     else if (!s.system.auth_enabled) {
-      const pass = prompt('Первый запуск. Задайте пароль администратора (мин 4 символа):');
+      const pass = prompt('Первый запуск. Задайте пароль администратора (мин 8 символов):');
       if (pass) {
+        if (pass.length < 8) { toast('Минимум 8 символов'); return; }
         const c = prompt('Повторите пароль:');
         if (pass === c) {
           await fetch('/api/admin/setup', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:pass, confirm:c}) });
@@ -284,6 +311,10 @@ async function refresh() {
     $('dlyS').value = s.delays.sub_ms; setVal('dly_s', s.delays.sub_ms);
 
     $('sysHost').value = s.system.hostname;
+
+    // S-1: баннер дефолтного пароля AP (раньше DOM-элемент был, но JS его
+    // никогда не показывал).
+    $('defaultPwBanner').style.display = s.system.default_ap_password ? 'block' : 'none';
   } catch (e) {}
 }
 
@@ -294,29 +325,52 @@ $('loginBtn').onclick = async () => {
   else { toast('Неверный пароль'); }
 };
 $('dLogoutBtn').onclick = async () => { await fetch('/api/logout', {method:'POST'}); showLogin(); };
-$('dSaveBtn').onclick = async () => { await fetch('/api/config/save', {method:'POST', headers:{'X-CSRF-Token':csrf}}); toast('Сохранено'); };
-$('dRebootBtn').onclick = async () => { if (confirm('Перезагрузить?')) { await fetch('/api/reboot', {method:'POST', headers:{'X-CSRF-Token':csrf}}); toast('Перезагрузка...'); } };
-$('dMuteBtn').onclick = async () => { const s = await api('/api/status'); const m = !s.audio.mute; await fetch('/api/volume', {method:'PUT', headers:{'Content-Type':'application/json','X-CSRF-Token':csrf}, body:JSON.stringify({mute:m})}); refresh(); };
+// W-1: URL строго соответствуют роутам web_server.h (было: /api/config/save,
+// /api/reboot — 404). W-2: ошибки показываются в toast вместо молчаливого игнора.
+$('dSaveBtn').onclick = async () => { try { await req('/api/save', {method:'POST'}); toast('Сохранено'); } catch(e){ toast('Ошибка: '+e.message); } };
+$('dRebootBtn').onclick = async () => { if (!confirm('Перезагрузить?')) return; try { await req('/api/system/reboot', {method:'POST'}); toast('Перезагрузка...'); } catch(e){ toast('Ошибка: '+e.message); } };
+$('dMuteBtn').onclick = async () => { try { const s = await req('/api/status'); const m = !s.audio.mute; await req('/api/volume', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({mute:m})}); refresh(); } catch(e){ toast('Ошибка: '+e.message); } };
 
+// W-1: серверный контракт /api/volume — {volume, channel} (по одному каналу
+// за запрос), /api/delay — {channel, delay_ms}. Раньше SPA отправлял
+// master_volume/left_ms — сервер отвечал 400 «missing volume», и все
+// ползунки молча не работали.
+async function putVolume(channel, value) {
+  await req('/api/volume', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({channel, volume:value})});
+}
 $('aApply').onclick = async () => {
-  const body = { master_volume: +$('a_vol').value, left_volume: +$('a_volLeft').value, right_volume: +$('a_volRight').value, sub_volume: +$('a_volSub').value, crossover_hz: +$('a_xo').value };
-  await fetch('/api/volume', {method:'PUT', headers:{'Content-Type':'application/json','X-CSRF-Token':csrf}, body:JSON.stringify(body)});
-  toast('Применено');
+  try {
+    await putVolume('master', +$('a_vol').value);
+    await putVolume('left',   +$('a_volLeft').value);
+    await putVolume('right',  +$('a_volRight').value);
+    await putVolume('sub',    +$('a_volSub').value);
+    await req('/api/crossover', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({crossover_hz:+$('a_xo').value})});
+    toast('Применено');
+  } catch(e){ toast('Ошибка: '+e.message); }
 };
 $('dApply').onclick = async () => {
-  const body = { left_ms: +$('dlyL').value, right_ms: +$('dlyR').value, sub_ms: +$('dlyS').value };
-  await fetch('/api/delay', {method:'PUT', headers:{'Content-Type':'application/json','X-CSRF-Token':csrf}, body:JSON.stringify(body)});
-  toast('Применено');
+  try {
+    for (const [ch, el] of [['left','dlyL'],['right','dlyR'],['sub','dlyS']]) {
+      await req('/api/delay', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({channel:ch, delay_ms:+$(el).value})});
+    }
+    toast('Применено');
+  } catch(e){ toast('Ошибка: '+e.message); }
 };
 $('sysApply').onclick = async () => {
-  await fetch('/api/system/hostname', {method:'PUT', headers:{'Content-Type':'application/json','X-CSRF-Token':csrf}, body:JSON.stringify({hostname:$('sysHost').value})});
-  toast('Применено');
+  try { await req('/api/system/hostname', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({hostname:$('sysHost').value})}); toast('Применено'); }
+  catch(e){ toast('Ошибка: '+e.message); }
 };
 
+$('apApply').onclick = async () => {
+  const pass = $('apPass').value;
+  if (pass.length < 8) { toast('Минимум 8 символов'); return; }
+  try { await req('/api/wifi/ap_password', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:pass})}); $('apPass').value=''; toast('Пароль AP изменён, перезагружаю мастер...'); await req('/api/system/reboot', {method:'POST'}); }
+  catch(e){ toast('Ошибка: '+e.message); }
+};
 $('wApply').onclick = async () => {
   const mode = $('wMode').value;
-  await fetch('/api/wifi/mode', {method:'PUT', headers:{'Content-Type':'application/json','X-CSRF-Token':csrf}, body:JSON.stringify({mode})});
-  toast('Режим изменён');
+  try { await req('/api/wifi/mode', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({mode})}); toast('Режим изменён'); }
+  catch(e){ toast('Ошибка: '+e.message); }
 };
 
 $('uBtn').onclick = async () => {
@@ -338,29 +392,36 @@ async function refreshLogs() {
   const lines = await r.text();
   $('logOut').textContent = lines;
 }
-setInterval(refreshLogs, 2000);
-refreshLogs();
+setInterval(safe(refreshLogs), 2000);
+safe(refreshLogs)();
 
+// W-1: парсим ответ как {networks:[...]} (контракт /api/wifi/scan), раньше
+// JS итерировал весь объект — список сетей был всегда пустым.
+// W-2: фоновый опрос скана рвёт радио при пустом кеше (B9) — запускаем
+// только при открытой странице Wi-Fi, ошибки не показываем.
+let wifiTimer = null;
 async function refreshWifi() {
-  const r = await fetch('/api/wifi/scan');
-  const list = await r.json();
+  const j = await req('/api/wifi/scan');
   const el = $('wifiList');
-  el.innerHTML = '';
-  for (const n of list) {
+  el.textContent = '';
+  for (const n of (j.networks || [])) {
     const row = document.createElement('div');
     row.style.cssText = 'padding:8px;border:1px solid #333;border-radius:4px;margin:4px 0;cursor:pointer;font-size:14px';
     row.textContent = n.ssid + '  (' + n.rssi + ' dBm' + (n.security === 'OPEN' ? ', open' : '') + ', ch ' + n.channel + ')';
     row.onclick = async () => {
       const pass = prompt('Пароль для '+n.ssid+':');
       if (pass === null) return;
-      await fetch('/api/wifi/save', {method:'POST', headers:{'Content-Type':'application/json','X-CSRF-Token':csrf}, body:JSON.stringify({ssid:n.ssid, password:pass})});
-      toast('Сохранено');
+      try { await req('/api/wifi/connect', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ssid:n.ssid, password:pass, save:true})}); toast('Подключение…'); }
+      catch(e){ toast('Ошибка: '+e.message); }
     };
     el.appendChild(row);
   }
 }
-setInterval(refreshWifi, 5000);
-refreshWifi();
+function startWifiPolling() { if (!wifiTimer) { safe(refreshWifi)(); wifiTimer = setInterval(safe(refreshWifi), 15000); } }
+function stopWifiPolling() { if (wifiTimer) { clearInterval(wifiTimer); wifiTimer = null; } }
+document.querySelectorAll('nav button[data-p]').forEach(b => b.addEventListener('click', () => {
+  if (b.dataset.p === 'wifi') startWifiPolling(); else stopWifiPolling();
+}));
 </script>
 </body>
 </html>

@@ -30,15 +30,23 @@ class I2sOutput {
 public:
     // init: инициализация I2S в master-TX режиме. mono=true — write() принимает
     // моно-сэмплы и дублирует в стерео; mono=false — write() принимает пары {L,R}.
-    // При любой ошибке — жёсткий restart, чтобы не уйти в невалидное состояние.
-    bool init(const I2sOutputPins& pins, uint32_t sampleRate, bool mono) {
+    // При ошибке возвращает false (вызов ESP.restart() оставлен только как
+    // явный fallback через onInitFailure — решение о перезагрузке принимает
+    // приложение, а не библиотека).
+    using InitFailHandler = void (*)();
+
+    bool init(const I2sOutputPins& pins, uint32_t sampleRate, bool mono,
+              InitFailHandler onInitFailure = nullptr) {
+        auto fail = [&](const char* msg) -> bool {
+            Logger::error("audio", "%s", msg);
+            if (onInitFailure) onInitFailure();
+            return false;
+        };
         m_mono = mono;
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
         i2s_chan_config_t chanCfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
         if (i2s_new_channel(&chanCfg, &m_tx, nullptr) != ESP_OK) {
-            Logger::error("audio", "I2S new_channel failed");
-            ESP.restart();
-            return false;
+            return fail("I2S new_channel failed");
         }
 
         i2s_std_config_t stdCfg = {
@@ -55,14 +63,10 @@ public:
             },
         };
         if (i2s_channel_init_std_mode(m_tx, &stdCfg) != ESP_OK) {
-            Logger::error("audio", "I2S init_std_mode failed");
-            ESP.restart();
-            return false;
+            return fail("I2S init_std_mode failed");
         }
         if (i2s_channel_enable(m_tx) != ESP_OK) {
-            Logger::error("audio", "I2S channel_enable failed");
-            ESP.restart();
-            return false;
+            return fail("I2S channel_enable failed");
         }
 #else
         i2s_config_t conf = {};
@@ -84,14 +88,10 @@ public:
         pinsCfg.data_in_num = I2S_PIN_NO_CHANGE;
 
         if (i2s_driver_install(I2S_NUM_0, &conf, 0, nullptr) != ESP_OK) {
-            Logger::error("audio", "I2S driver_install failed");
-            ESP.restart();
-            return false;
+            return fail("I2S driver_install failed");
         }
         if (i2s_set_pin(I2S_NUM_0, &pinsCfg) != ESP_OK) {
-            Logger::error("audio", "I2S set_pin failed");
-            ESP.restart();
-            return false;
+            return fail("I2S set_pin failed");
         }
         m_port = I2S_NUM_0;
 #endif
@@ -100,38 +100,63 @@ public:
     }
 
     // n — число моно-сэмплов (mono) или стерео-пар (stereo).
-    void write(const int16_t* samples, size_t n) {
+    // timeoutMs — конечный таймаут записи: если DMA-буфер забит (например,
+    // остановлена тактовая), запись прерывается вместо вечной блокировки
+    // loop() и watchdog-panic. Дефолт 100 мс.
+    void write(const int16_t* samples, size_t n, uint32_t timeoutMs = 100) {
         if (!m_initialized) return; // guard: не писать в неинициализированный I2S
         if (m_mono) {
-            int16_t frame[2];
-            for (size_t i = 0; i < n; i++) {
-                frame[0] = samples[i];
-                frame[1] = samples[i];
-                writeRaw(frame, 2);
+            // Блочное дублирование L=R с одним writeRaw на чанк: раньше
+            // каждый семпл отправлялся отдельным 4-байтовым трансфером.
+            while (n > 0) {
+                size_t chunk = n > kMaxWrite ? kMaxWrite : n;
+                int16_t frame[2 * kMaxWrite];
+                for (size_t i = 0; i < chunk; i++) {
+                    frame[2 * i] = samples[i];
+                    frame[2 * i + 1] = samples[i];
+                }
+                writeRaw(frame, 2 * chunk, timeoutMs);
+                samples += chunk;
+                n -= chunk;
             }
         } else {
-            writeRaw(samples, n * 2);
+            while (n > 0) {
+                size_t chunk = n > kMaxWrite ? kMaxWrite : n;
+                writeRaw(samples, chunk * 2, timeoutMs);
+                samples += chunk * 2;
+                n -= chunk;
+            }
         }
     }
 
     // Активность без реального потока — тишина.
-    void silence(size_t nFrames) {
+    void silence(size_t nFrames, uint32_t timeoutMs = 100) {
         if (!m_initialized) return; // guard
-        int16_t zero = 0;
-        for (size_t i = 0; i < nFrames; i++) write(&zero, 1);
+        while (nFrames > 0) {
+            size_t chunk = nFrames > kMaxWrite ? kMaxWrite : nFrames;
+            int16_t zeros[kMaxWrite] = {};
+            write(zeros, chunk, timeoutMs);
+            nFrames -= chunk;
+        }
     }
 
 private:
-    void writeRaw(const int16_t* samples, size_t n) {
+    static constexpr size_t kMaxWrite = 512; // максимум моно-семплов за чанк write()
+
+    void writeRaw(const int16_t* samples, size_t n, uint32_t timeoutMs) {
         size_t bytes = n * sizeof(int16_t);
         const uint8_t* p = reinterpret_cast<const uint8_t*>(samples);
+        // Конечный таймаут вместо portMAX_DELAY, чтобы зависший I2S
+        // не останавливал loop().
+        TickType_t ticks = pdMS_TO_TICKS(timeoutMs);
         while (bytes > 0) {
             size_t written = 0;
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
-            if (i2s_channel_write(m_tx, p, bytes, &written, portMAX_DELAY) != ESP_OK) return;
+            if (i2s_channel_write(m_tx, p, bytes, &written, ticks) != ESP_OK) return;
 #else
-            if (i2s_write(m_port, p, bytes, &written, portMAX_DELAY) != ESP_OK) return;
+            if (i2s_write(m_port, p, bytes, &written, ticks) != ESP_OK) return;
 #endif
+            if (written == 0) return; // защита от бесконечного цикла
             p += written;
             bytes -= written;
         }

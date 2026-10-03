@@ -26,11 +26,14 @@
 #include <ESPmDNS.h>
 #include <esp_netif.h>
 #include <esp_system.h>
+#include <esp_mac.h>
+#include <esp_coexist.h>
 #include <esp_task_wdt.h>
 #include <ping/ping_sock.h>
 #include <freertos/semphr.h>
 #include <time.h>
 #include <vector>
+#include <stdexcept>
 #include <math.h>
 
 #include "node_config.h"
@@ -75,6 +78,8 @@ static int16_t g_txRight[kBatchSamples];
 static size_t g_txCount = 0;
 static uint32_t g_txPacketId = 0;
 static uint32_t g_txPackets = 0;
+static uint32_t g_txBatchLastMs = 0;   // время последнего пополнения батча
+static uint32_t g_audioOutLastMs = 0;  // время прошлого paced-вычитания I2S
 
 // DSP-конвейер (C2.1): volume → tone → limiter → LR4 crossover → L/R/Sub.
 static PcmPipeline g_pipeline;
@@ -85,6 +90,48 @@ static PcmPipeline g_pipeline;
 static DelayLine* g_delayLeft = nullptr;
 static DelayLine* g_delayRight = nullptr;
 static DelayLine* g_delaySub = nullptr;
+
+// Потокобезопасность DSP (REPO_AUDIT: гонка loop() ↔ web-задача):
+// обработчики /api/volume|mute|crossover|delay вызывают setVolume/setMute/
+// setCrossoverHz из FreeRTOS-задачи WebServer, пока loop() читает те же
+// объекты в process(). Мьютекс сериализует доступ; tryLock в audio path —
+// чтобы при кратковременном удержании мьютекса веб-задачей аудио не
+// блокировалось (пропущенные обновления применятся следующим пакетом).
+class DspGuard {
+public:
+    DspGuard() {
+        m_mx = xSemaphoreCreateMutex();
+    }
+    bool valid() const { return m_mx != nullptr; }
+    void lock() { if (m_mx) xSemaphoreTake(m_mx, portMAX_DELAY); }
+    bool tryLock() { return m_mx == nullptr || xSemaphoreTake(m_mx, 0) == pdTRUE; }
+    void unlock() { if (m_mx) xSemaphoreGive(m_mx); }
+
+private:
+    SemaphoreHandle_t m_mx = nullptr;
+};
+
+static DspGuard g_dspLock;
+
+class DspLock {   // RAII: full lock (редкие пути — тон/пересборка фильтра)
+public:
+    explicit DspLock(DspGuard& g) : m_g(g) { m_g.lock(); }
+    ~DspLock() { m_g.unlock(); }
+
+private:
+    DspGuard& m_g;
+};
+
+class DspTryLock { // RAII: non-blocking lock для audio path
+public:
+    explicit DspTryLock(DspGuard& g) : m_g(g), m_ok(g.tryLock()) {}
+    operator bool() const { return m_ok; }
+    ~DspTryLock() { if (m_ok) m_g.unlock(); }
+
+private:
+    DspGuard& m_g;
+    bool m_ok;
+};
 
 // ---------------------------------------------------------------------------
 // Глобальное состояние
@@ -442,6 +489,11 @@ static bool initWifi() {
 // Serial-консоль
 // ---------------------------------------------------------------------------
 
+// Хуки DSP-мьютекса для web-обработчиков (свободные функции — передаются в
+// MasterWebServer как LockFn).
+static void dspLockAcquire() { g_dspLock.lock(); }
+static void dspLockRelease() { g_dspLock.unlock(); }
+
 // Блокирующий ping через esp_ping (IDF 5.x). Используется командой `net`
 // для диагностики доступа в сеть с самого мастера.
 static SemaphoreHandle_t g_pingDone = nullptr;
@@ -609,12 +661,11 @@ static MasterS3Console g_console{g_cfg};
 // Setup / Loop
 // ---------------------------------------------------------------------------
 
-// Создать DelayLine с буфером в PSRAM (C2.3). Возвращает nullptr при нехватке
-// памяти — в этом случае задержка канала не применяется (web-хендлеры
-// /api/delay работают только с конфигом).
-static DelayLine* createDelayLinePsram(uint32_t capacityMs, uint32_t sampleRate) {
-    uint32_t samples = (capacityMs * sampleRate) / 1000;
-    if (samples < 1) samples = 1;
+// Аллокатор PSRAM для JitterBuffer (REPO_AUDIT: заявленный в jitter_buffer.h
+// psramAlloc отсутствовал — буфер уходил во внутреннюю DRAM). Fallback на
+// обычный heap, если PSRAM нет/не хватило. Освобождение — delete[] допустимо
+// для памяти esp-idf heap_caps (new/delete используют тот же пул).
+static int16_t* psramAlloc(size_t samples) {
     int16_t* buf = nullptr;
     if (ESP.getPsramSize() > 0) {
         buf = static_cast<int16_t*>(ps_malloc(samples * sizeof(int16_t)));
@@ -622,6 +673,16 @@ static DelayLine* createDelayLinePsram(uint32_t capacityMs, uint32_t sampleRate)
     if (!buf) {
         buf = static_cast<int16_t*>(malloc(samples * sizeof(int16_t)));
     }
+    return buf;
+}
+
+// Создать DelayLine с буфером в PSRAM (C2.3). Возвращает nullptr при нехватке
+// памяти — в этом случае задержка канала не применяется (web-хендлеры
+// /api/delay работают только с конфигом).
+static DelayLine* createDelayLinePsram(uint32_t capacityMs, uint32_t sampleRate) {
+    uint32_t samples = (capacityMs * sampleRate) / 1000;
+    if (samples < 1) samples = 1;
+    int16_t* buf = psramAlloc(samples);
     if (!buf) {
         Logger::error("audio", "DelayLine alloc failed (PSRAM=%u)",
                       (unsigned)(ESP.getPsramSize() / (1024 * 1024)));
@@ -639,12 +700,44 @@ void setup() {
         Logger::warn("master", "No saved config, using defaults");
         g_cfg = defaultConfig();
         g_cfg.role = NodeRole::Master;
+
+        // C-3 (аудит): заводские PMK/LMK зашиты в репозиторий — любой, кто их
+        // знает, расшифровывает ESP-NOW трафик. При первой инициализации NVS
+        // генерируем уникальные ключи из аппаратного RNG и сохраняем их.
+        // Сателлиты получают те же ключи при pairing (wps_pbc / прошивка с
+        // config.env). ВНИМАНИЕ: после factory reset ключи сменятся —
+        // сателлиты нужно перепарить.
+        uint8_t rndKey[32];
+        esp_fill_random(rndKey, sizeof(rndKey));
+        for (size_t i = 0; i < 16; ++i) {
+            static const char hex[] = "0123456789abcdef";
+            g_cfg.espnowPmk[2 * i]     = hex[rndKey[i] >> 4];
+            g_cfg.espnowPmk[2 * i + 1] = hex[rndKey[i] & 0x0F];
+            g_cfg.espnowLmk[2 * i]     = hex[rndKey[16 + i] >> 4];
+            g_cfg.espnowLmk[2 * i + 1] = hex[rndKey[16 + i] & 0x0F];
+        }
+        g_cfg.espnowPmk[32] = '\0';
+        g_cfg.espnowLmk[32] = '\0';
+        ConfigStorage::save(g_cfg);
+        Logger::info("master", "ESP-NOW PMK/LMK regenerated from HW RNG (pair satellites again after factory reset)");
+    }
+
+    // C-3: явная защита от запуска с дефолтными ключами из репозитория
+    // (например, если конфиг был сохранён до этого исправления).
+    if (strcmp(g_cfg.espnowPmk, AUDIO_ESPNOW_PMK) == 0 ||
+        strcmp(g_cfg.espnowLmk, AUDIO_ESPNOW_LMK) == 0) {
+        Logger::warn("master", "ESP-NOW keys are DEFAULT (repo-visible) — anyone can decrypt! Re-pair/regenerate via factory reset");
+        g_logs.addf(LogCat::Wifi, 0, "ESP-NOW default keys in use (security risk)");
     }
 
     printDiagnostics();
 
     if (!initWifi()) {
-        Logger::error("master", "Wi-Fi init failed");
+        // REPO_AUDIT: ESP.restart() при недоступном Wi-Fi зацикливал мастера
+        // (дедлоу — перезагрузка при том же конфиге). Деградируем: без Wi-Fi
+        // нет UDP-аудио и Web UI, но serial-консоль и диагностика живы.
+        Logger::error("master", "Wi-Fi init failed — degraded mode (console only)");
+        g_logs.addf(LogCat::Wifi, 0, "Wi-Fi init failed — degraded mode");
     }
 
     // ESP-NOW: heartbeat от сателлитов → статус online без аудио-потока.
@@ -675,6 +768,9 @@ void setup() {
     g_internet.start(httpInternetCheck, millis());
     g_webServer.setInternetChecker(&g_internet);
     g_webServer.setLogs(&g_logs);
+    // REPO_AUDIT: хуки DSP-мьютекса раньше не регистрировались — обработчики
+    // /api/volume|mute|crossover|delay работали без сериализации с loop().
+    g_webServer.setDspLockHooks(dspLockAcquire, dspLockRelease);
     // Задача интернет-чека: блокирующий HTTP выполняется вне loop.
     xTaskCreate(internetCheckTask, "netcheck", 4096, nullptr, 1, nullptr);
     g_logs.addf(LogCat::Boot, 1, "master booted, mode %s", wifiModeToString(g_cfg.wifiMode));
@@ -725,8 +821,13 @@ void setup() {
     }
 
     // Jitter-буфер (C1.3, §7.6): 60 мс ёмкость, целевая задержка 30 мс.
-    // PSRAM на этой плате не обнаружен — fallback на обычный heap.
-    g_jitter = new JitterBuffer(kMasterJitterCapacity);
+    // Буфер — в PSRAM через psramAlloc (REPO_AUDIT: раньше аллокатор не
+    // передавался, память расходовалась из внутренней DRAM).
+    try {
+        g_jitter = new JitterBuffer(kMasterJitterCapacity, psramAlloc);
+    } catch (const std::bad_alloc&) {
+        g_jitter = nullptr;
+    }
     if (g_jitter) {
         g_jitter->setTargetMs(30, g_cfg.sampleRate);
         Logger::infof("audio", "Jitter buffer: cap=%u samples (%u ms), target=30 ms",
@@ -778,9 +879,14 @@ void setup() {
 }
 
 // Генерация тестового тона (C1.4): вызывается из loop(), не блокирует Wi-Fi/Web UI.
+// REPO_AUDIT: тон раньше генерировал фиксированные 128 семплов на вызов
+// loop() (~100 Гц → ~12.8 кГц вместо 48 кГц — высота плыла от частоты цикла).
+// Темп — по часам: сколько времени прошло, столько семплов и генерируем.
+static uint32_t g_toneLastMs = 0;
 static void toneTick() {
     if (g_toneUntilMs == 0) return;
-    if (millis() >= g_toneUntilMs) {
+    uint32_t now = millis();
+    if (now >= g_toneUntilMs) {
         g_toneUntilMs = 0;
         Logger::info("audio", "tone stopped");
         return;
@@ -789,33 +895,68 @@ static void toneTick() {
         g_toneUntilMs = 0;
         return;
     }
-    const size_t kChunk = 128;
-    int16_t buf[kChunk];
+    int32_t elapsed = static_cast<int32_t>(now - g_toneLastMs);
+    if (elapsed < 0) elapsed = 0;
+    if (elapsed > 100) elapsed = 100; // лимит догона после блокирующих операций
+    g_toneLastMs = now;
+    uint32_t budget = static_cast<uint32_t>(elapsed) * g_cfg.sampleRate / 1000u;
     const uint32_t phaseStep =
         (uint32_t)((g_toneFreq * 65536.0f) / (float)g_cfg.sampleRate);
-    for (size_t i = 0; i < kChunk; i++) {
-        g_tonePhase += phaseStep;
-        float ph = (float)(g_tonePhase >> 16) * (2.0f * PI) / 65536.0f;
-        buf[i] = (int16_t)(kToneAmp * 32767.0f * sinf(ph));
+    constexpr size_t kChunk = 128;
+    int16_t buf[kChunk];
+    // REPO_AUDIT: тон пишет в тот же I2S, что и audioOutTick; полный лок
+    // исключает одновременную запись с веб-обработчиками, пересобирающими DSP.
+    DspLock dspGuard(g_dspLock);
+    while (budget > 0) {
+        size_t chunk = budget > kChunk ? kChunk : budget;
+        for (size_t i = 0; i < chunk; i++) {
+            g_tonePhase += phaseStep;
+            float ph = (float)(g_tonePhase >> 16) * (2.0f * PI) / 65536.0f;
+            buf[i] = (int16_t)(kToneAmp * 32767.0f * sinf(ph));
+        }
+        g_i2sOut.write(buf, chunk);
+        budget -= chunk;
     }
-    g_i2sOut.write(buf, kChunk);
 }
 
 // Драйвер аудио-выхода (C1.3/C1.5): вычитывает моно-семплы из jitter-буфера
 // в I2S. Задержка конфигурируется через setTargetMs (30 мс). Пока буфер не
 // накоплен до целевого уровня — выдаём тишину (плавный старт без щелчков).
-static void audioOutTick() {
-    if (!g_i2sOn || !g_jitter) return;
-    constexpr size_t kChunk = 128;
-    int16_t buf[kChunk];
-    for (size_t i = 0; i < kChunk; i++) {
-        int16_t s;
-        buf[i] = g_jitter->pop(s) ? s : 0;
+// REPO_AUDIT: раньше chunk (128 семплов) отправлялся на каждый вызов loop()
+// (~100 Гц при delay(10)) — при 48 кГц это draining'ом вымывало jitter-буфер
+// в ~26 раз быстрее реального времени. Теперь темп привязан к часам: за тик
+// выдаём ровно столько семплов, сколько прошло времени (с лимитом догона).
+static constexpr size_t kI2sChunk = 128; // максимум семплов за одну запись I2S
+static void audioOutTick(uint32_t samplesBudget) {
+    if (!g_i2sOn) return;
+    int16_t buf[kI2sChunk];
+    while (samplesBudget > 0) {
+        size_t chunk = samplesBudget > kI2sChunk ? kI2sChunk : samplesBudget;
+        for (size_t i = 0; i < chunk; i++) {
+            int16_t s = 0;
+            if (g_jitter) g_jitter->pop(s); // пустой буфер → тишина (s=0)
+            buf[i] = s;
+        }
+        // Конечный таймаут внутри write(): зависший DMA не блокирует loop().
+        g_i2sOut.write(buf, chunk);
+        samplesBudget -= chunk;
     }
-    g_i2sOut.write(buf, kChunk);
 }
 
+// Обёртка Arduino: цикл вызывается в try/catch — исключение из стека
+// библиотек (std::bad_alloc, std::out_of_range в обработчиках Web UI) не
+// должно убивать задачу loop через std::terminate (REPO_AUDIT).
 void loop() {
+    try {
+        appLoop();
+    } catch (const std::exception& e) {
+        Logger::errorf("master", "loop exception: %s", e.what());
+    } catch (...) {
+        Logger::error("master", "loop unknown exception");
+    }
+}
+
+static void appLoop() {
     // C6.1: сброс watchdog задачи loop.
     esp_task_wdt_reset();
     // C5.5: замер занятости loop() (без учёта delay).
@@ -823,8 +964,12 @@ void loop() {
     // Приём UDP-аудио со смартфона (C2.1, §9): разбор пакета → UdpAudioReceiver
     // (sequence/concealment) → DSP (volume → tone → limiter → LR4 crossover) →
     // sub → DelayLine → JitterBuffer (PSRAM) → I2S. left/right (HPF) — Этап 3.
+    // REPO_AUDIT: несколько пакетов за тик — при burst'е после потери loop не
+    // отстаёт от сети (ограничение — чтобы не зациклиться на flood).
+    for (int pkt = 0; pkt < 8; pkt++) {
     int packetSize = g_udp.parsePacket();
-    if (packetSize > 0) {
+    if (packetSize <= 0) break;
+    {
         int n = g_udp.read(g_udpBuf, sizeof(g_udpBuf));
         g_packetsRx++;
         g_packetBytesRx += static_cast<uint32_t>(n);
@@ -846,6 +991,11 @@ void loop() {
             // При потерях — плавное затухание (concealGain), затем задержка сабвуфера.
                 float gain = g_audioRecv.concealGain();
                 static int16_t s_mono[sizeof(g_udpBuf) / sizeof(int16_t)];
+                // REPO_AUDIT: мьютекс сериализует process()/DelayLine с
+                // веб-обработчиками; tryLock — аудио не блокируется, при
+                // занятом мьютексе пакет пропускается (следующий применит).
+                DspTryLock dspGuard(g_dspLock);
+                if (dspGuard) {
                 for (size_t i = 0, o = 0; i + 1 < nSamples; i += 2, o++) {
                     PipelineOutput out = g_pipeline.process(pcm[i], pcm[i + 1]);
                     float sub = out.sub * gain;
@@ -863,16 +1013,38 @@ void loop() {
                     g_txLeft[g_txCount] = static_cast<int16_t>(lf * 32767.0f);
                     g_txRight[g_txCount] = static_cast<int16_t>(rf * 32767.0f);
                     g_txCount++;
+                    g_txBatchLastMs = millis();
                     if (g_txCount >= kBatchSamples) flushTxBatch();
                 }
                 if (g_jitter) g_jitter->push(s_mono, nMono);
+                }
             }
             g_audioActive = (st != StreamState::Standby);
         }
     }
+    } // for (pkt)
 
-    // Драйвер аудио-выхода: вычитываем из jitter-буфера в I2S.
-    audioOutTick();
+    // REPO_AUDIT: эскалация состояния потока по времени (Conceal→RampOut→
+    // Standby) раньше не происходила — tick() никто не вызывал, и при
+    // остановке источника g_audioActive оставался true навсегда.
+    g_audioRecv.tick(millis());
+    g_audioActive = (g_audioRecv.state() != StreamState::Standby);
+
+    // REPO_AUDIT: недобатч L/R залипал без отправки при паузе потока —
+    // сателлиты теряли до 2.4 мс звука и рассинхронизировались с субом.
+    // Стале-батч (>50 мс без пополнения) досылаем принудительно.
+    if (g_txCount > 0 && millis() - g_txBatchLastMs >= 50) flushTxBatch();
+
+    // Драйвер аудио-выхода: paced-вычитывание из jitter-буфера в I2S.
+    // Целевое число семплов — по прошедшему времени (задел на случай, если
+    // loop задержался; лимит сверху защищает от догоняющего взрыва после
+    // блокирующей операции Wi-Fi).
+    uint32_t nowMs = millis();
+    int32_t elapsed = static_cast<int32_t>(nowMs - g_audioOutLastMs);
+    if (elapsed < 0) elapsed = 0;
+    if (elapsed > 100) elapsed = 100; // не догоняем больше 100 мс за тик
+    g_audioOutLastMs = nowMs;
+    audioOutTick(static_cast<uint32_t>(elapsed) * g_cfg.sampleRate / 1000u);
 
     // C3.1: UDP-режим — discovery-ответы сателлитов (запоминаем их IP для
     // unicast-отправки аудио; fallback — broadcast).
@@ -908,6 +1080,34 @@ void loop() {
         g_webServer.clearSaveRequested();
         Logger::info("master", "config saved via Web UI");
         g_logs.addf(LogCat::Config, 1, "config saved via Web UI");
+    }
+
+    // R-1: reboot/factory reset выполняются здесь (в loop), а не внутри
+    // обработчика роута — ответ клиенту уже отправлен, аудио не рвётся
+    // посреди HTTP-колбэка, и библиотечный класс не диктует ESP.restart().
+    if (g_webServer.factoryResetRequested()) {
+        g_webServer.clearFactoryResetRequested();
+        g_webServer.clearRebootRequested();
+        Logger::warn("master", "factory reset requested via Web UI");
+        ConfigStorage::erase();
+        WifiStore::clearAll();
+        delay(50);
+        ESP.restart();
+    }
+    if (g_webServer.rebootRequested()) {
+        g_webServer.clearRebootRequested();
+        Logger::info("master", "reboot requested via Web UI");
+        ConfigStorage::save(g_cfg); // сохранить несохранённые изменения перед рестартом
+        delay(50);
+        ESP.restart();
+    }
+    // H-3: OTA-рестарт тоже исполняется здесь, а не в upload-колбэке —
+    // ответ клиенту успевает уйти, браузер видит успех прошивки.
+    if (g_webServer.updateRebootRequested()) {
+        g_webServer.clearUpdateRebootRequested();
+        Logger::info("master", "OTA update applied, rebooting");
+        delay(200); // запас на доставку HTTP-ответа
+        ESP.restart();
     }
 
     // C6.2: авто-переподключение STA при обрыве в рантайме (ТЗ §16.3,

@@ -127,6 +127,17 @@ public:
     void setLogs(LogRing* logs) { m_logs = logs; }
     void setCpuLoadPercent(uint32_t p) { m_cpuLoadPercent = p; } // C5.5
 
+    // Мьютекс DSP (REPO_AUDIT: гонка loop() ↔ web-задача). Обработчики
+    // /api/volume|mute|crossover|delay вызывают setVolume/setMute/
+    // setCrossoverHz/setDelayMs из задачи WebServer, пока loop() мастера
+    // читает те же объекты в process(). Хук сериализует доступ: lockFn/unlockFn
+    // передаются из main.cpp (там DspGuard поверх FreeRTOS mutex).
+    using LockFn = void (*)();
+    void setDspLockHooks(LockFn lockFn, LockFn unlockFn) {
+        m_dspLock = lockFn;
+        m_dspUnlock = unlockFn;
+    }
+
     // Запустить серверы (Wi-Fi должен быть подключён).
     void begin() {
         // Кастомные заголовки нужно зарегистрировать ДО begin() (close() иначе
@@ -172,6 +183,16 @@ public:
     bool reconnectRequested() const { return m_reconnectRequested; }
     void clearReconnectRequested() { m_reconnectRequested = false; }
 
+    // R-1: эндпоинты не вызывают ESP.restart()/ConfigStorage::erase() из
+    // библиотечного класса — они выставляют флаги, а main.cpp выполняет
+    // действие в loop() (после send() клиент успевает получить ответ).
+    bool rebootRequested() const { return m_rebootRequested; }
+    void clearRebootRequested() { m_rebootRequested = false; }
+    bool factoryResetRequested() const { return m_factoryResetRequested; }
+    void clearFactoryResetRequested() { m_factoryResetRequested = false; }
+    bool updateRebootRequested() const { return m_updateRebootRequested; }
+    void clearUpdateRebootRequested() { m_updateRebootRequested = false; }
+
     // Статус авторизации (для main.cpp/консоли).
     bool sessionActive() const { return m_sessionActive; }
 
@@ -188,7 +209,12 @@ private:
         s.on("/api/wifi/connect", HTTP_POST, [this, &s]() { handleWifiConnect(s); });
         s.on("/api/wifi/save", HTTP_POST, [this, &s]() { handleWifiSave(s); });
         s.on("/api/wifi/forget", HTTP_POST, [this, &s]() { handleWifiForget(s); });
+        // S-1: смена пароля AP из Web UI (баннер defaultPwBanner теперь рабочий).
+        s.on("/api/wifi/ap_password", HTTP_POST, [this, &s]() { handleApPassword(s); });
         s.on("/api/wifi/profiles", HTTP_GET, [this, &s]() { handleWifiProfiles(s); });
+        // W-1: эти роуты использовались SPA (sysApply/wApply) — регистрируем.
+        s.on("/api/system/hostname", HTTP_PUT, [this, &s]() { handleHostname(s); });
+        s.on("/api/wifi/mode", HTTP_PUT, [this, &s]() { handleWifiMode(s); });
         s.on("/api/net/internet", HTTP_GET, [this, &s]() { handleInternetStatus(s); });
         s.on("/api/net/check", HTTP_POST, [this, &s]() { handleInternetCheck(s); });
         s.on("/api/volume", HTTP_PUT, [this, &s]() { handleVolume(s); });
@@ -273,6 +299,16 @@ private:
         return header == expected;
     }
 
+    // RAII-страховка DSP-мьютекса для web-обработчиков (см. setDspLockHooks).
+    class DspWebLock {
+    public:
+        explicit DspWebLock(MasterWebServer& ws) : m_ws(ws) { if (m_ws.m_dspLock) m_ws.m_dspLock(); }
+        ~DspWebLock() { if (m_ws.m_dspUnlock) m_ws.m_dspUnlock(); }
+
+    private:
+        MasterWebServer& m_ws;
+    };
+
     // ------------------------------------------------------------------
     // Ответы
     // ------------------------------------------------------------------
@@ -297,15 +333,39 @@ private:
         sendJson(s, 400, doc);
     }
 
+    // C5.9: 302 вместо HTML со script-редиректом (работает и с JS-off,
+    // не требует CSP 'unsafe-inline').
     static void redirectRoot(WebServer& s) {
-        s.send(200, "text/html", "<html><body><script>location.href='/'</script></body></html>");
+        s.sendHeader("Location", "/", true);
+        s.send(302, "text/plain", "");
     }
 
     // ------------------------------------------------------------------
     // Страницы (SPA — один HTML, разделы через hash-навигацию)
     // ------------------------------------------------------------------
     void handleRoot(WebServer& s) {
+        // C5.8: базовые security-заголовки (XSS / clickjacking / sniffing).
+        s.sendHeader("Content-Security-Policy",
+                     "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+                     "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+                     "connect-src 'self'; frame-ancestors 'none'");
+        s.sendHeader("X-Frame-Options", "DENY");
+        s.sendHeader("X-Content-Type-Options", "nosniff");
         s.send(200, "text/html", kPageHtml);
+    }
+
+    // C5.1: session-cookie только с HttpOnly+SameSite=Lax (без SameSite
+    // токен читается из любого iframe/скрипта — CSRF в обход X-CSRF-Token).
+    static void sendSessionCookie(WebServer& s, const char* token) {
+        // C4: Max-Age = время жизни сессии (kSessionTimeoutMs), cookie
+        // истекает синхронно с серверной стороной.
+        s.sendHeader("Set-Cookie",
+                     String("session=") + token + "; Path=/; HttpOnly; SameSite=Lax; Max-Age="
+                         + String(kSessionTimeoutMs / 1000UL));
+    }
+
+    static void clearSessionCookie(WebServer& s) {
+        s.sendHeader("Set-Cookie", "session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax");
     }
 
     // ------------------------------------------------------------------
@@ -313,7 +373,7 @@ private:
     // ------------------------------------------------------------------
     void handleStatus(WebServer& s) {
         JsonDocument doc;
-        doc["system"]["version"] = "0.2.1";
+        doc["system"]["version"] = AUDIO_FW_VERSION; // В7: централизовано в node_config.h
         doc["system"]["hostname"] = m_cfg.hostname;
         doc["system"]["uptime_sec"] = millis() / 1000;
         doc["system"]["heap_free"] = ESP.getFreeHeap();
@@ -573,6 +633,7 @@ private:
     // ------------------------------------------------------------------
     void handleVolume(WebServer& s) {
         if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
+        DspWebLock dspGuard(*this); // гонка с loop() при live-применении настроек
         JsonDocument doc;
         if (deserializeJson(doc, s.arg("plain"))) { sendErr(s, "bad json"); return; }
         if (doc["mute"].is<bool>()) {
@@ -605,6 +666,7 @@ private:
 
     void handleMute(WebServer& s) {
         if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
+        DspWebLock dspGuard(*this);
         JsonDocument doc;
         if (deserializeJson(doc, s.arg("plain"))) { sendErr(s, "bad json"); return; }
         bool m = doc["mute"] | true;
@@ -618,6 +680,7 @@ private:
     // ------------------------------------------------------------------
     void handleCrossover(WebServer& s) {
         if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
+        DspWebLock dspGuard(*this); // setCrossoverHz пересобирает биквады на лету
         JsonDocument doc;
         if (deserializeJson(doc, s.arg("plain"))) { sendErr(s, "bad json"); return; }
         int hz = doc["crossover_hz"] | doc["hz"] | -1;
@@ -632,6 +695,7 @@ private:
     // ------------------------------------------------------------------
     void handleDelay(WebServer& s) {
         if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
+        DspWebLock dspGuard(*this); // setDelayMs меняет ring-указатели на лету
         JsonDocument doc;
         if (deserializeJson(doc, s.arg("plain"))) { sendErr(s, "bad json"); return; }
         const char* chan = doc["channel"] | "";
@@ -692,20 +756,64 @@ private:
         sendOk(s);
     }
 
+    // PUT /api/system/hostname (W-1: эндпоинт использовался SPA, но не был
+    // зарегистрирован — 404 через onNotFound).
+    void handleHostname(WebServer& s) {
+        if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
+        JsonDocument doc;
+        if (deserializeJson(doc, s.arg("plain"))) { sendErr(s, "bad json"); return; }
+        const char* h = doc["hostname"] | "";
+        if (h[0] == '\0' || strlen(h) >= sizeof(m_cfg.hostname)) { sendErr(s, "bad hostname"); return; }
+        strlcpy(m_cfg.hostname, h, sizeof(m_cfg.hostname));
+        m_saveRequested = true;
+        sendOk(s);
+    }
+
+    // PUT /api/wifi/mode (W-1): смена режима Wi-Fi мастера + запрос сохранения.
+    void handleWifiMode(WebServer& s) {
+        if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
+        JsonDocument doc;
+        if (deserializeJson(doc, s.arg("plain"))) { sendErr(s, "bad json"); return; }
+        const char* mode = doc["mode"] | "";
+        WifiMode m;
+        if (strcmp(mode, "AP_DIRECT") == 0) m = WifiMode::ApDirect;
+        else if (strcmp(mode, "STA") == 0) m = WifiMode::Sta;
+        else if (strcmp(mode, "APSTA") == 0) m = WifiMode::ApSta;
+        else { sendErr(s, "bad mode"); return; }
+        m_cfg.wifiMode = m;
+        m_saveRequested = true;
+        m_reconnectRequested = true; // main.cpp применит новый режим
+        sendOk(s);
+    }
+
+    // POST /api/wifi/ap_password (S-1): смена заводского пароля AP мастера.
+    void handleApPassword(WebServer& s) {
+        if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
+        JsonDocument doc;
+        if (deserializeJson(doc, s.arg("plain"))) { sendErr(s, "bad json"); return; }
+        const char* pass = doc["password"] | "";
+        const size_t len = strlen(pass);
+        if (len < 8 || len >= sizeof(m_cfg.wifiApPassword)) { sendErr(s, "password must be 8..63 chars"); return; }
+        if (strcmp(pass, AUDIO_WIFI_AP_PASSWORD) == 0) { sendErr(s, "must differ from default"); return; }
+        strlcpy(m_cfg.wifiApPassword, pass, sizeof(m_cfg.wifiApPassword));
+        m_saveRequested = true;
+        m_reconnectRequested = true; // main.cpp пересоздаст softAP с новым паролем
+        sendOk(s, "ap password updated");
+    }
+
     void handleReboot(WebServer& s) {
         if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
-        s.send(200, "application/json", "{\"ok\":true,\"status\":\"rebooting\"}");
-        delay(100);
-        ESP.restart();
+        // R-1: не вызываем ESP.restart() здесь — ответ должен успеть уйти
+        // клиенту, а перезагрузку выполняет main.cpp в конце loop().
+        sendOk(s, "reboot requested");
+        m_rebootRequested = true;
     }
 
     void handleFactoryReset(WebServer& s) {
         if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
-        ConfigStorage::erase();
-        WifiStore::clearAll();
-        sendOk(s, "erased");
-        delay(200);
-        ESP.restart();
+        // R-1: стирание конфига + перезагрузка — через флаг, в main.cpp.
+        sendOk(s, "factory reset requested");
+        m_factoryResetRequested = true;
     }
 
     void handleConfigExport(WebServer& s) {
@@ -882,14 +990,14 @@ private:
         m_sessionActive = true;
         m_sessionStartMs = millis(); // C5.2: старт отсчёта таймаута сессии
 
-        s.sendHeader("Set-Cookie", String("session=") + m_sessionToken + "; Path=/");
+        sendSessionCookie(s, m_sessionToken);
         sendOk(s, "logged in");
     }
 
     void handleLogout(WebServer& s) {
         m_sessionActive = false;
         m_sessionToken[0] = '\0';
-        s.sendHeader("Set-Cookie", "session=; Path=/; Max-Age=0");
+        clearSessionCookie(s);
         sendOk(s, "logged out");
     }
 
@@ -903,7 +1011,7 @@ private:
         if (deserializeJson(doc, s.arg("plain"))) { sendErr(s, "bad json"); return; }
         const char* pass = doc["password"] | "";
         const char* confirm = doc["confirm"] | "";
-        if (strlen(pass) < 4) { sendErr(s, "password too short"); return; }
+        if (strlen(pass) < 8) { sendErr(s, "password too short (min 8)"); return; } // L-3: единый минимум с AP-паролем
         if (strcmp(pass, confirm) != 0) { sendErr(s, "password mismatch"); return; }
         Auth::hashPassword(pass, m_cfg.adminPasswordHash);
         m_cfg.authEnabled = true;
@@ -912,7 +1020,7 @@ private:
         m_sessionActive = true;
         m_sessionStartMs = millis(); // C5.2
 
-        s.sendHeader("Set-Cookie", String("session=") + m_sessionToken + "; Path=/");
+        sendSessionCookie(s, m_sessionToken);
         sendOk(s, "admin configured");
     }
 
@@ -945,9 +1053,11 @@ private:
             m_updateActive = false;
             // end(false): валидный образ обязателен, иначе перезагрузки нет.
             if (Update.end(false)) {
+                // R-1: рестарт НЕ выполняется внутри HTTP-колбэка — иначе ответ
+                // клиенту может не дойти и браузер покажет ошибку при успешно
+                // прошитом устройстве. Флаг обрабатывается в handleClient().
                 s.send(200, "application/json", "{\"ok\":true,\"status\":\"update ok, rebooting\"}");
-                delay(200);
-                ESP.restart();
+                m_updateRebootRequested = true;
             } else {
                 Update.abort();
                 Update.printError(Serial);
@@ -977,6 +1087,9 @@ private:
     std::vector<WifiNetInfo> m_wifiCache;
     bool m_saveRequested = false;
     bool m_reconnectRequested = false;
+    volatile bool m_rebootRequested = false;          // R-1: POST /api/system/reboot
+    volatile bool m_factoryResetRequested = false;   // R-1: POST /api/system/factory_reset
+    volatile bool m_updateRebootRequested = false;   // R-1/H-3: рестарт после успешного OTA
 
     InternetChecker* m_net = nullptr;
     LogRing* m_logs = nullptr;
@@ -989,6 +1102,8 @@ private:
     uint32_t m_loginLockUntilMs = 0; // C5.3: до этого времени логин заблокирован
     uint32_t m_lastScanMs = 0;       // C5.3: rate limit живого сканирования
     uint32_t m_cpuLoadPercent = 0;   // C5.5: заполняется из main.cpp
+    LockFn m_dspLock = nullptr;      // DSP-мьютекс (см. setDspLockHooks)
+    LockFn m_dspUnlock = nullptr;
 
     static constexpr uint32_t kSessionTimeoutMs = 3600 * 1000UL; // ТЗ §11.4/§23.1
     static constexpr uint32_t kMaxLoginFails = 5;                // C5.3
