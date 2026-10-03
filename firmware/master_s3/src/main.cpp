@@ -943,19 +943,6 @@ static void audioOutTick(uint32_t samplesBudget) {
     }
 }
 
-// Обёртка Arduino: цикл вызывается в try/catch — исключение из стека
-// библиотек (std::bad_alloc, std::out_of_range в обработчиках Web UI) не
-// должно убивать задачу loop через std::terminate (REPO_AUDIT).
-void loop() {
-    try {
-        appLoop();
-    } catch (const std::exception& e) {
-        Logger::errorf("master", "loop exception: %s", e.what());
-    } catch (...) {
-        Logger::error("master", "loop unknown exception");
-    }
-}
-
 static void appLoop() {
     // C6.1: сброс watchdog задачи loop.
     esp_task_wdt_reset();
@@ -1196,5 +1183,18 @@ static void appLoop() {
         g_cpuBusyUs = 0;
         g_cpuTotalUs = 0;
         g_webServer.setCpuLoadPercent(g_cpuLoadPercent);
+    }
+}
+
+// Обёртка Arduino: цикл вызывается в try/catch — исключение из стека
+// библиотек (std::bad_alloc, std::out_of_range в обработчиках Web UI) не
+// должно убивать задачу loop через std::terminate (REPO_AUDIT).
+void loop() {
+    try {
+        appLoop();
+    } catch (const std::exception& e) {
+        Logger::errorf("master", "loop exception: %s", e.what());
+    } catch (...) {
+        Logger::error("master", "loop unknown exception");
     }
 }

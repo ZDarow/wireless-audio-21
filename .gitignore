@@ -1,1 +1,11 @@
-(empty)
+# Compiled/Binary files
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.a
+*.out
+
+# Test binaries
+test/audio_filter_test_bin
