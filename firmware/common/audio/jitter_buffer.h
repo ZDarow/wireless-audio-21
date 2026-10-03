@@ -5,6 +5,8 @@
 
 #include <stdint.h>
 #include <string.h>
+#include <new>
+#include <stdexcept>
 
 namespace audio21 {
 
@@ -13,10 +15,24 @@ namespace audio21 {
 // Если буфер пуст — выдаём тишину (0), если переполнен — отбрасываем старьё.
 class JitterBuffer {
 public:
+    // Функция выделения памяти под буфер (по умолчанию new int16_t[]).
+    // На ESP32-S3 можно передать аллокатор PSRAM, чтобы не расходовать
+    // внутреннюю DRAM (см. psramAlloc в main.cpp мастера).
+    using AllocFn = int16_t* (*)(size_t samples);
+
     // capacity — ёмкость в сэмплах (моно-канал одного сателлита).
-    explicit JitterBuffer(uint32_t capacity)
+    // alloc — необязательный аллокатор (например, ps_malloc из PSRAM на
+    // ESP32-S3); если вернул nullptr, конструктор бросает std::bad_alloc.
+    explicit JitterBuffer(uint32_t capacity, AllocFn alloc = nullptr)
         : m_capacity(capacity) {
-        m_buffer = new int16_t[m_capacity];
+        if (alloc) {
+            m_buffer = alloc(m_capacity);
+            if (!m_buffer) throw std::bad_alloc();
+            m_useDelete = false; // память из внешнего пула — не delete[]
+        } else {
+            m_buffer = new int16_t[m_capacity];
+            m_useDelete = true;
+        }
         clear();
         // Дефолт целевого уровня — 50% ёмкости (B13): ready() осмыслен сразу
         // после создания без явной конфигурации. Иначе m_targetLevel=0 →
@@ -24,7 +40,9 @@ public:
         m_targetLevel = m_capacity / 2;
     }
 
-    ~JitterBuffer() { delete[] m_buffer; }
+    ~JitterBuffer() { if (m_useDelete) delete[] m_buffer; }
+
+    bool allocated() const { return m_buffer != nullptr; }
 
     // Целевой уровень наполнения в сэмплах (обычно 10–30 мс звука).
     void setTargetLevel(uint32_t samples) {
@@ -84,6 +102,7 @@ public:
 private:
     int16_t* m_buffer;
     uint32_t m_capacity;
+    bool m_useDelete = true;  // буфер выделен new[] — освобождать delete[]
     uint32_t m_targetLevel = 0;
     uint32_t m_readIdx = 0;
     uint32_t m_writeIdx = 0;

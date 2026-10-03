@@ -77,6 +77,12 @@
 #ifndef AUDIO_SAMPLE_RATE
 #define AUDIO_SAMPLE_RATE 48000
 #endif
+
+// В7: единая версия прошивки (раньше хардкодилась в web_server.h и docs).
+// При релизе меняется здесь (+ CHANGELOG); build_flags могут переопределить.
+#ifndef AUDIO_FW_VERSION
+#define AUDIO_FW_VERSION "0.2.1"
+#endif
 #ifndef AUDIO_BITS_PER_SAMPLE
 #define AUDIO_BITS_PER_SAMPLE 16
 #endif
@@ -216,6 +222,14 @@ struct NodeConfig {
     // --- Сателлиты ---
     MacAddr leftSatMac = MacAddr{AUDIO_LEFT_SAT_MAC};
     MacAddr rightSatMac = MacAddr{AUDIO_RIGHT_SAT_MAC};
+
+    // --- ESP-NOW ключи (аудит C-3) ---
+    // Пустые строки = использовать compile-time макросы AUDIO_ESPNOW_PMK/LMK
+    // (обратная совместимость со старыми NVS и прошивкой через config.env).
+    // Мастер при первом запуске генерирует уникальные hex-ключи (32 символа)
+    // и сохраняет в NVS; сателлиты получают те же значения при pairing.
+    char espnowPmk[33] = "";
+    char espnowLmk[33] = "";
 
     // --- GPIO ---
     uint8_t i2sBck = AUDIO_I2S_BCK;

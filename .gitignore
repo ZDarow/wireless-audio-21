@@ -1,36 +1,11 @@
-# PlatformIO
-.pio/
-.pioenvs/
-.piolibdeps/
-.pio-core-master/
-# extensions.json хранится в репозитории (рекомендации для команды);
-# остальные .vscode файлы генерируются PlatformIO (абсолютные пути) — игнорируются.
-.vscode/settings.json
-.vscode/c_cpp_properties.json
-.vscode/launch.json
+# Compiled/Binary files
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.a
+*.out
 
-# Генерируемые файлы конфигурации (из config.env)
-firmware/common/generated/
-config.env
-
-# Python
-__pycache__/
-*.py[cod]
-
-# Сборка и тестовые бинарники
-test/*_bin*
-test/*.d
-
-# Системное
-.DS_Store
-*.swp
-
-# Локальные артефакты инструментов и агентов
-.kilo/
-.playwright-mcp/
-
-# Мусорные артефакты в корне
-firebase-debug.log
-*.firebaserc
-Новый текстовый документ*.txt
-*.orig
+# Test binaries
+test/audio_filter_test_bin
