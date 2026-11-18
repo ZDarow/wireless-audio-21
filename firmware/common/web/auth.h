@@ -260,6 +260,8 @@ public:
             token[i] = chars[bytes[i] & 0x0f];
         }
 #else
+        // Хост-тесты: нет аппаратного RNG — только для тестовых сценариев.
+        // На устройстве (ESP32) используется esp_fill_random выше.
         for (int i = 0; i < kTokenLen; i++) {
             static const char* chars = "0123456789abcdef";
             token[i] = chars[rand() & 0x0f];

@@ -33,6 +33,9 @@ public:
     // источника (пока не используется — для синхронизации в C3.x),
     // pcm — PCM-сэмплы, n — их число, nowMs — текущее время.
     // Возвращает состояние после обработки.
+    // nowMs должен быть монотонным (millis()): сравнение с m_lastRxMs и
+    // concealGain() используют беззнаковую разность и корректны только при
+    // time >= m_lastRxMs.
     StreamState feed(uint32_t seq, uint32_t ts, const int16_t* pcm, size_t n, uint32_t nowMs) {
         m_lastNowMs = nowMs;
         m_packetsRx++;
@@ -63,7 +66,7 @@ public:
         }
 
         m_lastSeq = seq;
-        m_lastRxMs = nowMs;
+        m_lastRxMs = monotonicMax(m_lastRxMs, nowMs);
         m_hasLastSeq = true;
         (void)ts; (void)pcm; (void)n;
         return m_state;
@@ -73,7 +76,11 @@ public:
     // эскалация по времени с последнего валидного пакета.
     StreamState tick(uint32_t nowMs) {
         m_lastNowMs = nowMs;
-        uint32_t t = nowMs - m_lastRxMs;
+        // До приёма первого пакета состояние не эскалируем: иначе свежий
+        // приёмник сразу уходит в Standby (m_lastRxMs=0). Защита от «будущего»
+        // m_lastRxMs (тесты с фиктивным временем): clamp lastNowMs.
+        if (!m_hasLastSeq) return m_state;
+        uint32_t t = monotonicMax(m_lastRxMs, nowMs) - m_lastRxMs;
         if (t >= kStandbyMs) m_state = StreamState::Standby;
         else if (t >= kRampOutMs) m_state = StreamState::RampOut;
         else if (t >= kConcealMs) m_state = StreamState::Conceal;
@@ -88,7 +95,7 @@ public:
         if (m_state == StreamState::Active) return 1.0f;
         if (m_state == StreamState::RampOut || m_state == StreamState::Standby)
             return 0.0f;
-        uint32_t t = m_lastNowMs - m_lastRxMs;
+        uint32_t t = monotonicMax(m_lastRxMs, m_lastNowMs) - m_lastRxMs;
         if (t <= kConcealMs) return 1.0f;
         if (t >= kRampOutMs) return 0.0f;
         return 1.0f - static_cast<float>(t - kConcealMs)
@@ -99,6 +106,9 @@ public:
     uint32_t packetsLost() const { return m_packetsLost; }
 
 private:
+    // max(a, b) для монотонных часов (wrap millis() за пределами допусков).
+    static uint32_t monotonicMax(uint32_t a, uint32_t b) { return a > b ? a : b; }
+
     uint32_t m_sampleRate = 48000;
     float m_msPerPacket = 5.0f;
     StreamState m_state = StreamState::Standby;

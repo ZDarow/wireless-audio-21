@@ -78,6 +78,9 @@ inline bool parseUdpPacket(const uint8_t* data, size_t size, UdpAudioHeader& hdr
     if (hdr.protocolVersion != kUdpProtocolVersion) return false;
     if (hdr.payloadLength > kUdpMaxPayload) return false;
     if (sizeof(UdpAudioHeader) + hdr.payloadLength > size) return false;
+    // Аудио-поток: только 16-битный PCM. Иначе reinterpret_cast<int16_t*> у
+    // потребителя прочитает мусор как сэмплы (гигиена заголовка).
+    if (hdr.bitsPerSample != 16) return false;
 
     payload = data + sizeof(UdpAudioHeader);
     payloadSize = hdr.payloadLength;
