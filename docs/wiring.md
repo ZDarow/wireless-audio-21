@@ -121,8 +121,8 @@ MAX98357A + / -    →  динамик 4–8 Ом
 | GPIO14 | I2S BCK | ЦАП PCM5102A BCK | тактовая (сателлиты) |
 | GPIO13 | I2S WS | ЦАП PCM5102A LRCK | слово (сателлиты) |
 | GPIO12 | I2S DIN | ЦАП PCM5102A DIN | данные (сателлиты) |
-| GPIO21 | (OLED SDA) | — | этап 4 |
-| GPIO18 | (OLED SCL) | — | этап 4 |
+| GPIO16 | (OLED SDA) | — | этап 4 |
+| GPIO17 | (OLED SCL) | — | этап 4 |
 | GPIO32 | (ENC A) | — | этап 4 |
 | GPIO33 | (ENC B) | — | этап 4 |
 | GPIO34 | (ENC BTN) | — | этап 4, вход-only |

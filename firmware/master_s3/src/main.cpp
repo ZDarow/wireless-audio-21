@@ -50,6 +50,7 @@
 #include "i2s_output.h"
 #include "common/console.h"
 #include "common/ui/display.h"
+#include "common/ui/encoder.h"
 
 using namespace audio21;
 
@@ -97,6 +98,7 @@ static UdpTransport g_udpTx;     // C3.1: TX аудио на сателлиты 
 static EspNowTransport g_espnow; // C3.1: ESP-NOW транспорт
 static ITransport* g_transport = nullptr; // C3.1: абстрактный транспорт
 static Display g_display(AUDIO_OLED_SDA, AUDIO_OLED_SCL); // F12: OLED SSD1306
+static RotaryEncoder g_encoder(AUDIO_ENC_A, AUDIO_ENC_B, AUDIO_ENC_BTN); // C4.2: энкодер KY-040
 static uint32_t g_packetsRx = 0;
 static uint32_t g_packetBytesRx = 0;
 
@@ -124,8 +126,196 @@ static uint32_t g_heartbeatsRx = 0;
 // к живым объектам DSP (C2.1–C2.4), а не только к конфигу.
 static MasterWebServer g_webServer(g_cfg, &g_pipeline,
                                    &g_delayLeft, &g_delayRight, &g_delaySub,
-                                   &g_espnow, &g_leftOnline, &g_rightOnline);// Режим настройки Wi-Fi: STA не подключился → мастер поднял AP настройки.
+                                   &g_espnow, &g_leftOnline, &g_rightOnline);
 static bool g_setupMode = false;
+
+// ---------------------------------------------------------------------------
+// C4.x: OLED-меню + энкодер (F12, F14).
+// Машина состояний: STATUS -> VOLUME -> CROSSOVER -> DELAY L/R/SUB -> SAT L/R.
+// Вращение энкодера — навигация/изменение значения, кнопка — вход в редактирование/сохранение.
+// Авто-выход в STATUS через kMenuTimeoutMs без активности.
+// ---------------------------------------------------------------------------
+
+enum class MenuItem {
+    Status,
+    Volume,
+    Crossover,
+    DelayLeft,
+    DelayRight,
+    DelaySub,
+    SatLeft,
+    SatRight,
+    Count
+};
+
+static MenuItem g_menu = MenuItem::Status;
+static bool g_menuEdit = false;
+static int32_t g_menuEditValue = 0;
+static uint32_t g_menuLastActivityMs = 0;
+static constexpr uint32_t kMenuTimeoutMs = 10000;
+
+static const char* menuItemName(MenuItem item) {
+    switch (item) {
+        case MenuItem::Status:    return "STATUS";
+        case MenuItem::Volume:    return "VOLUME";
+        case MenuItem::Crossover: return "XOVER";
+        case MenuItem::DelayLeft: return "DELAY L";
+        case MenuItem::DelayRight:return "DELAY R";
+        case MenuItem::DelaySub:  return "DELAY SUB";
+        case MenuItem::SatLeft:   return "SAT LEFT";
+        case MenuItem::SatRight:  return "SAT RIGHT";
+        default:                  return "?";
+    }
+}
+
+static void showMenu() {
+    char line1[32], line2[32], line3[32], line4[32];
+
+    if (g_menu == MenuItem::Status) {
+        snprintf(line1, sizeof(line1), "Audio 2.1 Master");
+        snprintf(line2, sizeof(line2), "Src:%s Vol:%d%s",
+                 sourceToString(g_cfg.source), g_cfg.masterVolume,
+                 g_cfg.mute ? " M" : "");
+        snprintf(line3, sizeof(line3), "L:%s R:%s XO:%dHz",
+                 g_leftOnline ? "on " : "off",
+                 g_rightOnline ? "on" : "off",
+                 g_cfg.crossoverHz);
+        snprintf(line4, sizeof(line4), "Enc:menu  %s",
+                 g_menuEdit ? "EDIT" : "");
+    } else {
+        snprintf(line1, sizeof(line1), "%s", menuItemName(g_menu));
+        if (g_menuEdit) {
+            snprintf(line2, sizeof(line2), "> %d <", g_menuEditValue);
+            snprintf(line3, sizeof(line3), "Enc:change");
+            snprintf(line4, sizeof(line4), "Btn:save");
+        } else {
+            int32_t curVal = 0;
+            switch (g_menu) {
+                case MenuItem::Volume:    curVal = g_cfg.masterVolume; break;
+                case MenuItem::Crossover: curVal = g_cfg.crossoverHz; break;
+                case MenuItem::DelayLeft: curVal = g_cfg.delayLeftMs; break;
+                case MenuItem::DelayRight: curVal = g_cfg.delayRightMs; break;
+                case MenuItem::DelaySub:  curVal = g_cfg.delaySubMs; break;
+                default: break;
+            }
+            snprintf(line2, sizeof(line2), " %d", curVal);
+            snprintf(line3, sizeof(line3), "Enc:select");
+            snprintf(line4, sizeof(line4), "Btn:edit");
+        }
+    }
+
+    g_display.showText(line1, line2, line3, line4);
+}
+
+static void applyMenuValue() {
+    switch (g_menu) {
+        case MenuItem::Volume:
+            g_cfg.masterVolume = static_cast<int>(g_menuEditValue);
+            g_cfg.clamp();
+            g_pipeline.setVolume(g_cfg.masterVolume);
+            break;
+        case MenuItem::Crossover:
+            g_cfg.crossoverHz = static_cast<int>(g_menuEditValue);
+            g_cfg.clamp();
+            g_pipeline.setCrossoverHz(g_cfg.crossoverHz);
+            break;
+        case MenuItem::DelayLeft:
+            g_cfg.delayLeftMs = static_cast<int>(g_menuEditValue);
+            g_cfg.clamp();
+            if (g_delayLeft) g_delayLeft->setDelayMs(static_cast<uint32_t>(g_cfg.delayLeftMs));
+            break;
+        case MenuItem::DelayRight:
+            g_cfg.delayRightMs = static_cast<int>(g_menuEditValue);
+            g_cfg.clamp();
+            if (g_delayRight) g_delayRight->setDelayMs(static_cast<uint32_t>(g_cfg.delayRightMs));
+            break;
+        case MenuItem::DelaySub:
+            g_cfg.delaySubMs = static_cast<int>(g_menuEditValue);
+            g_cfg.clamp();
+            if (g_delaySub) g_delaySub->setDelayMs(static_cast<uint32_t>(g_cfg.delaySubMs));
+            break;
+        default:
+            break;
+    }
+}
+
+static void handleEncoder() {
+    int steps = g_encoder.readSteps();
+    if (steps != 0) {
+        g_menuLastActivityMs = millis();
+
+        if (g_menuEdit) {
+            int32_t step = (steps > 0) ? 1 : -1;
+            if (abs(steps) > 2) step *= 5;
+
+            switch (g_menu) {
+                case MenuItem::Volume:
+                    g_menuEditValue += step;
+                    if (g_menuEditValue < kVolumeMin) g_menuEditValue = kVolumeMin;
+                    if (g_menuEditValue > kVolumeMax) g_menuEditValue = kVolumeMax;
+                    break;
+                case MenuItem::Crossover:
+                    g_menuEditValue += step;
+                    if (g_menuEditValue < kCrossoverMinHz) g_menuEditValue = kCrossoverMinHz;
+                    if (g_menuEditValue > kCrossoverMaxHz) g_menuEditValue = kCrossoverMaxHz;
+                    break;
+                case MenuItem::DelayLeft:
+                case MenuItem::DelayRight:
+                case MenuItem::DelaySub:
+                    g_menuEditValue += step * 10;
+                    if (g_menuEditValue < kMinDelayMs) g_menuEditValue = kMinDelayMs;
+                    if (g_menuEditValue > kMaxDelayMs) g_menuEditValue = kMaxDelayMs;
+                    break;
+                default:
+                    break;
+            }
+            showMenu();
+        } else {
+            if (steps > 0) {
+                g_menu = static_cast<MenuItem>((static_cast<int>(g_menu) + 1) % static_cast<int>(MenuItem::Count));
+            } else {
+                int idx = static_cast<int>(g_menu) - 1;
+                if (idx < 0) idx = static_cast<int>(MenuItem::Count) - 1;
+                g_menu = static_cast<MenuItem>(idx);
+            }
+            showMenu();
+        }
+    }
+
+    if (g_encoder.buttonPressed()) {
+        g_menuLastActivityMs = millis();
+
+        if (g_menuEdit) {
+            applyMenuValue();
+            g_menuEdit = false;
+            showMenu();
+        } else {
+            if (g_menu == MenuItem::Status) {
+                g_menu = MenuItem::Volume;
+                g_menuEditValue = g_cfg.masterVolume;
+                g_menuEdit = true;
+                showMenu();
+            } else {
+                g_menuEdit = true;
+                switch (g_menu) {
+                    case MenuItem::Volume:    g_menuEditValue = g_cfg.masterVolume; break;
+                    case MenuItem::Crossover: g_menuEditValue = g_cfg.crossoverHz; break;
+                    case MenuItem::DelayLeft: g_menuEditValue = g_cfg.delayLeftMs; break;
+                    case MenuItem::DelayRight: g_menuEditValue = g_cfg.delayRightMs; break;
+                    case MenuItem::DelaySub:  g_menuEditValue = g_cfg.delaySubMs; break;
+                    default: g_menuEditValue = 0; break;
+                }
+                showMenu();
+            }
+        }
+    }
+
+    if (g_menu != MenuItem::Status && millis() - g_menuLastActivityMs > kMenuTimeoutMs) {
+        g_menu = MenuItem::Status;
+        g_menuEdit = false;
+        showMenu();
+    }
+}
 
 // Captive portal: перехватывает DNS-запросы телефона (любой домен → softAPIP()),
 // браузер открывает http://192.168.4.1/ → onNotFound → страница настройки.
@@ -737,6 +927,10 @@ void setup() {
         Logger::warn("display", "OLED init failed");
     }
 
+    // C4.2: энкодер.
+    g_encoder.begin();
+    Logger::info("encoder", "rotary encoder ready");
+
     // Jitter-буфер (C1.3, §7.6): 60 мс ёмкость, целевая задержка 30 мс.
     // PSRAM на этой плате не обнаружен — fallback на обычный heap.
     g_jitter = new JitterBuffer(kMasterJitterCapacity);
@@ -908,6 +1102,9 @@ void loop() {
     }
 
     g_console.update();
+
+    // C4.x: энкодер + OLED-меню.
+    handleEncoder();
 
     // Web UI: обработка запросов и сохранение конфига по кнопке.
     g_webServer.handleClient();

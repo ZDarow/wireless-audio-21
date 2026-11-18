@@ -48,9 +48,9 @@
 #define AUDIO_I2S_DATA_OUT       6
 
 // --- OLED ---
-// SCL на 18: валидный пин S3, не конфликтует с I2S.
-#define AUDIO_OLED_SDA           21
-#define AUDIO_OLED_SCL           18
+// SCL на 17, SDA на 16 — на одной стороне платы.
+#define AUDIO_OLED_SDA           16
+#define AUDIO_OLED_SCL           17
 
 // --- Энкодер ---
 #define AUDIO_ENC_A              32

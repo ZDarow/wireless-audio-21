@@ -34,3 +34,13 @@ firebase-debug.log
 *.firebaserc
 Новый текстовый документ*.txt
 *.orig
+
+# Логи сборки PlatformIO
+build_*.log
+*.log
+
+# Временные файлы агентов
+QWEN.md
+
+# Сторонние библиотеки (не часть проекта)
+gpio_viewer/

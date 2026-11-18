@@ -557,4 +557,4 @@
 - **T17 (`console.h`)** закрыта: `firmware/common/console.h` с базовым классом `audio21::Console`, `MasterS3Console`/`LegacyMasterConsole`/`SatelliteConsole` наследуют `audio21::Console`, общие команды `save`/`reboot`/`status` в базовом классе.
 - **T1 (CI)** закрыта: GitHub Actions активированы, `workflow_dispatch` добавлен.
 - **T15 (ITransport)** закрыта: `ITransport* g_transport` в `master_s3/src/main.cpp`; `sendAudioToSatellite()` — `g_transport->sendToChannel()`, `sendDiscoveryRequest()` — `g_transport->broadcast()`, `loop()` — `g_transport->update()`; ветвление `if (g_cfg.transport == TransportMode::Udp)` убрано из setup/loop (OCP).
-- **F12 (OLED)** закрыта: `olikraus/U8g2` добавлен в `lib_deps`; `Display g_display(AUDIO_OLED_SDA, AUDIO_OLED_SCL)` в `master_s3/src/main.cpp`; `g_display.begin()` + `showText()` в `setup()`; пины SDA=GPIO21, SCL=GPIO18.
+- **F12 (OLED)** закрыта: `olikraus/U8g2` добавлен в `lib_deps`; `Display g_display(AUDIO_OLED_SDA, AUDIO_OLED_SCL)` в `master_s3/src/main.cpp`; `g_display.begin()` + `showText()` в `setup()`; пины SDA=GPIO16, SCL=GPIO17.
