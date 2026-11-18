@@ -17,7 +17,7 @@ namespace audio21 {
 class DriftCorrector {
 public:
     DriftCorrector()
-        : m_idx(0), m_medianMs(0), m_lastAdjustMs(0) {
+        : m_idx(0), m_medianMs(0), m_lastAdjustMedianMs(0), m_lastAdjustMs(0) {
         memset(m_history, 0, sizeof(m_history));
     }
 

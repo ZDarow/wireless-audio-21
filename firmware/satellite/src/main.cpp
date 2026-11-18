@@ -261,6 +261,9 @@ void setup() {
     // Целевой уровень §10.3: 20 мс базовый (40/80 — для нестабильных сетей).
     g_jitter->setTargetMs(20, g_cfg.sampleRate);
 
+    // C3.4: сброс дрейф-коррекции перед началом работы.
+    g_drift.reset();
+
     if (!initI2S(g_cfg)) {
         Logger::error("satellite", "I2S init failed");
     } else {
