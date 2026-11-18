@@ -64,8 +64,8 @@ using namespace audio21;
 // left/right (HPF) — для сателлитов, TX — Этап 3.
 // ---------------------------------------------------------------------------
 
-// Буфер PCM для приёма: максимальный UDP-пакет §9.2 (< MTU).
-static uint8_t g_udpBuf[sizeof(UdpAudioHeader) + kUdpMaxPayload];
+// Буфер PCM для приёма: максимальный UDP-пакет §9.2 (< MTU) + HMAC (C5.7).
+static uint8_t g_udpBuf[sizeof(UdpAudioHeader) + kUdpMaxPayload + kUdpAuthHmacSize];
 static UdpAudioReceiver g_audioRecv;
 // JitterBuffer в PSRAM: 20–60 мс при 48 кГц (§7.6, §16.2 — B13). Моно (sub).
 static constexpr uint32_t kMasterJitterCapacity = 60 * 48000 / 1000;
@@ -148,6 +148,10 @@ static Display g_display(AUDIO_OLED_SDA, AUDIO_OLED_SCL); // F12: OLED SSD1306
 static RotaryEncoder g_encoder(AUDIO_ENC_A, AUDIO_ENC_B, AUDIO_ENC_BTN); // C4.2: энкодер KY-040
 static uint32_t g_packetsRx = 0;
 static uint32_t g_packetBytesRx = 0;
+// C5.7: статистика аутентификации UDP-аудио.
+static uint32_t g_udpAuthOk = 0;
+static uint32_t g_udpAuthFail = 0;
+static uint32_t g_udpAuthUnauth = 0;
 
 // I2S-выход (C1.4): сабвуфер — моно (L=R), пины BCK=4/WS=5/DATA=6.
 static I2sOutput g_i2sOut;
@@ -740,6 +744,9 @@ protected:
         Serial.printf("udp_port: %u\n", g_cfg.udpAudioPort);
         Serial.printf("packets_rx: %lu\n", (unsigned long)g_packetsRx);
         Serial.printf("bytes_rx: %lu\n", (unsigned long)g_packetBytesRx);
+        Serial.printf("udp_auth_ok: %lu\n", (unsigned long)g_udpAuthOk);
+        Serial.printf("udp_auth_fail: %lu\n", (unsigned long)g_udpAuthFail);
+        Serial.printf("udp_auth_unauth: %lu\n", (unsigned long)g_udpAuthUnauth);
         Serial.printf("tx_packets: %lu\n", (unsigned long)g_txPackets);
         Serial.printf("i2s: %s\n", g_i2sOn ? "on" : "off");
         Serial.printf("dsp: volume=%d mute=%s crossover=%d Hz\n",
@@ -1171,8 +1178,21 @@ static void appLoop() {
         UdpAudioHeader hdr;
         const uint8_t* payload;
         size_t payloadSize;
-        if (n > 0 && parseUdpPacket(g_udpBuf, static_cast<size_t>(n), hdr, payload, payloadSize)) {
-            size_t nSamples = payloadSize / sizeof(int16_t);
+        UdpAuthResult auth = parseUdpPacket(g_udpBuf, static_cast<size_t>(n),
+                                            reinterpret_cast<const uint8_t*>(AUDIO_UDP_AUTH_KEY),
+                                            strlen(AUDIO_UDP_AUTH_KEY),
+                                            hdr, payload, payloadSize);
+        if (auth == UdpAuthResult::Invalid) {
+            g_udpAuthFail++;
+            continue; // отбрасываем пакет с неверным HMAC
+        }
+        if (auth == UdpAuthResult::Unauthenticated) {
+            g_udpAuthUnauth++;
+            Logger::warnf("udp", "неаутентифицированный пакет (магия 0xA210), seq=%u", hdr.sequence);
+        } else {
+            g_udpAuthOk++;
+        }
+        size_t nSamples = payloadSize / sizeof(int16_t);
             const int16_t* pcm = reinterpret_cast<const int16_t*>(payload);
             size_t nMono = nSamples / 2;
 

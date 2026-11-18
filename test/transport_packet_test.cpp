@@ -149,6 +149,62 @@ int main() {
     CHECK(parseUdpPacket(ubuf, sizeof(UdpAudioHeader) + 8, uhdr, upayload, upayloadSize) == false,
           "payload длиннее буфера → отклоняется");
 
+    // ------------------------------------------------------------------
+    // Аутентификация UDP-аудио (C5.7 / REPO_AUDIT V4).
+    // ------------------------------------------------------------------
+    const uint8_t authKey[] = "test-auth-key-1234"; // 18 байт
+
+    // Сборка аутентифицированного пакета (магия 0xA211 + HMAC).
+    size_t asz = buildUdpPacketAuthenticated(ubuf, sizeof(ubuf), authKey, sizeof(authKey) - 1,
+                                           100, 48000, 48000, 2, 16,
+                                           upcm, sizeof(upcm), kUdpFlagKeyframe);
+    CHECK(asz == 18 + 16 + kUdpAuthHmacSize, "размер аутентифицированного UDP-пакета = 18 + 16 + 8 байт");
+    CHECK(ubuf[0] == (kUdpMagicAuthenticated & 0xFF), "магия 0xA211 (младший байт)");
+    CHECK(ubuf[1] == (kUdpMagicAuthenticated >> 8), "магия 0xA211 (старший байт)");
+
+    // Разбор с правильным ключом → Authenticated.
+    UdpAuthResult ar = parseUdpPacket(ubuf, asz, authKey, sizeof(authKey) - 1,
+                                      uhdr, upayload, upayloadSize);
+    CHECK(ar == UdpAuthResult::Authenticated, "правильный ключ → Authenticated");
+    CHECK(uhdr.magic == kUdpMagicAuthenticated, "магия аутентифицированного пакета");
+    CHECK(uhdr.sequence == 100, "sequence сохранён");
+    CHECK(upayloadSize == 16, "payload = 16 байт");
+    CHECK(memcmp(upayload, upcm, sizeof(upcm)) == 0, "payload совпадает");
+
+    // Разбор с неправильным ключом → Invalid.
+    const uint8_t wrongKey[] = "wrong-auth-key-1234";
+    ar = parseUdpPacket(ubuf, asz, wrongKey, sizeof(wrongKey) - 1,
+                        uhdr, upayload, upayloadSize);
+    CHECK(ar == UdpAuthResult::Invalid, "неправильный ключ → Invalid");
+
+    // Разбор без ключа → Invalid (ключ обязателен для 0xA211).
+    ar = parseUdpPacket(ubuf, asz, nullptr, 0, uhdr, upayload, upayloadSize);
+    CHECK(ar == UdpAuthResult::Invalid, "без ключа → Invalid");
+
+    // Неаутентифицированный пакет (0xA210) без ключа → Unauthenticated.
+    usz = buildUdpPacket(ubuf, sizeof(ubuf), 200, 48000, 48000, 2, 16,
+                         upcm, sizeof(upcm), 0);
+    ar = parseUdpPacket(ubuf, usz, nullptr, 0, uhdr, upayload, upayloadSize);
+    CHECK(ar == UdpAuthResult::Unauthenticated, "0xA210 без ключа → Unauthenticated");
+    CHECK(uhdr.magic == kUdpMagic, "магия 0xA210");
+
+    // Испорченный HMAC (перевернуть байт в HMAC) → Invalid.
+    // Перестраиваем аутентифицированный пакет (предыдущий шаг перезаписал буфер).
+    asz = buildUdpPacketAuthenticated(ubuf, sizeof(ubuf), authKey, sizeof(authKey) - 1,
+                                      100, 48000, 48000, 2, 16,
+                                      upcm, sizeof(upcm), kUdpFlagKeyframe);
+    uint8_t* hmacPtr = ubuf + 18 + 16; // начало HMAC
+    hmacPtr[0] ^= 0xFF;
+    ar = parseUdpPacket(ubuf, asz, authKey, sizeof(authKey) - 1,
+                        uhdr, upayload, upayloadSize);
+    CHECK(ar == UdpAuthResult::Invalid, "испорченный HMAC → Invalid");
+    hmacPtr[0] ^= 0xFF; // восстановить
+
+    // Слишком короткий буфер для аутентифицированного пакета → Invalid.
+    CHECK(parseUdpPacket(ubuf, 18, authKey, sizeof(authKey) - 1,
+                         uhdr, upayload, upayloadSize) == UdpAuthResult::Invalid,
+          "слишком короткий буфер → Invalid");
+
     if (g_failures) {
         printf("ИТОГ: %d ПРОВАЛОВ\n", g_failures);
         return 1;

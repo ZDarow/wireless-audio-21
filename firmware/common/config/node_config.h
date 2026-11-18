@@ -60,6 +60,14 @@
 #define AUDIO_ESPNOW_LMK "audio21-espnow-2"
 #endif
 
+// Ключ аутентификации UDP-аудио (C5.7 / REPO_AUDIT V4). HMAC-SHA256 ключ для
+// проверки подлинности источника UDP-пакетов (порт 5004). Пустая строка =
+// аутентификация отключена, принимаются только неаутентифицированные пакеты
+// (магия 0xA210).
+#ifndef AUDIO_UDP_AUTH_KEY
+#define AUDIO_UDP_AUTH_KEY ""
+#endif
+
 // Проверка интернета (ТЗ_Веб §7)
 #ifndef AUDIO_NET_CHECK_ENABLED
 #define AUDIO_NET_CHECK_ENABLED 1

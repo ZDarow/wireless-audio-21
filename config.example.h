@@ -26,6 +26,12 @@
 #define AUDIO_ESPNOW_PMK     "audio21-espnow-1"
 #define AUDIO_ESPNOW_LMK     "audio21-espnow-2"
 
+// --- Аутентификация UDP-аудио (C5.7 / REPO_AUDIT V4) ---
+// HMAC-SHA256 ключ для проверки подлинности источника UDP-пакетов (порт 5004).
+// Должен совпадать у мастера и в приложении-смартфона. Если пустая строка —
+// аутентификация отключена, принимаются только неаутентифицированные пакеты.
+#define AUDIO_UDP_AUTH_KEY   ""
+
 // --- Сателлиты (MAC) ---
 #define AUDIO_LEFT_SAT_MAC   {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01}
 #define AUDIO_RIGHT_SAT_MAC  {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x02}
