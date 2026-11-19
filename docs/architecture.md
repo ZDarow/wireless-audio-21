@@ -1,6 +1,6 @@
 # Архитектура Wireless Audio 2.1
 
-> Версия документа: 1.1 (12.08.2026). Соответствует коду ветки `main`.
+> Версия документа: 1.2 (19.11.2026). Соответствует коду ветки `main`.
 
 ## 1. Обзор
 
@@ -33,7 +33,8 @@
 ### Мастер (целевой, ESP32-S3)
 
 ```
-Wi-Fi UDP RX (magic 0xA210, udp_audio_receiver.h)
+Wi-Fi UDP RX (magic 0xA210 / 0xA211 с HMAC, C5.7, udp_audio_receiver.h)
+  → валидация HMAC (если AUDIO_UDP_AUTH_KEY задан, неверные пакеты отбрасываются)
   → JitterBuffer (устойчивость к джиттеру сети)
   → PcmPipeline.process(l, r):
       tone (bass/treble shelf) → volume (с фейдом) → limiter
@@ -51,11 +52,22 @@ Legacy `master_a2dp` (стенд C0.2): тот же конвейер, но ис�
 ```
 ESP-NOW/UDP RX → parsePacket → фильтр по каналу (left/right)
   → JitterBuffer.push (пачки семплов)
+  → DriftCorrector (C3.4: медианный фильтр 8 отсчётов, подстройка targetMs 15–50 мс)
   → loop: JitterBuffer.pop → DelayLine → VolumeControl (громкость+fade, C3.5)
   → I2S → ЦАП → динамик
 ```
 
+### OLED-меню + энкодер (мастер, C4.x)
+
+Машина состояний меню на SSD1306 (I2C) + энкодер KY-040:
+`STATUS → VOLUME → CROSSOVER → DELAY L/R/SUB → SAT L/R`.
+Вращение энкодера — навигация/изменение значения, кнопка — вход в редактирование/сохранение.
+Авто-выход в STATUS через 10 с без активности. Изменения применяются к живым объектам DSP
+и сохраняются в конфиг.
+
 ## 3. Формат пакета (спецификация §6.8)
+
+### Мастер → сателлит (ESP-NOW/UDP)
 
 16-байтный заголовок + payload (little-endian):
 
@@ -75,6 +87,28 @@ ESP-NOW/UDP RX → parsePacket → фильтр по каналу (left/right)
 - `kMaxPacketPayload = 234` байт (ESP-NOW: максимум 250 байт на пакет).
 - `kMaxInt16Samples = 117` сэмплов на пакет.
 - Размер заголовка фиксирован и проверяется `static_assert`.
+
+### Смартфон → мастер (UDP, порт 5004, спецификация §9.1)
+
+Заголовок 18 байт + payload + опциональный HMAC (C5.7):
+
+| Смещение | Размер | Поле | Описание |
+|---|---|---|---|
+| 0 | 2 | `magic` | 0xA210 (неаут.) или 0xA211 (с HMAC) |
+| 2 | 1 | `protocol_version` | 1 |
+| 3 | 1 | `flags` | 0x01 end of stream, 0x02 keyframe |
+| 4 | 4 | `sequence` | монотонный счётчик пакетов |
+| 8 | 4 | `timestamp_samples` | счётчик сэмплов источника |
+| 12 | 2 | `sample_rate` | 48000 |
+| 14 | 1 | `channels` | 2 |
+| 15 | 1 | `bits_per_sample` | 16 |
+| 16 | 2 | `payload_length` | байт PCM |
+| 18 | N | payload | PCM |
+| 18+N | 8 | HMAC-SHA256 | только для 0xA211 (первые 8 байт дайджеста) |
+
+HMAC вычисляется над заголовком + payload ключом `AUDIO_UDP_AUTH_KEY`.
+Мастер принимает 0xA210 (обратная совместимость) и 0xA211 (с проверкой HMAC).
+Пакеты 0xA211 с неверным HMAC отбрасываются молча.
 
 ## 4. Транспорт
 
@@ -109,7 +143,8 @@ ESP-NOW/UDP RX → parsePacket → фильтр по каналу (left/right)
 | `Crossover` | `crossover.h` | Linkwitz-Riley 4-го порядка (24 дБ/октаву), LPF/HPF |
 | `DelayLine` | `delay_line.h` | Кольцевой буфер, задержка 0..200 мс |
 | `JitterBuffer` | `jitter_buffer.h` | FIFO с целевым уровнем наполнения, overwrite при переполнении |
-| `UdpAudioReceiver` | `udp_audio_receiver.h` | Приём UDP-пакетов со смартфона (magic 0xA210), извлечение PCM |
+| `UdpAudioReceiver` | `udp_audio_receiver.h` | Приём UDP-пакетов со смартфона (magic 0xA210/0xA211), извлечение PCM |
+| `DriftCorrector` | `drift_correction.h` | Медианный фильтр 8 отсчётов, подстройка targetMs джиттер-буфера (C3.4) |
 | `I2sOutput` | `i2s_output.h` | Вывод на ЦАП через I2S (управляемый старт/стоп, B14) |
 
 Диапазоны (спецификация §6.9–6.10, `node_config.h`):
@@ -265,12 +300,15 @@ docs/                       # PLAN, TASKS, architecture, hardware, wiring, REPO_
 ## 10. Известные ограничения (MVP)
 
 - Источник аудио — Wi-Fi UDP PCM со смартфона (мастер — приёмник UDP,
-  magic 0xA210, см. ТЗ §10). A2DP недоступен на ESP32-S3.
-- `timestampMs` заполняется мастером в каждом пакете (C3.2), но коррекция
-  дрейфа часов на сателлите (C3.4) — открытая задача.
-- OLED-меню + энкодер — этап 4 (F12/C4.x).
+  magic 0xA210 / 0xA211 с HMAC, см. ТЗ §10). A2DP недоступен на ESP32-S3.
+- `timestampMs` заполняется мастером в каждом пакете (C3.2), коррекция
+  дрейфа часов на сателлите реализована (C3.4, `DriftCorrector`).
+- OLED-меню + энкодер реализовано (C4.x, Этап 4).
 - Канальные громкости L/R/Sub (C2.2) и fade сателлита (C3.5) реализованы;
   схема «разное время старта каналов» (ТЗ §8.2) — часть C3.4/F14.
 - mDNS (`http://audio-master.local`) — реализовано (F16).
-- ESP-NOW без шифрования (LMK/PMK не заданы), UDP-аудио без аутентификации
-  источника — см. `docs/REPO_AUDIT.md` V1/V4.
+- ESP-NOW без шифрования (LMK/PMK не заданы) — см. `docs/REPO_AUDIT.md` V1.
+- UDP-аудио без аутентификации источника — частично закрыто C5.7:
+  поддерживается HMAC-SHA256 (магия 0xA211), но ключ `AUDIO_UDP_AUTH_KEY`
+  по умолчанию пуст (аутентификация отключена, принимаются только 0xA210).
+  Включение требует согласованного ключа на мастере и в приложении-смартфона.
