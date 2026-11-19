@@ -175,9 +175,14 @@ static uint32_t g_heartbeatsRx = 0;
 // Web UI + REST API. Аудио-конвейер (pipeline/delay/espnow) подключён:
 // /api/volume, /api/mute, /api/crossover и /api/delay применяют настройки
 // к живым объектам DSP (C2.1–C2.4), а не только к конфигу.
-static MasterWebServer g_webServer(g_cfg, &g_pipeline,
-                                   &g_delayLeft, &g_delayRight, &g_delaySub,
-                                   &g_espnow, &g_leftOnline, &g_rightOnline);
+static AudioContext g_audioCtx{
+    &g_pipeline,
+    &g_delayLeft, &g_delayRight, &g_delaySub,
+    &g_espnow,
+    &g_leftOnline, &g_rightOnline,
+    nullptr // a2dpConnected (не используется на S3)
+};
+static MasterWebServer g_webServer(g_cfg, g_audioCtx);
 static bool g_setupMode = false;
 
 // ---------------------------------------------------------------------------

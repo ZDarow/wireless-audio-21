@@ -19,6 +19,10 @@ __pycache__/
 test/*_bin*
 test/*.d
 
+# PlatformIO / IDE артефакты (не коммитится)
+.pio/
+.vscode/
+
 # Системное
 .DS_Store
 *.swp
