@@ -1061,13 +1061,13 @@ void setup() {
         Logger::error("audio", "I2S init failed");
     }
 
-    // F12: OLED дисплей.
-    if (g_display.begin()) {
-        Logger::info("display", "OLED SSD1306 ready");
-        g_display.showText("Audio 2.1", "Master", "ESP32-S3", "");
-    } else {
-        Logger::warn("display", "OLED init failed");
-    }
+    // F12: OLED дисплей — отключено (I2C нестабилен на этой плате).
+    // if (g_display.begin()) {
+    //     Logger::info("display", "OLED SSD1306 ready");
+    //     g_display.showText("Audio 2.1", "Master", "ESP32-S3", "");
+    // } else {
+    //     Logger::warn("display", "OLED init failed");
+    // }
 
     // C4.2: энкодер.
     g_encoder.begin();
@@ -1275,7 +1275,7 @@ static void appLoop() {
             g_audioActive = (st != StreamState::Standby);
         }
     }
-    } // for (pkt)
+    g_audioActive = (g_audioRecv.state() != StreamState::Standby);
 
     // REPO_AUDIT: эскалация состояния потока по времени (Conceal→RampOut→
     // Standby) раньше не происходила — tick() никто не вызывал, и при
@@ -1321,8 +1321,8 @@ static void appLoop() {
 
     g_console.update();
 
-    // C4.x: энкодер + OLED-меню.
-    handleEncoder();
+    // C4.x: энкодер + OLED-меню — отключено (OLED убран).
+    // handleEncoder();
 
     // A9: drain очереди RX ESP-NOW (обработка из loop, не из коллбека).
     if (g_espNowRxQueue) {
