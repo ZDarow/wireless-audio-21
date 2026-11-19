@@ -925,7 +925,12 @@ void setup() {
     delay(200);
     // Watchdog: 30 секунд таймаут, не паниковать (избегаем сброса при долгих
     // операциях Wi-Fi/Web UI в loop).
-    esp_task_wdt_init(30, false);
+    esp_task_wdt_config_t wdtConfig = {
+        .timeout_ms = 30000,
+        .idle_core_mask = 0,
+        .trigger_panic = false,
+    };
+    esp_task_wdt_init(&wdtConfig);
     esp_task_wdt_add(NULL);
     Logger::info("master", "Wireless Audio 2.1 Master (ESP32-S3) starting...");
 
