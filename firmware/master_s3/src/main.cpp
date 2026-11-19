@@ -923,6 +923,10 @@ static DelayLine* createDelayLinePsram(uint32_t capacityMs, uint32_t sampleRate)
 void setup() {
     Serial.begin(115200);
     delay(200);
+    // Watchdog: 30 секунд таймаут, не паниковать (избегаем сброса при долгих
+    // операциях Wi-Fi/Web UI в loop).
+    esp_task_wdt_init(30, false);
+    esp_task_wdt_add(NULL);
     Logger::info("master", "Wireless Audio 2.1 Master (ESP32-S3) starting...");
 
     if (!ConfigStorage::load(g_cfg)) {
@@ -1268,6 +1272,7 @@ static void appLoop() {
                     g_txCount++;
                     g_txBatchLastMs = millis();
                     if (g_txCount >= kBatchSamples) flushTxBatch();
+                    esp_task_wdt_reset(); // flushTxBatch может блокировать при отправке ESP-NOW
                 }
                 if (g_jitter) g_jitter->push(s_mono, nMono);
                 }
@@ -1287,6 +1292,7 @@ static void appLoop() {
     // сателлиты теряли до 2.4 мс звука и рассинхронизировались с субом.
     // Стале-батч (>50 мс без пополнения) досылаем принудительно.
     if (g_txCount > 0 && millis() - g_txBatchLastMs >= 50) flushTxBatch();
+    esp_task_wdt_reset(); // стале-батч может блокировать при отправке ESP-NOW
 
     // Драйвер аудио-выхода: paced-вычитывание из jitter-буфера в I2S.
     // Целевое число семплов — по прошедшему времени (задел на случай, если
@@ -1298,6 +1304,7 @@ static void appLoop() {
     if (elapsed > 100) elapsed = 100; // не догоняем больше 100 мс за тик
     g_audioOutLastMs = nowMs;
     audioOutTick(static_cast<uint32_t>(elapsed) * g_cfg.sampleRate / 1000u);
+    esp_task_wdt_reset(); // I2S write может блокировать при задержке DMA
 
     // C3.1: обновление транспорта (UDP receive+discovery или ESP-NOW no-op).
     g_transport->update();
@@ -1335,6 +1342,7 @@ static void appLoop() {
 
     // Web UI: обработка запросов и сохранение конфига по кнопке.
     g_webServer.handleClient();
+    esp_task_wdt_reset(); // handleClient может блокировать при отсутствии клиентов
     if (g_webServer.saveRequested()) {
         ConfigStorage::save(g_cfg);
         g_webServer.clearSaveRequested();
@@ -1443,10 +1451,12 @@ static void appLoop() {
 
     // Captive portal: обработать DNS-запросы телефона (no-op, если не запущен).
     g_dns.processNextRequest();
+    esp_task_wdt_reset(); // DNS может блокировать при активном captive portal
 
     // C5.5: занятость = время до delay; усреднение за 2 с → Web UI.
     g_cpuBusyUs += (micros() - t0);
     delay(10);
+    esp_task_wdt_reset(); // сброс перед следующей итерацией loop
     g_cpuTotalUs += (micros() - t0);
     uint32_t cpuNow = millis();
     if (cpuNow - g_cpuLastReportMs >= 2000) {
