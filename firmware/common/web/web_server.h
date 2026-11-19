@@ -57,7 +57,7 @@ struct AudioContext {
 // GET и читаем первую строку ответа (код 200/204 → online, 3xx → captive
 // portal). HTTPClient core 3.x ошибочно возвращает connection refused при
 // рабочем TCP-соединении (проверено на железе), поэтому обходим его.
-inline HttpCheckResult httpInternetCheck(const char* url, uint32_t timeoutMs);
+HttpCheckResult httpInternetCheck(const char* url, uint32_t timeoutMs);
 
 class MasterWebServer {
 public:
@@ -342,7 +342,5 @@ private:
 
     static const char* kPageHtml;
 };
-
-const char* MasterWebServer::kPageHtml = kSpaHtml;
 
 } // namespace audio21

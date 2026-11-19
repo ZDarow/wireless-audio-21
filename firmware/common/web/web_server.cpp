@@ -972,3 +972,5 @@ void MasterWebServer::handleUpdateEnd(WebServer& s) {
 }
 
 } // namespace audio21
+
+const char* audio21::MasterWebServer::kPageHtml = audio21::kSpaHtml;
