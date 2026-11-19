@@ -636,12 +636,10 @@ static void applyStaticIpFromProfile() {
 }
 
 static bool initWifi() {
-    WiFi.disconnect(true);
-    WiFi.setSleep(false); // отключить power save для аудиоузлов (ТЗ §16.3)
-
     if (g_cfg.wifiMode == WifiMode::ApDirect) {
         scanWifiBeforeAp(); // список сетей для Web UI — ДО старта AP (B9)
         WiFi.mode(WIFI_AP);
+        WiFi.disconnect(false, false); // сбросить предыдущее состояние после mode()
         bool ok = WiFi.softAP(g_cfg.wifiApSsid, g_cfg.wifiApPassword, kDefaultWifiChannel);
         if (!ok) {
             Logger::error("wifi", "softAP failed");
@@ -659,6 +657,7 @@ static bool initWifi() {
         // Репитер: AP для смартфона + STA (домашняя сеть) + NAPT.
         scanWifiBeforeAp(); // список сетей для Web UI — ДО старта AP (B9)
         WiFi.mode(WIFI_AP_STA);
+        WiFi.disconnect(false, false); // сбросить предыдущее состояние после mode()
         bool ok = WiFi.softAP(g_cfg.wifiApSsid, g_cfg.wifiApPassword, kDefaultWifiChannel);
         if (!ok) {
             Logger::error("wifi", "softAP failed");
@@ -680,8 +679,6 @@ static bool initWifi() {
             enableNapt();
         } else {
             // Домашняя сеть недоступна — AP остаётся, включаем режим настройки.
-            // Отключаем авто-реконнект STA: постоянные попытки подключения
-            // мешают сканированию сетей в Web UI и нагружают радиомодуль.
             WiFi.setAutoReconnect(false);
             WiFi.disconnect(false, true);
             Logger::warn("wifi", "upstream not connected — setup mode (Web UI on AP)");
@@ -692,6 +689,7 @@ static bool initWifi() {
 
     // STA
     WiFi.mode(WIFI_STA);
+    WiFi.disconnect(false, false); // сбросить предыдущее состояние после mode()
     applyStaticIpFromProfile(); // C5.1: статический IP из профиля
     WiFi.begin(g_cfg.wifiSsid, g_cfg.wifiPassword);
     Logger::infof("wifi", "Connecting to '%s'...", g_cfg.wifiSsid);
@@ -700,7 +698,6 @@ static bool initWifi() {
     if (WiFi.status() != WL_CONNECTED) {
         // Не удалось подключиться к домашней сети — поднимаем AP настройки,
         // чтобы пользователь мог задать SSID/пароль через Web UI.
-        // Отключаем авто-реконнект STA (мешает скану сетей в Web UI).
         WiFi.setAutoReconnect(false);
         WiFi.disconnect(false, true);
         Logger::warn("wifi", "connect failed — switching to setup AP");
@@ -978,6 +975,8 @@ void setup() {
         g_logs.addf(LogCat::Wifi, 0, "Wi-Fi init failed — degraded mode");
     }
 
+    WiFi.setSleep(false); // отключить power save для аудиоузлов (ТЗ §16.3)
+
     // ESP-NOW: heartbeat от сателлитов → статус online без аудио-потока.
     if (initEspNow()) {
         Logger::info("master", "ESP-NOW ready (satellite heartbeat RX)");
@@ -1066,9 +1065,11 @@ void setup() {
         g_i2sOn = true;
         Logger::infof("audio", "I2S out: %u Hz, mono (L=R), pins %u/%u/%u",
                       (unsigned)g_cfg.sampleRate, g_cfg.i2sBck, g_cfg.i2sWs, g_cfg.i2sDataOut);
+        Logger::info("audio", "I2S init OK");
     } else {
         Logger::error("audio", "I2S init failed");
     }
+    Logger::info("master", "setup complete, entering loop");
 
     // F12: OLED дисплей — отключено (I2C нестабилен на этой плате).
     // if (g_display.begin()) {
@@ -1208,6 +1209,11 @@ static void audioOutTick(uint32_t samplesBudget) {
 static void appLoop() {
     // C6.1: сброс watchdog задачи loop.
     esp_task_wdt_reset();
+    static bool loopLogged = false;
+    if (!loopLogged) {
+        Logger::info("master", "loop() started");
+        loopLogged = true;
+    }
     // C5.5: замер занятости loop() (без учёта delay).
     uint32_t t0 = micros();
     // Приём UDP-аудио со смартфона (C2.1, §9): разбор пакета → UdpAudioReceiver
@@ -1310,6 +1316,11 @@ static void appLoop() {
     g_audioOutLastMs = nowMs;
     audioOutTick(static_cast<uint32_t>(elapsed) * g_cfg.sampleRate / 1000u);
     esp_task_wdt_reset(); // I2S write может блокировать при задержке DMA
+    static bool audioLogged = false;
+    if (!audioLogged) {
+        Logger::info("master", "audioOutTick OK");
+        audioLogged = true;
+    }
 
     // C3.1: обновление транспорта (UDP receive+discovery или ESP-NOW no-op).
     g_transport->update();
@@ -1348,6 +1359,11 @@ static void appLoop() {
     // Web UI: обработка запросов и сохранение конфига по кнопке.
     g_webServer.handleClient();
     esp_task_wdt_reset(); // handleClient может блокировать при отсутствии клиентов
+    static bool webLogged = false;
+    if (!webLogged) {
+        Logger::info("master", "webServer.handleClient OK");
+        webLogged = true;
+    }
     if (g_webServer.saveRequested()) {
         ConfigStorage::save(g_cfg);
         g_webServer.clearSaveRequested();
