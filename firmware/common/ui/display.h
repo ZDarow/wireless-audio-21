@@ -18,7 +18,10 @@ public:
           m_u8g2(U8G2_R0, /* reset=*/U8X8_PIN_NONE, /* clock=*/scl, /* data=*/sda) {}
 
     bool begin() {
+        Wire.setPins(m_sda, m_scl);
         Wire.begin(m_sda, m_scl);
+        Wire.setClock(100000); // 100 кГц для SSD1306
+        delay(50);
         m_u8g2.begin();
         m_u8g2.setFont(u8g2_font_6x10_tf);
         m_u8g2.setContrast(128);
