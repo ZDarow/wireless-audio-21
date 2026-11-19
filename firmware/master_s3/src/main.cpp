@@ -31,6 +31,7 @@
 #include <esp_task_wdt.h>
 #include <ping/ping_sock.h>
 #include <freertos/semphr.h>
+#include <freertos/queue.h>
 #include <time.h>
 #include <vector>
 #include <stdexcept>
@@ -152,6 +153,19 @@ static uint32_t g_packetBytesRx = 0;
 static uint32_t g_udpAuthOk = 0;
 static uint32_t g_udpAuthFail = 0;
 static uint32_t g_udpAuthUnauth = 0;
+
+// A9: очередь FreeRTOS для RX ESP-NOW — коллбек только копирует пакет
+// в пул и ставит индекс в очередь; обработка (parsePacket + heartbeat)
+// происходит в loop, чтобы не держать Wi-Fi task.
+static constexpr size_t kEspNowRxPoolSize = 8;
+struct EspNowRxPacket {
+    uint16_t size;
+    uint8_t data[250];
+    MacAddr from;
+};
+static QueueHandle_t g_espNowRxQueue = nullptr;
+static EspNowRxPacket g_espNowRxPool[kEspNowRxPoolSize];
+static uint8_t g_espNowRxPoolIdx = 0;
 
 // I2S-выход (C1.4): сабвуфер — моно (L=R), пины BCK=4/WS=5/DATA=6.
 static I2sOutput g_i2sOut;
@@ -430,7 +444,22 @@ static void sendDiscoveryRequest() {
     g_transport->broadcast(buf, n);
 }
 
+// A9: коллбек ESP-NOW — только копирует пакет в пул и ставит индекс в очередь.
+// Обработка (parsePacket + heartbeat) происходит в loop, чтобы не держать Wi-Fi task.
 static void onEspNowPacket(const uint8_t* data, size_t size, const MacAddr& from) {
+    if (!g_espNowRxQueue || size > sizeof(g_espNowRxPool[0].data)) return;
+    uint8_t idx = g_espNowRxPoolIdx++;
+    if (g_espNowRxPoolIdx == kEspNowRxPoolSize) g_espNowRxPoolIdx = 0;
+    g_espNowRxPool[idx].size = (uint16_t)size;
+    g_espNowRxPool[idx].from = from;
+    memcpy(g_espNowRxPool[idx].data, data, size);
+    BaseType_t hpw = pdFALSE;
+    xQueueSendFromISR(g_espNowRxQueue, &idx, &hpw);
+    if (hpw) portYIELD_FROM_ISR();
+}
+
+// Обработка принятого ESP-NOW пакета (вызывается из loop, не из коллбека).
+static void onEspNowPacketProcess(const uint8_t* data, size_t size, const MacAddr& from) {
     AudioPacketHeader hdr;
     const uint8_t* payload;
     size_t payloadSize;
@@ -943,6 +972,11 @@ void setup() {
     // ESP-NOW: heartbeat от сателлитов → статус online без аудио-потока.
     if (initEspNow()) {
         Logger::info("master", "ESP-NOW ready (satellite heartbeat RX)");
+        // A9: создать FreeRTOS-очередь для RX ESP-NOW.
+        g_espNowRxQueue = xQueueCreate(kEspNowRxPoolSize, sizeof(uint8_t));
+        if (!g_espNowRxQueue) {
+            Logger::error("master", "ESP-NOW rx queue create failed");
+        }
     } else {
         Logger::error("master", "ESP-NOW init failed");
     }
@@ -1289,6 +1323,15 @@ static void appLoop() {
 
     // C4.x: энкодер + OLED-меню.
     handleEncoder();
+
+    // A9: drain очереди RX ESP-NOW (обработка из loop, не из коллбека).
+    if (g_espNowRxQueue) {
+        uint8_t idx;
+        while (xQueueReceive(g_espNowRxQueue, &idx, 0) == pdTRUE) {
+            const EspNowRxPacket& pkt = g_espNowRxPool[idx];
+            onEspNowPacketProcess(pkt.data, pkt.size, pkt.from);
+        }
+    }
 
     // Web UI: обработка запросов и сохранение конфига по кнопке.
     g_webServer.handleClient();
