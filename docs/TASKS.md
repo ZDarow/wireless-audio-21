@@ -609,3 +609,31 @@
 - **Обновлённые ссылки**: `AGENTS.md`, `README.md`, `docs/PLAN.md`, `docs/architecture.md` — ссылки на удалённые файлы убраны.
 
 - **Статус**: все изменения в working tree, не закоммичены. Следующий шаг — коммит + проверка сборки PlatformIO (pio run -c platformio.master.ini).
+
+---
+
+## 13. Задачи из комплексного аудита репозитория (22.11.2026)
+
+> Добавлено по итогам глубокого аудита: README/LICENSE/CI-CD, архитектура, антипаттерны,
+> ссылки, i18n. Формат: `C<категория>.<номер>` — категория задачи (безопасность, CI,
+> архитектура, локализация, документация).
+
+| ID | Задача | Место | Приоритет | Статус |
+|---|---|---|---|---|
+| C2 | **Добавить файл LICENSE (GPL-3.0)** — репозиторий публичный, legacy `master_a2dp` линкуется с `arduino-audio-tools` (GPL-3.0). Без LICENSE репозиторий не соответствует лицензии зависимостей. | корень репозитория | 🔴 Критично | ⬜ |
+| CI-2 | **Добавить `permissions: contents: read`** в `.github/workflows/ci.yml` (требование GitHub для workflows) | `.github/workflows/ci.yml` | 🟠 Высоко | ⬜ |
+| CI-3 | **Добавить `timeout-minutes: 30`** в job ci.yml (защита от зависших runs) | `.github/workflows/ci.yml` | 🟠 Высоко | ⬜ |
+| CI-4 | **Заменить плавающие теги actions (`@v4`, `@v5`) на SHA-пины** — воспроизводимая сборка CI | `.github/workflows/ci.yml` | 🟠 Высоко | ⬜ |
+| CI-9 | **Включить vulnerability alerts + `.github/dependabot.yml`** — автоматическое обновление уязвимых зависимостей | `.github/` | 🟠 Высоко | ⬜ |
+| M1 | **Ветвление + защита ветки `main`** — feature-ветки, PR с ревью, защита main от прямого пуша | GitHub репозиторий | 🟠 Высоко | ⬜ |
+| AP-1 | **Заменить `String` на `char[]`/`std::string` в веб-путях** — предотвратить фрагментацию heap на ESP32-S3 | `firmware/common/web/web_server.h`, `web_spa.h` | 🟡 Средне | ⬜ |
+| AP-4 | **Дефолт `AUDIO_UDP_AUTH_KEY` непустой** — аутентификация UDP-аудио включена по умолчанию (не пустая строка) | `config.example.env`, `node_config.h` | 🟠 Высоко | ⬜ |
+| M2 | **Создать тег `v0.1.0` + GitHub Release** — первая публичная версия с описанием изменений | GitHub репозиторий | 🟡 Средне | ⬜ |
+| M3 | **Декомпозиция `master_s3/src/main.cpp`** — выделить класс `MasterApp` (сеть, DSP, веб-сервер, консоль) вместо монолита ~979 строк | `firmware/master_s3/src/main.cpp` | 🟡 Средне | ⬜ |
+| M4 | **Шаблоны issues/PR, `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md`** — стандарт для контрибьюторов | корень репозитория, `.github/` | 🟡 Средне | ⬜ |
+| M5 | **Добавить `.editorconfig` и `.gitattributes`** — единый стиль кода и окончания строк для всех агентов | корень репозитория | 🟢 Низко | ⬜ |
+| L3 | **Закрепить точную версию `ArduinoJson`** (не `^7.4.3`) + остальные библиотеки (`Preferences`, `WebServer`, `HTTPClient`, `Update`, `Network`, `U8g2`) | `platformio.ini` | 🟡 Средне | ⬜ |
+| L4 | **Добавить бейджи shields.io в `README.md`** (CI status, license, PlatformIO) | `README.md` | 🟢 Низко | ⬜ |
+| L1 | **Единый стиль коммитов (Conventional Commits)** — `feat:`, `fix:`, `refactor:`, `docs:`, `ci:`, `security:` | все коммиты | 🟢 Низко | ⬜ |
+| L2 | **Исправить замечания yamllint к `ci.yml`** (строка 33 >80 символов, `\n` в конце файла) | `.github/workflows/ci.yml` | 🟢 Низко | ⬜ |
+| i18n | **Полная локализация Web UI** — перевести непереведённые строки навигации (Dashboard, Wi-Fi, Internet, Audio, Delays, Satellites, System, Update, Logs, Mute, Reboot, Info, Error) на русский или добавить переключатель ru/en | `firmware/common/web/web_spa.h` | 🟡 Средне | ⬜ |
