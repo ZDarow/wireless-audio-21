@@ -1,0 +1,30 @@
+---
+# .clang-tidy — статический анализ C++ для проекта Wireless Audio 2.1.
+# Запуск: clang-tidy --config-file=.clang-tidy <файлы>
+# Или через CI: clang-tidy -p build_dir --config-file=.clang-tidy firmware/**/*.cpp firmware/**/*.h
+
+Checks: >
+  clang-analyzer-*,
+  cppcoreguidelines-*,
+  performance-*,
+  portability-*,
+  readability-*,
+  bugprone-*,
+  modernize-*,
+  -cppcoreguidelines-avoid-non-const-global-variables,  // глобальное состояние в embedded — приемлемо
+  -cppcoreguidelines-owning-memory,                    // raw указатели на объекты в NVS/heap — по дизайну
+  -readability-function-cognitive-complexity,          // main.cpp большой — рефакторинг позже
+  -readability-magic-numbers,                          // константы из config.env — не магические
+  -modernize-use-nodiscard,                            // не все функции требуют nodiscard
+  -clang-analyzer-security.insecureAPI.strcpy,         // strlcpy используется вместо strcpy
+  -clang-analyzer-security.insecureAPI.strcat,         // не используется
+  -clang-analyzer-security.insecureAPI.sprintf,        // snprintf используется везде
+
+HeaderFilterRegex: >
+  firmware/common/.*
+
+FormatStyle:     file
+WarningsAsErrors: ''
+HeaderFilterRegex: ''
+AnalyzeTemporaryDtors: false
+...

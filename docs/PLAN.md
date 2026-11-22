@@ -82,7 +82,6 @@ wireless-audio-21/
 ├── platformio.ini              # env: master_a2dp, satellite_left/right (legacy core 2.0.17)
 ├── platformio.master.ini       # master_s3_wifi + satellite_s3_left/right: изолированный core 3.x (pioarduino)
 ├── config.example.env          # переменные окружения → generated_config.h
-├── config.example.h            # ручной аналог (синхронизирован, T6)
 ├── firmware/
 │   ├── common/                 # header-only, общий код
 │   │   ├── config/   node_config.h, storage.h (NVS, миграции v1..v4)
@@ -93,9 +92,9 @@ wireless-audio-21/
 │   │   ├── web/      auth.h, internet_check.h, logs.h, wifi_store.h
 │   │   ├── ui/       display.h, encoder.h (для F12, Этап 4)
 │   │   └── util/     logger.h, timing.h
-│   ├── master_s3/  src/main.cpp, include/master_s3_config.h   # целевой мастер (S3)
-│   ├── master/     src/main.cpp, common/web/web_server.h         # legacy A2DP-стенд (C0.2)
-│   └── satellite/  src/main.cpp                               # сателлиты (S3 + legacy)
+│   ├── master_s3/  src/main.cpp   # целевой мастер (S3)
+│   ├── master/     src/main.cpp   # legacy A2DP-стенд (C0.2)
+│   └── satellite/  src/main.cpp   # сателлиты (S3 + legacy)
 ├── scripts/                    # generate_config.py, flash_master.sh, flash_satellite.sh
 ├── test/                       # host-тесты (make test) + stubs/
 ├── docs/                       # PLAN, TASKS, architecture, hardware, wiring, REPO_AUDIT
@@ -110,7 +109,7 @@ wireless-audio-21/
 ### Этап 1 — Каркас и общий код
 - [x] Структура каталогов
 - [x] `platformio.ini` (6 env: S3-целевые + legacy-стенд)
-- [x] `config.example.env` / `config.example.h`
+- [x] `config.example.env`
 - [x] `common/config`: `node_config.h`, `storage.h`
 - [x] `common/util`: `logger.h`, `timing.h`
 - [x] `common/audio`: `crossover.h`, `delay_line.h`, `volume_control.h`, `pcm_pipeline.h`, `jitter_buffer.h`, `udp_audio_receiver.h`, `i2s_output.h`

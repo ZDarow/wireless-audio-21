@@ -264,8 +264,6 @@
 ---
 
 ## 10. План устранения расхождений по ТЗ (аудит 11.08.2026)
-
-> План-график по итогам проверки проекта на соответствие `ТЗ.md` и `ТЗ_Веб.md`.
 > Легенда приоритетов: 🔴 критично (блокирует звук/приёмку), 🟠 высоко,
 > 🟡 средне, 🟢 низко (чистка). Формат: `C<этап>.<задача>` — расхождения,
 > связка с B/F/T-номерами указана в колонке «Связь».
@@ -541,6 +539,29 @@
 
 - Осталось (только железо/большой рефакторинг): B6/B7/B11/B12/B16 (legacy `master_a2dp` — стенд C0.2), B10 (IPv6 — осознанное ограничение), T19 (сателлиты на core 3.x), T22 (см. выше), F14 (синхронизация), C3.1/C3.2 — ручная проверка звука на железе (§18 Этап 4).
 
+## 10. Новые задачи из веб-анализа (22.11.2026)
+
+> Добавлено по итогам глубокого веб-анализа открытых решений (см. `docs/TECHNICAL_SURVEY.md`,
+> `docs/INTEGRATION_RECOMMENDATIONS.md`, `docs/EXTERNAL_REFERENCES.md`).
+> Формат: `V<номер>` — уязвимости безопасности, `N<номер>` — новые задачи интеграции.
+
+| ID | Задача | Место | Приоритет | Статус |
+|---|---|---|---|---|
+| V4 | **UDP-аудио без аутентификации источника** — добавить ключ `AUDIO_UDP_AUTH_KEY`, проверять HMAC-SHA256 для пакетов `0xA211`, отбрасывать `0xA210` если ключ настроен | `firmware/common/transport/udp_audio_packet.h`, `firmware/master_s3/src/main.cpp` | 🔴 Критично | ⬜ |
+| V5 | **OTA без подписи образа** — интегрировать SimpleOTA Ed25519 (Monocypher) или подготовить Secure Boot v2; подписывать бинарник в CI, проверять на устройстве перед `Update.end()` | `firmware/common/web/web_server.cpp`, `.github/workflows/ci.yml` | 🔴 Критично | ⬜ |
+| S-1 | **Дефолтный пароль AP `audio21master`** — при первом запуске блокировать Web UI до смены пароля (forced password change), флаг в NVS v5 | `firmware/common/web/web_server.h`, `firmware/common/config/storage.h` | 🔴 Критично | ⬜ |
+| N1 | **Активация GitHub Actions** — включить Actions в настройках репозитория (Settings → Actions → Enable), workflow уже написан с `workflow_dispatch` | `.github/workflows/ci.yml` | 🟠 Высоко | ⬜ |
+| N2 | **Декомпозиция web_server.h** — вынести SPA в отдельные PROGMEM-файлы, разбить `web_server.cpp` на модули (`web_auth.cpp`, `web_api.cpp`, `web_ota.cpp`, `web_wifi.cpp`, `web_logs.cpp`), заменить `String` на `std::string`/`char[]` | `firmware/common/web/` | 🟠 Высоко | ⬜ |
+| N3 | **SSE endpoint для статуса сателлитов** — добавить `GET /api/events` (text/event-stream) вместо опроса `/api/status` каждые 2 с | `firmware/common/web/web_server.cpp`, SPA | 🟠 Высоко | ⬜ |
+| N4 | **HIL тестирование** — self-hosted runner с реальным ESP32-S3 для flashing + serial валидации | GitHub Actions self-hosted runner | 🟠 Высоко | ⬜ |
+| N5 | **Preset-менеджмент** — сохранение/загрузка конфигураций DSP в NVS + экспорт/импорт JSON через REST API | `firmware/common/web/web_server.cpp`, `firmware/common/config/storage.h` | 🟡 Средне | ⬜ |
+| N6 | **Dirty indicator на ползунках Web UI** — визуальная обратная связь о несохранённых изменениях | SPA (HTML/JS) | 🟡 Средне | ⬜ |
+| N7 | **Закрепить версии зависимостей** — `ArduinoJson` точная версия (не `^7.4.3`), Monocypher для Ed25519 | `platformio.ini` | 🟡 Средне | ⬜ |
+| N8 | **mDNS проверка на железе** — F16 помечен ✅, но требует ручной проверки `http://audio-master.local` | `firmware/master_s3/src/main.cpp` | 🟢 Низко | ⬜ |
+| N9 | **Десктопное приложение (Tauri 2)** — опционально, только при необходимости альтернативного UI | Вне репозитория | 🟢 Низко | ⬜ |
+
+---
+
 ## 11. Выполнено (обновление 02.09.2026)
 
 - **Прошивка ESP32-S3 (мастер = сабвуфер)** — `pio run -e master_s3_wifi -t upload --upload-port COM10` — **SUCCESS** (150 с):
@@ -558,3 +579,33 @@
 - **T1 (CI)** закрыта: GitHub Actions активированы, `workflow_dispatch` добавлен.
 - **T15 (ITransport)** закрыта: `ITransport* g_transport` в `master_s3/src/main.cpp`; `sendAudioToSatellite()` — `g_transport->sendToChannel()`, `sendDiscoveryRequest()` — `g_transport->broadcast()`, `loop()` — `g_transport->update()`; ветвление `if (g_cfg.transport == TransportMode::Udp)` убрано из setup/loop (OCP).
 - **F12 (OLED)** закрыта: `olikraus/U8g2` добавлен в `lib_deps`; `Display g_display(AUDIO_OLED_SDA, AUDIO_OLED_SCL)` в `master_s3/src/main.cpp`; `g_display.begin()` + `showText()` в `setup()`; пины SDA=GPIO16, SCL=GPIO17.
+
+## 12. Выполнено (обновление 22.11.2026) — реорганизация репозитория
+
+- **Удаление мёртвого кода и артефактов**:
+  - `config.example.h` — удалён (единственный источник конфига — `config.env` + `node_config.h`; T6/T13).
+  - `docs/аудит.txt` — удалён (актуальные задачи — в `docs/TASKS.md`/`docs/REPO_AUDIT.md`).
+  - `firmware/idf_component.yml` — удалён (не используется, проект на PlatformIO).
+  - `firmware/master_s3/include/master_s3_config.h` — удалён; `kDefaultWifiChannel` перенесён в `firmware/common/config/node_config.h` (T12).
+  - `test/*.bin`, `test/*.bin.d` — удалены (скомпилированные артефакты хост-тестов).
+
+- **Рефакторинг `firmware/master_s3/src/main.cpp`**:
+  - Убран `#include "master_s3_config.h"` (файл удалён).
+  - Includes перегруппированы по категориям (system Arduino → ESP-IDF → FreeRTOS → C stdlib → проект).
+  - Удалены неиспользуемые includes: `<esp_mac.h>`, `<esp_coexist.h>`, `<stdexcept>`, `<math.h>`.
+  - Переименован `g_udpBuf` → `g_udpAudioBuffer` (4 вхождения) — имя было запутанным.
+
+- **Линеринг**:
+  - Создан `.clang-tidy` (проверки clang-analyzer, cppcoreguidelines, performance, portability, readability, bugprone, modernize с исключениями для embedded).
+  - Добавлен шаг `clang-format --dry-run` в `.github/workflows/ci.yml`.
+  - `.gitignore`: добавлен `.pio-core-master/` (изолированный core PlatformIO для `master_s3_wifi`).
+
+- **Новые документы**:
+  - `docs/CHANGES_REORG.md` — этот отчёт (все изменения + чек-лист предотвращения хаоса).
+  - `docs/EXTERNAL_REFERENCES.md`, `docs/INTEGRATION_RECOMMENDATIONS.md`, `docs/TECHNICAL_SURVEY.md`, `docs/WORK_PLAN.md`.
+
+- **Хост-тесты**: все 6 зелёные (`make test`), включая после переименования `g_udpAudioBuffer`.
+
+- **Обновлённые ссылки**: `AGENTS.md`, `README.md`, `docs/PLAN.md`, `docs/architecture.md` — ссылки на удалённые файлы убраны.
+
+- **Статус**: все изменения в working tree, не закоммичены. Следующий шаг — коммит + проверка сборки PlatformIO (pio run -c platformio.master.ini).

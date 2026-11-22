@@ -158,8 +158,7 @@ HMAC вычисляется над заголовком + payload ключом `
 
 1. `config.env` → `scripts/generate_config.py` → `firmware/common/generated/generated_config.h`
    (23 макроса). Подключается через `-DGENERATED_CONFIG_H`.
-2. `config.example.h` — ручной аналог (должен совпадать с генератором).
-3. `NodeConfig::defaultConfig()` — дефолты из макросов + `clamp()`.
+2. `NodeConfig::defaultConfig()` — дефолты из макросов + `clamp()`.
 
 ### NVS (`firmware/common/config/storage.h`)
 
@@ -258,7 +257,6 @@ firmware/
 │   └── generated/          # generated_config.h (не коммитится)
 ├── master_s3/              # целевой мастер (S3, Wi-Fi UDP)
 │   ├── src/main.cpp
-│   └── include/master_s3_config.h
 ├── master/                 # legacy-стенд (A2DP, C0.2)
 │   ├── src/main.cpp
 │   └── include/web_server.h   # ОБЩИЙ Web UI + REST (используется и S3)

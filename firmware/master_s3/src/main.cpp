@@ -24,23 +24,21 @@
 #include <WiFiUdp.h>
 #include <DNSServer.h>
 #include <ESPmDNS.h>
+
 #include <esp_netif.h>
 #include <esp_system.h>
-#include <esp_mac.h>
-#include <esp_coexist.h>
 #include <esp_task_wdt.h>
 #include <ping/ping_sock.h>
+
 #include <freertos/semphr.h>
 #include <freertos/queue.h>
+
 #include <time.h>
 #include <vector>
-#include <stdexcept>
-#include <math.h>
 
 #include "node_config.h"
 #include "storage.h"
 #include "logger.h"
-#include "master_s3_config.h"
 #include "web_server.h"
 #include "logs.h"
 #include "wifi_store.h"
@@ -66,7 +64,7 @@ using namespace audio21;
 // ---------------------------------------------------------------------------
 
 // Буфер PCM для приёма: максимальный UDP-пакет §9.2 (< MTU) + HMAC (C5.7).
-static uint8_t g_udpBuf[sizeof(UdpAudioHeader) + kUdpMaxPayload + kUdpAuthHmacSize];
+static uint8_t g_udpAudioBuffer[sizeof(UdpAudioHeader) + kUdpMaxPayload + kUdpAuthHmacSize];
 static UdpAudioReceiver g_audioRecv;
 // JitterBuffer в PSRAM: 20–60 мс при 48 кГц (§7.6, §16.2 — B13). Моно (sub).
 static constexpr uint32_t kMasterJitterCapacity = 60 * 48000 / 1000;
@@ -1225,14 +1223,14 @@ static void appLoop() {
     int packetSize = g_udp.parsePacket();
     if (packetSize <= 0) break;
     {
-        int n = g_udp.read(g_udpBuf, sizeof(g_udpBuf));
+        int n = g_udp.read(g_udpAudioBuffer, sizeof(g_udpAudioBuffer));
         g_packetsRx++;
         g_packetBytesRx += static_cast<uint32_t>(n);
 
         UdpAudioHeader hdr;
         const uint8_t* payload;
         size_t payloadSize;
-        UdpAuthResult auth = parseUdpPacket(g_udpBuf, static_cast<size_t>(n),
+        UdpAuthResult auth = parseUdpPacket(g_udpAudioBuffer, static_cast<size_t>(n),
                                             reinterpret_cast<const uint8_t*>(AUDIO_UDP_AUTH_KEY),
                                             strlen(AUDIO_UDP_AUTH_KEY),
                                             hdr, payload, payloadSize);
@@ -1258,7 +1256,7 @@ static void appLoop() {
             // DSP: стерео → sub (моно-микс → LPF) + left/right (HPF) для TX.
             // При потерях — плавное затухание (concealGain), затем задержка сабвуфера.
                 float gain = g_audioRecv.concealGain();
-                static int16_t s_mono[sizeof(g_udpBuf) / sizeof(int16_t)];
+                static int16_t s_mono[sizeof(g_udpAudioBuffer) / sizeof(int16_t)];
                 // REPO_AUDIT: мьютекс сериализует process()/DelayLine с
                 // веб-обработчиками; tryLock — аудио не блокируется, при
                 // занятом мьютексе пакет пропускается (следующий применит).

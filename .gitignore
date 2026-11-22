@@ -21,6 +21,7 @@ test/*.d
 
 # PlatformIO / IDE артефакты (не коммитится)
 .pio/
+.pio-core-master/
 .vscode/
 
 # Системное

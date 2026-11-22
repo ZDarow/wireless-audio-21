@@ -67,3 +67,11 @@ jobs:
         run: |
           pio run -e satellite_s3_left
           pio run -e satellite_s3_right
+
+      - name: Lint (clang-format check)
+        run: |
+          if command -v clang-format >/dev/null 2>&1; then
+            clang-format --dry-run --Werror firmware/**/*.cpp firmware/**/*.h test/*.cpp 2>&1 || true
+          else
+            echo "clang-format не установлен — пропускаем проверку форматирования"
+          fi

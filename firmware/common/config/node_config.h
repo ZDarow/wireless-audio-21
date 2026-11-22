@@ -122,6 +122,12 @@
 #define AUDIO_I2S_DATA_OUT 6
 #endif
 
+// Канал Wi-Fi/ESP-NOW из конфига (config.env → AUDIO_ESPNOW_CHANNEL).
+// На этом же канале должны работать сателлиты. В APSTA канал AP следует за
+// STA-каналом домашней сети, поэтому в config.env задаётся канал роутера.
+// (Перенесено из master_s3_config.h при реорганизации.)
+constexpr uint8_t kDefaultWifiChannel = AUDIO_ESPNOW_CHANNEL;
+
 #ifndef AUDIO_LEFT_SAT_MAC
 #define AUDIO_LEFT_SAT_MAC {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01}
 #endif
