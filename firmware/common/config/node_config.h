@@ -235,6 +235,10 @@ struct NodeConfig {
     // S-1: при первом запуске требовать смену дефолтного пароля AP.
     // true = Web UI заблокирован до смены пароля через /api/wifi/ap_password.
     bool forcedPasswordChange = true;
+    // V5: открытый ключ Ed25519 для проверки подписи OTA-образа (hex, 64 символа).
+    // Пустая строка = подпись не требуется (обратная совместимость).
+    // Настраивается в config.env как AUDIO_OTA_PUBLIC_KEY.
+    char otaPublicKey[65] = "";
 
     // --- Сателлиты ---
     MacAddr leftSatMac = MacAddr{AUDIO_LEFT_SAT_MAC};

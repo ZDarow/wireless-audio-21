@@ -146,6 +146,11 @@ private:
 
     bool csrfOk(WebServer& s) const;
 
+    // V5: проверить Ed25519 подпись OTA-образа.
+    // m_otaHash — SHA-256 образа, m_otaSignatureHex — hex-подпись из заголовка.
+    // Возвращает true если подпись верна (или ключ не настроен).
+    bool verifyOtaSignature(const uint8_t* hash32, const char* signatureHex);
+
     // RAII-страховка DSP-мьютекса для web-обработчиков (см. setDspLockHooks).
     class DspWebLock {
     public:
@@ -333,6 +338,11 @@ private:
     char m_sessionToken[Auth::kTokenLen + 1] = "";
     bool m_sessionActive = false;
     bool m_updateActive = false;
+    // V5: отслеживание SHA-256 загружаемого OTA-образа для проверки подписи.
+    uint8_t m_otaHash[32] = {};
+    bool m_otaHashing = false;
+    Sha256 m_otaSha256Ctx;
+    char m_otaSignatureHex[129] = ""; // hex-Ed25519 подпись (64 байта = 128 hex)
     uint32_t m_sessionStartMs = 0;   // C5.2: момент создания сессии
     uint32_t m_loginFails = 0;       // C5.3: счётчик неудачных логинов
     uint32_t m_loginLockUntilMs = 0; // C5.3: до этого времени логин заблокирован
