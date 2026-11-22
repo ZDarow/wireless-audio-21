@@ -232,6 +232,9 @@ struct NodeConfig {
     // Пустая строка = пароль не задан (первый запуск → /admin/setup).
     char adminPasswordHash[65] = "";
     bool authEnabled = false;   // пароль задан → требуется вход
+    // S-1: при первом запуске требовать смену дефолтного пароля AP.
+    // true = Web UI заблокирован до смены пароля через /api/wifi/ap_password.
+    bool forcedPasswordChange = true;
 
     // --- Сателлиты ---
     MacAddr leftSatMac = MacAddr{AUDIO_LEFT_SAT_MAC};

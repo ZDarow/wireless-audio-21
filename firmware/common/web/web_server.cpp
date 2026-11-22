@@ -125,6 +125,18 @@ void MasterWebServer::clearSaveRequested() { m_saveRequested = false; }
 bool MasterWebServer::reconnectRequested() const { return m_reconnectRequested; }
 void MasterWebServer::clearReconnectRequested() { m_reconnectRequested = false; }
 
+bool MasterWebServer::passwordChangeRequired() const { return m_cfg.forcedPasswordChange; }
+
+bool MasterWebServer::sendForcedPasswordChange(WebServer& s) {
+    if (m_cfg.forcedPasswordChange) {
+        s.send(403, "application/json",
+               "{\"ok\":false,\"error\":\"forced_password_change\","
+               "\"message\":\"Change default AP password first via POST /api/wifi/ap_password\"}");
+        return true;
+    }
+    return false;
+}
+
 bool MasterWebServer::rebootRequested() const { return m_rebootRequested; }
 void MasterWebServer::clearRebootRequested() { m_rebootRequested = false; }
 
@@ -267,6 +279,13 @@ void MasterWebServer::redirectRoot(WebServer& s) {
 // Страницы
 // ---------------------------------------------------------------------------
 void MasterWebServer::handleRoot(WebServer& s) {
+    // S-1: при первом запуске блокируем Web UI до смены дефолтного пароля AP.
+    if (m_cfg.forcedPasswordChange) {
+        s.send(403, "application/json",
+               "{\"ok\":false,\"error\":\"forced_password_change\","
+               "\"message\":\"Change default AP password first via POST /api/wifi/ap_password\"}");
+        return;
+    }
     // C5.8: базовые security-заголовки.
     s.sendHeader("Content-Security-Policy",
                  "default-src 'self'; script-src 'self' 'unsafe-inline'; "
@@ -311,6 +330,7 @@ void MasterWebServer::handleStatus(WebServer& s) {
     }
     doc["system"]["auth_enabled"] = m_cfg.authEnabled;
     doc["system"]["authed"] = isAuthed(s);
+    doc["system"]["forced_password_change"] = m_cfg.forcedPasswordChange;
     doc["system"]["default_ap_password"] =
         strcmp(m_cfg.wifiApPassword, AUDIO_WIFI_AP_PASSWORD) == 0;
     if (m_cfg.authEnabled && isAuthed(s)) {
@@ -421,6 +441,7 @@ void MasterWebServer::handleWifiScan(WebServer& s) {
 // POST /api/wifi/connect
 // ---------------------------------------------------------------------------
 void MasterWebServer::handleWifiConnect(WebServer& s) {
+    if (sendForcedPasswordChange(s)) return;
     if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
     JsonDocument doc;
     if (deserializeJson(doc, s.arg("plain"))) { sendErr(s, "bad json"); return; }
@@ -460,6 +481,7 @@ void MasterWebServer::handleWifiConnect(WebServer& s) {
 // POST /api/wifi/save
 // ---------------------------------------------------------------------------
 void MasterWebServer::handleWifiSave(WebServer& s) {
+    if (sendForcedPasswordChange(s)) return;
     if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
     JsonDocument doc;
     if (deserializeJson(doc, s.arg("plain"))) { sendErr(s, "bad json"); return; }
@@ -485,6 +507,7 @@ void MasterWebServer::handleWifiSave(WebServer& s) {
 // POST /api/wifi/forget
 // ---------------------------------------------------------------------------
 void MasterWebServer::handleWifiForget(WebServer& s) {
+    if (sendForcedPasswordChange(s)) return;
     if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
     JsonDocument doc;
     if (deserializeJson(doc, s.arg("plain"))) { sendErr(s, "bad json"); return; }
@@ -548,6 +571,7 @@ void MasterWebServer::handleInternetCheck(WebServer& s) {
 // PUT /api/volume | POST /api/mute
 // ---------------------------------------------------------------------------
 void MasterWebServer::handleVolume(WebServer& s) {
+    if (sendForcedPasswordChange(s)) return;
     if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
     DspWebLock dspGuard(*this);
     JsonDocument doc;
@@ -580,6 +604,7 @@ void MasterWebServer::handleVolume(WebServer& s) {
 }
 
 void MasterWebServer::handleMute(WebServer& s) {
+    if (sendForcedPasswordChange(s)) return;
     if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
     DspWebLock dspGuard(*this);
     JsonDocument doc;
@@ -594,6 +619,7 @@ void MasterWebServer::handleMute(WebServer& s) {
 // PUT /api/crossover
 // ---------------------------------------------------------------------------
 void MasterWebServer::handleCrossover(WebServer& s) {
+    if (sendForcedPasswordChange(s)) return;
     if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
     DspWebLock dspGuard(*this);
     JsonDocument doc;
@@ -609,6 +635,7 @@ void MasterWebServer::handleCrossover(WebServer& s) {
 // PUT /api/delay
 // ---------------------------------------------------------------------------
 void MasterWebServer::handleDelay(WebServer& s) {
+    if (sendForcedPasswordChange(s)) return;
     if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
     DspWebLock dspGuard(*this);
     JsonDocument doc;
@@ -634,6 +661,7 @@ void MasterWebServer::handleDelay(WebServer& s) {
 // POST /api/transport, /api/pair
 // ---------------------------------------------------------------------------
 void MasterWebServer::handleTransport(WebServer& s) {
+    if (sendForcedPasswordChange(s)) return;
     if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
     JsonDocument doc;
     if (deserializeJson(doc, s.arg("plain"))) { sendErr(s, "bad json"); return; }
@@ -645,6 +673,7 @@ void MasterWebServer::handleTransport(WebServer& s) {
 }
 
 void MasterWebServer::handlePair(WebServer& s) {
+    if (sendForcedPasswordChange(s)) return;
     if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
     JsonDocument doc;
     if (deserializeJson(doc, s.arg("plain"))) { sendErr(s, "bad json"); return; }
@@ -666,12 +695,14 @@ void MasterWebServer::handlePair(WebServer& s) {
 // POST /api/save, /api/system/*
 // ---------------------------------------------------------------------------
 void MasterWebServer::handleSave(WebServer& s) {
+    if (sendForcedPasswordChange(s)) return;
     if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
     m_saveRequested = true;
     sendOk(s);
 }
 
 void MasterWebServer::handleHostname(WebServer& s) {
+    if (sendForcedPasswordChange(s)) return;
     if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
     JsonDocument doc;
     if (deserializeJson(doc, s.arg("plain"))) { sendErr(s, "bad json"); return; }
@@ -683,6 +714,7 @@ void MasterWebServer::handleHostname(WebServer& s) {
 }
 
 void MasterWebServer::handleWifiMode(WebServer& s) {
+    if (sendForcedPasswordChange(s)) return;
     if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
     JsonDocument doc;
     if (deserializeJson(doc, s.arg("plain"))) { sendErr(s, "bad json"); return; }
@@ -707,24 +739,28 @@ void MasterWebServer::handleApPassword(WebServer& s) {
     if (len < 8 || len >= sizeof(m_cfg.wifiApPassword)) { sendErr(s, "password must be 8..63 chars"); return; }
     if (strcmp(pass, AUDIO_WIFI_AP_PASSWORD) == 0) { sendErr(s, "must differ from default"); return; }
     strlcpy(m_cfg.wifiApPassword, pass, sizeof(m_cfg.wifiApPassword));
+    m_cfg.forcedPasswordChange = false; // S-1: пароль изменён — флаг сброшен
     m_saveRequested = true;
     m_reconnectRequested = true;
     sendOk(s, "ap password updated");
 }
 
 void MasterWebServer::handleReboot(WebServer& s) {
+    if (sendForcedPasswordChange(s)) return;
     if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
     sendOk(s, "reboot requested");
     m_rebootRequested = true;
 }
 
 void MasterWebServer::handleFactoryReset(WebServer& s) {
+    if (sendForcedPasswordChange(s)) return;
     if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
     sendOk(s, "factory reset requested");
     m_factoryResetRequested = true;
 }
 
 void MasterWebServer::handleConfigExport(WebServer& s) {
+    if (sendForcedPasswordChange(s)) return;
     if (m_cfg.authEnabled && !isAuthed(s)) {
         s.send(401, "application/json", "{\"ok\":false,\"error\":\"unauthorized\"}");
         return;
@@ -760,6 +796,7 @@ String MasterWebServer::macToStr(const MacAddr& mac) {
 }
 
 void MasterWebServer::handleConfigImport(WebServer& s) {
+    if (sendForcedPasswordChange(s)) return;
     if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return; }
     if (m_cfg.authEnabled && !isAuthed(s)) {
         s.send(401, "application/json", "{\"ok\":false,\"error\":\"unauthorized\"}");
@@ -804,6 +841,7 @@ void MasterWebServer::handleConfigImport(WebServer& s) {
 // GET /api/logs
 // ---------------------------------------------------------------------------
 void MasterWebServer::handleLogs(WebServer& s) {
+    if (sendForcedPasswordChange(s)) return;
     JsonDocument doc;
     int limit = s.hasArg("limit") ? s.arg("limit").toInt() : 200;
     if (limit <= 0 || limit > 500) limit = 200;
@@ -855,6 +893,7 @@ bool MasterWebServer::logLineHasModule(const char* line, const String& module) {
 // GET /api/diagnostics
 // ---------------------------------------------------------------------------
 void MasterWebServer::handleDiagnostics(WebServer& s) {
+    if (sendForcedPasswordChange(s)) return;
     JsonDocument doc;
     doc["heap_free"] = ESP.getFreeHeap();
     doc["heap_min_free"] = ESP.getMinFreeHeap();
@@ -935,6 +974,11 @@ void MasterWebServer::handleAdminSetup(WebServer& s) {
 void MasterWebServer::handleUpdateUpload(WebServer& s) {
     HTTPUpload& up = s.upload();
     if (up.status == UPLOAD_FILE_START) {
+        if (sendForcedPasswordChange(s)) {
+            s.send(403, "application/json",
+                   "{\"ok\":false,\"error\":\"forced_password_change\"}");
+            return;
+        }
         if (!csrfOk(s) || !isAuthed(s)) {
             s.send(401, "application/json", "{\"ok\":false,\"error\":\"unauthorized\"}");
             return;

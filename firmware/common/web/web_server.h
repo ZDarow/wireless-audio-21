@@ -107,6 +107,12 @@ public:
     bool reconnectRequested() const;
     void clearReconnectRequested();
 
+    // S-1: требуется ли смена дефолтного пароля AP при первом запуске.
+    bool passwordChangeRequired() const;
+
+    // S-1: отправить 403 если требуется смена пароля (кроме /api/wifi/ap_password).
+    bool sendForcedPasswordChange(WebServer& s);
+
     // R-1: эндпоинты не вызывают ESP.restart()/ConfigStorage::erase() из
     // библиотечного класса — они выставляют флаги, а main.cpp выполняет
     // действие в loop() (после send() клиент успевает получить ответ).

@@ -136,6 +136,52 @@ struct NodeConfigV3 {
     uint8_t i2sDataOut = 0;
 };
 
+// Зеркало v4-структуры NodeConfig: от v3 отличается добавленными
+// покомпонентными громкостями leftVolume/rightVolume/subVolume (C2.2);
+// НЕ содержит forcedPasswordChange (добавлен в v5, S-1).
+struct NodeConfigV4 {
+    NodeRole role = NodeRole::Master;
+    SatelliteSide side = SatelliteSide::Left;
+    AudioSource source = AudioSource::A2DP;
+    TransportMode transport = TransportMode::EspNow;
+    WifiMode wifiMode = WifiMode::ApDirect;
+    uint32_t sampleRate = 48000;
+    uint8_t bitsPerSample = 16;
+    uint8_t channels = 2;
+    int masterVolume = 50;
+    bool mute = false;
+    int crossoverHz = 90;
+    int delayLeftMs = 0;
+    int delayRightMs = 0;
+    int delaySubMs = 0;
+    char wifiSsid[33] = "";
+    char wifiPassword[65] = "";
+    char wifiApSsid[33] = "";
+    char wifiApPassword[65] = "";
+    char hostname[33] = "";
+    uint16_t udpAudioPort = 5004;
+    bool netCheckEnabled = true;
+    uint16_t netCheckIntervalSec = 30;
+    uint16_t netCheckTimeoutMs = 5000;
+    char netCheckUrl[96] = "";
+    bool ntpEnabled = true;
+    char ntpServer[64] = "";
+    char timezone[24] = "";
+    char adminPasswordHash[65] = "";
+    bool authEnabled = false;
+    // Покомпонентные громкости (C2.2, v4).
+    int leftVolume = 50;
+    int rightVolume = 50;
+    int subVolume = 50;
+    // ESP-NOW ключи (v4).
+    char espnowPmk[33] = "";
+    char espnowLmk[33] = "";
+    // GPIO.
+    uint8_t i2sBck = 0;
+    uint8_t i2sWs = 0;
+    uint8_t i2sDataOut = 0;
+};
+
 // Сохраняет конфигурацию узла в NVS (namespace "audio21").
 // Структура сериализуется побайтово + crc-подобная проверка через
 // значение-счётчик версий: при несовпадении версии возвращаются дефолты.
@@ -144,10 +190,11 @@ public:
     static constexpr const char* kNamespace = "audio21";
     static constexpr const char* kKey = "config";
     static constexpr const char* kKeyVersion = "version";
-    static constexpr uint16_t kVersion = 4;
+    static constexpr uint16_t kVersion = 5;
     static constexpr uint16_t kVersionV1 = 1;
     static constexpr uint16_t kVersionV2 = 2;
     static constexpr uint16_t kVersionV3 = 3;
+    static constexpr uint16_t kVersionV4 = 4;
 
     // Сохранить конфиг. Возвращает true при успехе.
     static bool save(const NodeConfig& cfg) {
@@ -306,6 +353,57 @@ public:
             out.i2sBck = old.i2sBck;
             out.i2sWs = old.i2sWs;
             out.i2sDataOut = old.i2sDataOut;
+            prefs.putBytes(kKey, &out, sizeof(NodeConfig));
+            prefs.putUShort(kKeyVersion, kVersion);
+            prefs.end();
+            out.clamp();
+            return true;
+        }
+
+        // Миграция v4 → v5: добавлен флаг forcedPasswordChange (S-1) —
+        // дефолт true (требуется смена дефолтного пароля AP при первом запуске).
+        if (ver == kVersionV4 && sz == sizeof(NodeConfigV4)) {
+            NodeConfigV4 old{};
+            prefs.getBytes(kKey, &old, sizeof(NodeConfigV4));
+            out = defaultConfig();
+            out.role = old.role;
+            out.side = old.side;
+            out.source = old.source;
+            out.transport = old.transport;
+            out.wifiMode = old.wifiMode;
+            out.sampleRate = old.sampleRate;
+            out.bitsPerSample = old.bitsPerSample;
+            out.channels = old.channels;
+            out.masterVolume = old.masterVolume;
+            out.mute = old.mute;
+            out.crossoverHz = old.crossoverHz;
+            out.delayLeftMs = old.delayLeftMs;
+            out.delayRightMs = old.delayRightMs;
+            out.delaySubMs = old.delaySubMs;
+            strlcpy(out.wifiSsid, old.wifiSsid, sizeof(out.wifiSsid));
+            strlcpy(out.wifiPassword, old.wifiPassword, sizeof(out.wifiPassword));
+            strlcpy(out.wifiApSsid, old.wifiApSsid, sizeof(out.wifiApSsid));
+            strlcpy(out.wifiApPassword, old.wifiApPassword, sizeof(out.wifiApPassword));
+            strlcpy(out.hostname, old.hostname, sizeof(out.hostname));
+            out.udpAudioPort = old.udpAudioPort;
+            out.netCheckEnabled = old.netCheckEnabled;
+            out.netCheckIntervalSec = old.netCheckIntervalSec;
+            out.netCheckTimeoutMs = old.netCheckTimeoutMs;
+            strlcpy(out.netCheckUrl, old.netCheckUrl, sizeof(out.netCheckUrl));
+            out.ntpEnabled = old.ntpEnabled;
+            strlcpy(out.ntpServer, old.ntpServer, sizeof(out.ntpServer));
+            strlcpy(out.timezone, old.timezone, sizeof(out.timezone));
+            strlcpy(out.adminPasswordHash, old.adminPasswordHash, sizeof(out.adminPasswordHash));
+            out.authEnabled = old.authEnabled;
+            out.leftVolume = old.leftVolume;
+            out.rightVolume = old.rightVolume;
+            out.subVolume = old.subVolume;
+            strlcpy(out.espnowPmk, old.espnowPmk, sizeof(out.espnowPmk));
+            strlcpy(out.espnowLmk, old.espnowLmk, sizeof(out.espnowLmk));
+            out.i2sBck = old.i2sBck;
+            out.i2sWs = old.i2sWs;
+            out.i2sDataOut = old.i2sDataOut;
+            // forcedPasswordChange остаётся true (дефолт из defaultConfig()).
             prefs.putBytes(kKey, &out, sizeof(NodeConfig));
             prefs.putUShort(kKeyVersion, kVersion);
             prefs.end();
