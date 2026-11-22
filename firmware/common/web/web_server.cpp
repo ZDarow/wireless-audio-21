@@ -183,6 +183,8 @@ void MasterWebServer::bindRoutes(WebServer& s) {
     s.on("/api/system/config/import", HTTP_POST, [this, &s]() { handleConfigImport(s); });
     s.on("/api/logs", HTTP_GET, [this, &s]() { handleLogs(s); });
     s.on("/api/diagnostics", HTTP_GET, [this, &s]() { handleDiagnostics(s); });
+    // N3: SSE — поток событий статуса сателлитов.
+    s.on("/api/events", HTTP_GET, [this, &s]() { handleSSE(s); });
     s.on("/api/login", HTTP_POST, [this, &s]() { handleLogin(s); });
     s.on("/api/logout", HTTP_POST, [this, &s]() { handleLogout(s); });
     s.on("/api/admin/setup", HTTP_POST, [this, &s]() { handleAdminSetup(s); });

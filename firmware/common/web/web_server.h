@@ -295,6 +295,9 @@ private:
     // ------------------------------------------------------------------
     void handleDiagnostics(WebServer& s);
 
+    // N3: SSE — поток событий статуса сателлитов.
+    void handleSSE(WebServer& s);
+
     // ------------------------------------------------------------------
     // POST /api/login, /api/logout, /api/admin/setup (ТЗ §18)
     // ------------------------------------------------------------------
@@ -351,6 +354,10 @@ private:
     LockFn m_dspLock = nullptr;      // DSP-мьютекс (см. setDspLockHooks)
     LockFn m_dspUnlock = nullptr;
 
+    // N3: SSE — активные клиенты /api/events.
+    std::vector<WiFiClient*> m_sseClients;
+    void sseBroadcast(const char* event, const char* data);
+
     static constexpr uint32_t kSessionTimeoutMs = 3600 * 1000UL; // ТЗ §11.4/§23.1
     static constexpr uint32_t kMaxLoginFails = 5;                // C5.3
     static constexpr uint32_t kLoginLockMs = 60 * 1000UL;        // C5.3: 60 с
@@ -360,3 +367,6 @@ private:
 };
 
 } // namespace audio21
+
+// N3: глобальный указатель для вызова sseBroadcast из main.cpp мастера.
+extern audio21::MasterWebServer* g_webServer;

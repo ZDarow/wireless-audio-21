@@ -195,6 +195,8 @@ static AudioContext g_audioCtx{
     nullptr // a2dpConnected (не используется на S3)
 };
 static MasterWebServer g_webServer(g_cfg, g_audioCtx);
+// N3: глобальный указатель для SSE (web_sse.cpp).
+audio21::MasterWebServer* g_webServerPtr = &g_webServer;
 static bool g_setupMode = false;
 
 // ---------------------------------------------------------------------------
@@ -472,6 +474,14 @@ static void onEspNowPacketProcess(const uint8_t* data, size_t size, const MacAdd
         } else if (hdr.channel == kChannelRight) {
             g_rightOnline = true;
             g_rightLastSeenMs = now;
+        }
+        // N3: SSE — уведомляем Web UI об изменении статуса сателлита.
+        if (g_webServerPtr) {
+            char buf[128];
+            snprintf(buf, sizeof(buf), "{\"left\":\"%s\",\"right\":\"%s\"}",
+                     g_leftOnline ? "online" : "offline",
+                     g_rightOnline ? "online" : "offline");
+            g_webServerPtr->sseBroadcast("satellite", buf);
         }
         return;
     }
@@ -1334,8 +1344,18 @@ static void appLoop() {
 
     // Статус сателлитов: online, пока приходит heartbeat (discovery-response).
     uint32_t now = millis();
+    bool leftWas = g_leftOnline;
+    bool rightWas = g_rightOnline;
     if (g_leftOnline && (now - g_leftLastSeenMs > kSatelliteTimeoutMs)) g_leftOnline = false;
     if (g_rightOnline && (now - g_rightLastSeenMs > kSatelliteTimeoutMs)) g_rightOnline = false;
+    // N3: SSE — уведомляем Web UI об изменении статуса сателлита.
+    if (g_webServerPtr && (leftWas != g_leftOnline || rightWas != g_rightOnline)) {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "{\"left\":\"%s\",\"right\":\"%s\"}",
+                 g_leftOnline ? "online" : "offline",
+                 g_rightOnline ? "online" : "offline");
+        g_webServerPtr->sseBroadcast("satellite", buf);
+    }
 
     // Discovery-запрос сателлитам: пока кто-то offline — каждые 2 с, чтобы
     // они перешли на unicast-heartbeat. Когда оба online, эфир не мусорим
