@@ -1238,7 +1238,13 @@ static void appLoop() {
             g_udpAuthFail++;
             continue; // отбрасываем пакет с неверным HMAC
         }
+        // V4: если ключ настроен, принимаем только аутентифицированные пакеты
+        // (0xA211 с верным HMAC). Неаутентифицированные (0xA210) отбрасываются.
         if (auth == UdpAuthResult::Unauthenticated) {
+            if (AUDIO_UDP_AUTH_KEY[0] != '\0') {
+                g_udpAuthFail++;
+                continue; // ключ настроен — 0xA210 не принимаются
+            }
             g_udpAuthUnauth++;
             Logger::warnf("udp", "неаутентифицированный пакет (магия 0xA210), seq=%u", hdr.sequence);
         } else {

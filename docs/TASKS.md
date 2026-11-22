@@ -547,7 +547,7 @@
 
 | ID | Задача | Место | Приоритет | Статус |
 |---|---|---|---|---|
-| V4 | **UDP-аудио без аутентификации источника** — добавить ключ `AUDIO_UDP_AUTH_KEY`, проверять HMAC-SHA256 для пакетов `0xA211`, отбрасывать `0xA210` если ключ настроен | `firmware/common/transport/udp_audio_packet.h`, `firmware/master_s3/src/main.cpp` | 🔴 Критично | ⬜ |
+| V4 | **UDP-аудио без аутентификации источника** — добавить ключ `AUDIO_UDP_AUTH_KEY`, проверять HMAC-SHA256 для пакетов `0xA211`, отбрасывать `0xA210` если ключ настроен | `firmware/common/transport/udp_audio_packet.h`, `firmware/master_s3/src/main.cpp` | 🔴 Критично | ✅ (22.11.2026: ключ по умолчанию в `config.example.env`, `main.cpp` отбрасывает 0xA210 когда ключ настроен, HMAC-проверка в `udp_audio_packet.h`, хост-тест в `transport_packet_test.cpp`) |
 | V5 | **OTA без подписи образа** — интегрировать SimpleOTA Ed25519 (Monocypher) или подготовить Secure Boot v2; подписывать бинарник в CI, проверять на устройстве перед `Update.end()` | `firmware/common/web/web_server.cpp`, `.github/workflows/ci.yml` | 🔴 Критично | ⬜ |
 | S-1 | **Дефолтный пароль AP `audio21master`** — при первом запуске блокировать Web UI до смены пароля (forced password change), флаг в NVS v5 | `firmware/common/web/web_server.h`, `firmware/common/config/storage.h` | 🔴 Критично | ⬜ |
 | N1 | **Активация GitHub Actions** — включить Actions в настройках репозитория (Settings → Actions → Enable), workflow уже написан с `workflow_dispatch` | `.github/workflows/ci.yml` | 🟠 Высоко | ⬜ |
