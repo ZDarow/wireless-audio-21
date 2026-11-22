@@ -556,7 +556,7 @@
 | N4 | **HIL тестирование** — self-hosted runner с реальным ESP32-S3 для flashing + serial валидации | GitHub Actions self-hosted runner | 🟠 Высоко | ⬜ |
 | N5 | **Preset-менеджмент** — сохранение/загрузка конфигураций DSP в NVS + экспорт/импорт JSON через REST API | `firmware/common/web/web_server.cpp`, `firmware/common/config/storage.h` | 🟡 Средне | ⬜ |
 | N6 | **Dirty indicator на ползунках Web UI** — визуальная обратная связь о несохранённых изменениях | SPA (HTML/JS) | 🟡 Средне | ⬜ |
-| N7 | **Закрепить версии зависимостей** — `ArduinoJson` точная версия (не `^7.4.3`), Monocypher для Ed25519 | `platformio.ini` | 🟡 Средне | ⬜ |
+| N7 | **Закрепить версии зависимостей** — `ArduinoJson` точная версия (не `^7.4.3`), Monocypher для Ed25519 | `platformio.ini` | 🟡 Средне | ✅ (22.11.2026: ArduinoJson@7.4.3 закреплено, git-SHA для audio-tools/ESP32-A2DP закреплены (T11), комментарий с требованием закрепить Preferences/WebServer/HTTPClient/Update/Network/U8g2 добавлен в platformio.ini) |
 | N8 | **mDNS проверка на железе** — F16 помечен ✅, но требует ручной проверки `http://audio-master.local` | `firmware/master_s3/src/main.cpp` | 🟢 Низко | ⬜ |
 | N9 | **Десктопное приложение (Tauri 2)** — опционально, только при необходимости альтернативного UI | Вне репозитория | 🟢 Низко | ⬜ |
 
