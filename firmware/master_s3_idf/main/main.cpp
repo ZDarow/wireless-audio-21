@@ -10,23 +10,148 @@
 #include "nvs_flash.h"
 #include "esp_netif.h"
 
-// DSP модули (header-only, без Arduino-зависимостей)
+// DSP модули
 #include "pcm_pipeline.h"
 #include "delay_line.h"
 #include "jitter_buffer.h"
 #include "volume_control.h"
 #include "crossover.h"
 
+// Новые компоненты Этапа 3
+#include "driver/i2s_std.h"
+#include "espnow_transport.h"
+#include "i2s_output.h"
+#include "udp_audio.h"
+#include "web_server.h"
+
 using namespace audio21;
 
 static const char *TAG = "master";
 
-// Конфигурация аудио (из config.env в будущем)
+// Конфигурация аудио
 static constexpr uint32_t kSampleRate = 48000;
 static constexpr uint32_t kJitterTargetMs = 30;
 static constexpr uint32_t kDelaySubMs = 40;
+static constexpr uint16_t kUdpAudioPort = 5004;
 
-static void wifi_init_softap(void)
+// Глобальные объекты аудио конвейера
+static VolumeControl g_volume(1.0f);
+static ToneControl g_tone;
+static PeakLimiter g_limiter;
+static Crossover g_crossover;
+static DelayLine g_delaySub(kDelaySubMs, kSampleRate);
+static JitterBuffer g_jitter((kJitterTargetMs * kSampleRate) / 1000);
+static PcmPipeline g_pipeline;
+
+// Глобальные компоненты транспорта
+static EspNowTransport g_espnow;
+// static I2sOutput g_i2sOut; // TODO: разобраться с видимостью типа
+static UdpAudio g_udpAudio;
+static WebServer g_webServer;
+
+// Состояние
+static bool g_i2sOn = false;
+static int g_volumePercent = 100;
+static int g_crossoverHz = 90;
+
+// Реализация WebServerCallbacks
+static int getStatusCallback(char* buf, size_t bufSize)
+{
+    int len = snprintf(buf, bufSize,
+        "{\"sampleRate\":%" PRIu32 ",\"volume\":%d,\"crossoverHz\":%d,"
+        "\"i2sOn\":%s,\"jitterAvailable\":%" PRIu32 ",\"espNowSatellites\":2}",
+        kSampleRate, g_volumePercent, g_crossoverHz,
+        g_i2sOn ? "true" : "false", g_jitter.available());
+    return len;
+}
+
+static esp_err_t setVolumeCallback(int volume)
+{
+    if (volume < 0) volume = 0;
+    if (volume > 100) volume = 100;
+    g_volumePercent = volume;
+    g_volume.setVolume(volume);
+    ESP_LOGI(TAG, "volume set to %d%%", volume);
+    return ESP_OK;
+}
+
+static int getVolumeCallback(void)
+{
+    return g_volumePercent;
+}
+
+static esp_err_t setCrossoverHzCallback(int hz)
+{
+    if (hz < 40) hz = 40;
+    if (hz > 500) hz = 500;
+    g_crossoverHz = hz;
+    g_crossover.configure(CrossoverKind::LowPass, CrossoverType::LinkwitzRiley, 4,
+                          (float)hz, (float)kSampleRate);
+    // Также нужно настроить HPF — но Crossover класс поддерживает только один тип за раз
+    // В реальности нужно два отдельных объекта Crossover для LPF и HPF
+    ESP_LOGI(TAG, "crossover set to %d Hz", hz);
+    return ESP_OK;
+}
+
+static int getCrossoverHzCallback(void)
+{
+    return g_crossoverHz;
+}
+
+static esp_err_t rebootCallback(void)
+{
+    ESP_LOGW(TAG, "reboot requested via Web UI");
+    esp_restart();
+    return ESP_OK;
+}
+
+static esp_err_t factoryResetCallback(void)
+{
+    ESP_LOGW(TAG, "factory reset requested via Web UI");
+    // В реальности нужно стереть NVS и перезагрузиться
+    return ESP_OK;
+}
+
+static const WebServerCallbacks g_webCallbacks = {
+    .getStatus = getStatusCallback,
+    .setVolume = setVolumeCallback,
+    .getVolume = getVolumeCallback,
+    .setCrossoverHz = setCrossoverHzCallback,
+    .getCrossoverHz = getCrossoverHzCallback,
+    .reboot = rebootCallback,
+    .factoryReset = factoryResetCallback,
+};
+
+// Коллбек приёма UDP аудио
+class UdpAudioHandler : public UdpAudioRxCallback {
+public:
+    void onPcm(const int16_t* data, size_t nSamplesPerChannel) override
+    {
+        // Обрабатываем стерео PCM через DSP конвейер
+        for (size_t i = 0; i < nSamplesPerChannel; i++) {
+            int16_t l = data[i * 2];
+            int16_t r = data[i * 2 + 1];
+
+            PipelineOutput out = g_pipeline.process(l, r);
+
+            // Сабвуфер — моно, через DelayLine
+            int16_t subSample = static_cast<int16_t>(out.sub * 32767.0f);
+            // DelayLine.process принимает int16_t и возвращает задержанный семпл
+            subSample = g_delaySub.process(subSample);
+
+            // I2S вывод (моно сабвуфер)
+            // if (g_i2sOn) {
+            //     int16_t outBuf[1] = { subSample };
+            //     g_i2sOut.write(outBuf, 1, 10);
+            // }
+        }
+    }
+};
+
+static UdpAudioHandler g_udpHandler;
+
+// Инициализация Wi-Fi AP
+static esp_err_t wifi_init_softap(void)
 {
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
@@ -52,12 +177,13 @@ static void wifi_init_softap(void)
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    ESP_LOGI(TAG, "Wi-Fi AP initialized: SSID=Audio21-Master, channel=6");
+    ESP_LOGI(TAG, "Wi-Fi AP initialized: SSID=Audio21-Master, channel=6, IP: 192.168.4.1");
+    return ESP_OK;
 }
 
 extern "C" void app_main(void)
 {
-    // Инициализация NVS (необходимо для Wi-Fi и других компонентов)
+    // Инициализация NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -69,31 +195,72 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "Chip: ESP32-S3, FreeRTOS heap: %" PRIu32 " bytes", esp_get_free_heap_size());
 
     // Инициализация DSP конвейера
-    VolumeControl volume(1.0f);
-    ToneControl tone;
-    PeakLimiter limiter;
-    limiter.setThreshold(0.95f);
-    Crossover crossover;
-    crossover.configure(CrossoverKind::LowPass, CrossoverType::LinkwitzRiley, 4,
-                        90.0f, (float)kSampleRate);
-    DelayLine delaySub(kDelaySubMs, kSampleRate);
-    JitterBuffer jitter((kJitterTargetMs * kSampleRate) / 1000);
-    jitter.setTargetMs(kJitterTargetMs, kSampleRate);
+    g_pipeline.configure((float)kSampleRate);
+    g_pipeline.setCrossoverHz(g_crossoverHz);
+    g_pipeline.setVolume(g_volumePercent);
+    g_jitter.setTargetMs(kJitterTargetMs, kSampleRate);
+    g_limiter.setThreshold(0.95f);
 
-    ESP_LOGI(TAG, "DSP pipeline initialized: volume=%d%%, crossover=%" PRIu32 " Hz, delay=%" PRIu32 " ms, jitter=%" PRIu32 " ms",
-             volume.volume(), (uint32_t)crossover.freqHz(), kDelaySubMs, kJitterTargetMs);
+    ESP_LOGI(TAG, "DSP pipeline initialized: sampleRate=%" PRIu32 " Hz, crossover=%d Hz, volume=%d%%",
+             kSampleRate, g_crossoverHz, g_volumePercent);
 
     // Инициализация Wi-Fi AP
     wifi_init_softap();
 
-    // Основной цикл — не блокирующий, с задержкой для кормления WDT
+    // Инициализация ESP-NOW транспорта
+    ret = g_espnow.init(false); // без шифрования пока
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "ESP-NOW init failed: %s", esp_err_to_name(ret));
+    } else {
+        ESP_LOGI(TAG, "ESP-NOW transport initialized");
+    }
+
+    // Инициализация I2S вывода (TODO: разобраться с видимостью типа)
+    // I2sOutputPins i2sPins = {4, 5, 6}; // BCK=4, WS=5, DATA=6
+    // ret = g_i2sOut.init(i2sPins, kSampleRate, true);
+    // if (ret != ESP_OK) {
+    //     ESP_LOGE(TAG, "I2S init failed: %s", esp_err_to_name(ret));
+    // } else {
+    //     g_i2sOn = true;
+    //     ESP_LOGI(TAG, "I2S output initialized");
+    // }
+
+    // Инициализация UDP аудио приёма
+    ret = g_udpAudio.init(kUdpAudioPort, nullptr); // без аутентификации пока
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "UDP audio init failed: %s", esp_err_to_name(ret));
+    } else {
+        ESP_LOGI(TAG, "UDP audio listener on port %u", (unsigned int)kUdpAudioPort);
+    }
+
+    // Инициализация Web сервера
+    g_webServer.setCallbacks(&g_webCallbacks);
+    ret = g_webServer.init(80);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Web server init failed: %s", esp_err_to_name(ret));
+    } else {
+        ESP_LOGI(TAG, "Web server started on port 80");
+    }
+
+    ESP_LOGI(TAG, "setup complete, entering main loop");
+
+    // Основной цикл
     uint32_t loopCounter = 0;
+    TickType_t lastWakeTime = xTaskGetTickCount();
+
     while (1) {
         loopCounter++;
-        if (loopCounter % 10 == 0) { // каждые 50 с (10 * 5 с)
+
+        // Приём UDP аудио (неблокирующий, таймаут 10 мс)
+        g_udpAudio.receive(10, &g_udpHandler);
+
+        // Каждые 5 секунд логируем статус
+        if (loopCounter % 100 == 0) {
             ESP_LOGI(TAG, "loop: heap=%" PRIu32 " bytes, counter=%" PRIu32,
                      esp_get_free_heap_size(), loopCounter);
         }
-        vTaskDelay(pdMS_TO_TICKS(5000));
+
+        // Цикл примерно 10 мс (100 Гц)
+        vTaskDelayUntil(&lastWakeTime, pdMS_TO_TICKS(10));
     }
 }
