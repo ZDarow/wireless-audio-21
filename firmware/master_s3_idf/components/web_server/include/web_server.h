@@ -31,6 +31,9 @@ struct WebServerCallbacks {
 
     // Сброс к заводским настройкам
     esp_err_t (*factoryReset)(void);
+
+    // OTA обновление по URL (принимает URL прошивки)
+    esp_err_t (*otaUpdate)(const char* url);
 };
 
 class WebServer {
@@ -63,6 +66,7 @@ private:
     static esp_err_t onGetCrossover(httpd_req_t* req);
     static esp_err_t onPostReboot(httpd_req_t* req);
     static esp_err_t onPostFactoryReset(httpd_req_t* req);
+    static esp_err_t onPostOta(httpd_req_t* req);
     static esp_err_t onSSE(httpd_req_t* req);
     static esp_err_t onGetRoot(httpd_req_t* req);
     static esp_err_t onNotFound(httpd_req_t* req);

@@ -27,8 +27,11 @@
 // Этап 4: NVS конфигурация
 #include "nvs_config.h"
 
-// mDNS будет добавлено через lwip в следующей итерации
-// #include "mdns.h"
+// Этап 4: Captive DNS — все DNS-запросы отвечают softAP IP (192.168.4.1)
+#include "dns_captive.h"
+
+// Этап 5: OTA обновление
+#include "ota_update.h"
 
 using namespace audio21;
 
@@ -137,6 +140,12 @@ static esp_err_t factoryResetCallback(void)
     return ret;
 }
 
+static esp_err_t otaUpdateCallback(const char* url)
+{
+    ESP_LOGW(TAG, "OTA update requested via Web UI: %s", url);
+    return ota_update_start(url);
+}
+
 static const WebServerCallbacks g_webCallbacks = {
     .getStatus = getStatusCallback,
     .setVolume = setVolumeCallback,
@@ -145,6 +154,7 @@ static const WebServerCallbacks g_webCallbacks = {
     .getCrossoverHz = getCrossoverHzCallback,
     .reboot = rebootCallback,
     .factoryReset = factoryResetCallback,
+    .otaUpdate = otaUpdateCallback,
 };
 
 // Коллбек приёма UDP аудио
@@ -250,18 +260,15 @@ extern "C" void app_main(void)
     // Инициализация Wi-Fi AP
     wifi_init_softap();
 
-    // Этап 4: mDNS — доступ по http://<hostname>.local
-// В ESP-IDF v5.3.1 нет отдельного mdns компонента, используем lwip mDNS напрямую (позже)
-/*
-    if (mdns_init() == ESP_OK) {
-        mdns_hostname_set(g_cfg.hostname);
-        mdns_instance_name_set("Wireless Audio 2.1 Master");
-        ESP_LOGI(TAG, "mDNS initialized: http://%s.local", g_cfg.hostname);
-    } else {
-        ESP_LOGE(TAG, "mDNS init failed");
+    // Этап 4: Captive DNS — все DNS-запросы отвечают softAP IP
+    esp_netif_t *ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    if (ap_netif) {
+        esp_netif_ip_info_t ip_info;
+        if (esp_netif_get_ip_info(ap_netif, &ip_info) == ESP_OK) {
+            dns_captive_start(ip_info.ip.addr);
+            ESP_LOGI(TAG, "Captive DNS started, responding with " IPSTR, IP2STR(&ip_info.ip));
+        }
     }
-*/
-    ESP_LOGI(TAG, "mDNS skipped (will use lwip mDNS in next iteration)");
 
     // Инициализация ESP-NOW транспорта
     ret = g_espnow.init(false); // без шифрования пока

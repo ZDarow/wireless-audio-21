@@ -97,6 +97,14 @@ esp_err_t WebServer::init(uint16_t port)
     };
     httpd_register_uri_handler(m_server, &uriPostFactoryReset);
 
+    httpd_uri_t uriPostOta = {
+        .uri = "/api/system/ota",
+        .method = HTTP_POST,
+        .handler = onPostOta,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(m_server, &uriPostOta);
+
     httpd_uri_t uriSSE = {
         .uri = "/api/events",
         .method = HTTP_GET,
@@ -315,6 +323,48 @@ esp_err_t WebServer::onPostFactoryReset(httpd_req_t* req)
     if (ret != ESP_OK) {
         httpd_resp_send_500(req);
         return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
+esp_err_t WebServer::onPostOta(httpd_req_t* req)
+{
+    WebServer* self = static_cast<WebServer*>(req->user_ctx);
+    if (!self || !self->m_cb || !self->m_cb->otaUpdate) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    char buf[256];
+    esp_err_t ret = self->readBody(req, buf, sizeof(buf));
+    if (ret != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, NULL);
+        return ESP_FAIL;
+    }
+
+    cJSON* json = cJSON_Parse(buf);
+    if (!json) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, NULL);
+        return ESP_FAIL;
+    }
+
+    cJSON* urlItem = cJSON_GetObjectItemCaseSensitive(json, "url");
+    if (!urlItem || !cJSON_IsString(urlItem)) {
+        cJSON_Delete(json);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, NULL);
+        return ESP_FAIL;
+    }
+
+    const char* url = urlItem->valuestring;
+    cJSON_Delete(json);
+
+    // Отправляем ответ перед началом OTA
+    self->sendJson(req, "{\"ok\":true, \"ota\":true}");
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    ret = self->m_cb->otaUpdate(url);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "OTA callback failed: %s", esp_err_to_name(ret));
     }
     return ESP_OK;
 }
