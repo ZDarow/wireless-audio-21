@@ -1,4 +1,4 @@
-# EditorConfig — единый стиль для всех редакторов/IDE.
+# EditorConfig — единый стиль кода для всех агентов и разработчиков
 # https://editorconfig.org
 
 root = true
@@ -6,21 +6,27 @@ root = true
 [*]
 charset = utf-8
 end_of_line = lf
+indent_size = 4
+indent_style = space
 insert_final_newline = true
+max_line_length = 120
 trim_trailing_whitespace = true
+
+[*.{cpp,h,hpp,cc,cxx}]
+indent_size = 4
 indent_style = space
 
-[*.{c,cc,cpp,h,hpp,ino}]
-indent_size = 4
-
-[*.py]
-indent_size = 4
-
-[*.{json,yml,yaml}]
+[*.{h,html,css,js}]
 indent_size = 2
+indent_style = space
+
+[*.{md,txt}]
+max_line_length = 120
+trim_trailing_whitespace = false
+
+[*.{yml,yaml}]
+indent_size = 2
+indent_style = space
 
 [Makefile]
 indent_style = tab
-
-[*.md]
-trim_trailing_whitespace = false

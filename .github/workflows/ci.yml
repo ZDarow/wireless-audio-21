@@ -47,7 +47,8 @@ jobs:
             ~/.platformio/packages
             ~/.platformio/platforms
             .pio-core-master
-          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini', 'platformio.master.ini') }}
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini',
+            'platformio.master.ini') }}
 
       - name: Generate config
         run: |
@@ -69,9 +70,10 @@ jobs:
           pio run -e satellite_s3_right
 
       - name: Lint (clang-format check)
-        run: |
-          if command -v clang-format >/dev/null 2>&1; then
-            clang-format --dry-run --Werror firmware/**/*.cpp firmware/**/*.h test/*.cpp 2>&1 || true
-          else
-            echo "clang-format не установлен — пропускаем проверку форматирования"
-          fi
+          run: |
+            if command -v clang-format >/dev/null 2>&1; then
+              clang-format --dry-run --Werror \
+                firmware/**/*.cpp firmware/**/*.h test/*.cpp 2>&1 || true
+            else
+              echo "clang-format не установлен — пропускаем форматирование"
+            fi
