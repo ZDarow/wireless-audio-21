@@ -489,14 +489,8 @@ extern "C" void app_main(void)
 
     ESP_LOGI(TAG, "setup complete, entering main loop");
 
-    // Инициализация watchdog (30 секунд, без паники при срабатывании)
-    esp_task_wdt_config_t twdt_config = {
-        .timeout_ms = 30000,
-        .idle_core_mask = 0,
-        .trigger_panic = false,
-    };
-    esp_task_wdt_init(&twdt_config);
     // Подписать текущую задачу (app_main) на watchdog
+    // TWDT уже инициализирован системой, используем только добавление задачи
     esp_task_wdt_add(NULL);
 
     // Основной цикл
