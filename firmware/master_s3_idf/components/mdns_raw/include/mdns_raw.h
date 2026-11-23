@@ -20,7 +20,7 @@ esp_err_t mdns_raw_deinit(void);
 
 // Добавить сервис (например, "_http._tcp.local").
 // proto — "tcp" или "udp".
-esp_err_t mdns_raw_add_service(esp_netif_t* netif, const char* service,
+esp_err_t mdns_raw_add_service(const char* service,
                                const char* proto, uint16_t port,
                                const char* instance_name);
 

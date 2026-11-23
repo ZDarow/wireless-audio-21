@@ -385,7 +385,7 @@ esp_err_t mdns_raw_deinit(void)
     return ESP_OK;
 }
 
-esp_err_t mdns_raw_add_service(esp_netif_t* netif, const char* service,
+esp_err_t mdns_raw_add_service(const char* service,
                                const char* proto, uint16_t port,
                                const char* instance_name)
 {
@@ -393,11 +393,9 @@ esp_err_t mdns_raw_add_service(esp_netif_t* netif, const char* service,
         return ESP_ERR_INVALID_STATE;
     }
 
-    (void)netif;
-    (void)service;
-    (void)proto;
-    (void)port;
-    (void)instance_name;
+    if (service == nullptr || proto == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
 
     s_service_added = true;
     ESP_LOGI(TAG, "mDNS service registered: %s.%s.local port=%u",

@@ -380,7 +380,7 @@ static esp_err_t wifi_reconfigure(void)
         // Перезапускаем mDNS
         ret = mdns_raw_init(ap_netif, g_cfg.hostname);
         if (ret == ESP_OK) {
-            ret = mdns_raw_add_service(ap_netif, "_http", "tcp", 80,
+            ret = mdns_raw_add_service("_http", "tcp", 80,
                                        "Wireless Audio 2.1 Master");
             if (ret == ESP_OK) {
                 ESP_LOGI(TAG, "mDNS restarted: http://%s.local", g_cfg.hostname);
@@ -440,7 +440,7 @@ extern "C" void app_main(void)
         // Этап 5: mDNS — доступ по http://<hostname>.local
         ret = mdns_raw_init(ap_netif, g_cfg.hostname);
         if (ret == ESP_OK) {
-            ret = mdns_raw_add_service(ap_netif, "_http", "tcp", 80,
+            ret = mdns_raw_add_service("_http", "tcp", 80,
                                        "Wireless Audio 2.1 Master");
             if (ret == ESP_OK) {
                 ESP_LOGI(TAG, "mDNS: http://%s.local", g_cfg.hostname);
