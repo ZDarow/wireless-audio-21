@@ -159,6 +159,9 @@ static int getWifiConfigCallback(char* buf, size_t bufSize)
     return len;
 }
 
+// Предварительное объявление для переконфигурации Wi-Fi
+static esp_err_t wifi_reconfigure(void);
+
 static esp_err_t setWifiConfigCallback(const char* mode,
                                        const char* apSsid,
                                        const char* apPassword,
@@ -191,7 +194,14 @@ static esp_err_t setWifiConfigCallback(const char* mode,
         return ret;
     }
 
-    ESP_LOGI(TAG, "Wi-Fi config saved to NVS: apSsid=%s", g_cfg.wifiApSsid);
+    // Применяем без перезагрузки
+    ret = wifi_reconfigure();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to reconfigure Wi-Fi: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "Wi-Fi config saved and applied: apSsid=%s", g_cfg.wifiApSsid);
     return ESP_OK;
 }
 
@@ -236,21 +246,30 @@ public:
 
 static UdpAudioHandler g_udpHandler;
 
-// Инициализация Wi-Fi AP
+// Состояние Wi-Fi
+static bool g_wifi_inited = false;
+
+// Предварительное объявление
+static esp_err_t wifi_reconfigure(void);
+
+// Инициализация Wi-Fi AP (вызывается один раз при старте)
 static esp_err_t wifi_init_softap(void)
 {
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_ap();
+    if (!g_wifi_inited) {
+        ESP_ERROR_CHECK(esp_netif_init());
+        ESP_ERROR_CHECK(esp_event_loop_create_default());
+        esp_netif_create_default_wifi_ap();
 
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+        wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+        ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+        g_wifi_inited = true;
+    }
 
     wifi_config_t wifi_config = {
         .ap = {
-            .ssid = "Audio21-Master",
-            .password = "1234567890",
-            .ssid_len = strlen("Audio21-Master"),
+            .ssid = {},
+            .password = {},
+            .ssid_len = (uint8_t)strlen(g_cfg.wifiApSsid),
             .channel = 6,
             .authmode = WIFI_AUTH_WPA_WPA2_PSK,
             .ssid_hidden = 0,
@@ -258,12 +277,82 @@ static esp_err_t wifi_init_softap(void)
             .beacon_interval = 100,
         },
     };
+    memcpy(wifi_config.ap.ssid, g_cfg.wifiApSsid, strlen(g_cfg.wifiApSsid));
+    memcpy(wifi_config.ap.password, g_cfg.wifiApPassword, strlen(g_cfg.wifiApPassword));
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    ESP_LOGI(TAG, "Wi-Fi AP initialized: SSID=Audio21-Master, channel=6, IP: 192.168.4.1");
+    ESP_LOGI(TAG, "Wi-Fi AP initialized: SSID=%s, channel=6", g_cfg.wifiApSsid);
+    return ESP_OK;
+}
+
+// Переконфигурация Wi-Fi без перезагрузки (применение новых SSID/пароля)
+static esp_err_t wifi_reconfigure(void)
+{
+    ESP_LOGW(TAG, "Wi-Fi reconfiguration requested");
+
+    // Останавливаем Wi-Fi
+    esp_err_t ret = esp_wifi_stop();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_stop failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    // Останавливаем captive DNS и mDNS перед изменением IP
+    dns_captive_stop();
+    mdns_raw_deinit();
+
+    // Применяем новую конфигурацию
+    wifi_config_t wifi_config = {
+        .ap = {
+            .ssid = {},
+            .password = {},
+            .ssid_len = (uint8_t)strlen(g_cfg.wifiApSsid),
+            .channel = 6,
+            .authmode = WIFI_AUTH_WPA_WPA2_PSK,
+            .ssid_hidden = 0,
+            .max_connection = 4,
+            .beacon_interval = 100,
+        },
+    };
+    memcpy(wifi_config.ap.ssid, g_cfg.wifiApSsid, strlen(g_cfg.wifiApSsid));
+    memcpy(wifi_config.ap.password, g_cfg.wifiApPassword, strlen(g_cfg.wifiApPassword));
+
+    ret = esp_wifi_set_config(WIFI_IF_AP, &wifi_config);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_set_config failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = esp_wifi_start();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_start failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    // Перезапускаем captive DNS с новым IP
+    esp_netif_t *ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    if (ap_netif) {
+        esp_netif_ip_info_t ip_info;
+        if (esp_netif_get_ip_info(ap_netif, &ip_info) == ESP_OK) {
+            dns_captive_start(ip_info.ip.addr);
+            ESP_LOGI(TAG, "Captive DNS restarted, responding with " IPSTR, IP2STR(&ip_info.ip));
+        }
+
+        // Перезапускаем mDNS
+        ret = mdns_raw_init(ap_netif, g_cfg.hostname);
+        if (ret == ESP_OK) {
+            ret = mdns_raw_add_service(ap_netif, "_http", "tcp", 80,
+                                       "Wireless Audio 2.1 Master");
+            if (ret == ESP_OK) {
+                ESP_LOGI(TAG, "mDNS restarted: http://%s.local", g_cfg.hostname);
+            }
+        }
+    }
+
+    ESP_LOGI(TAG, "Wi-Fi reconfigured: SSID=%s", g_cfg.wifiApSsid);
     return ESP_OK;
 }
 
