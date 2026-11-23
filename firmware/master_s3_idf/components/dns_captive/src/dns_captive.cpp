@@ -45,8 +45,8 @@ static void dns_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
     uint8_t *buf = (uint8_t *)p->payload;
     DnsHeader *hdr = (DnsHeader *)buf;
 
-    // Формируем ответ: флаги = QR + RD + RA, код ответа = 0 (NoError)
-    uint16_t flags = htons(0x8180); // QR=1, OPCODE=0, AA=0, TC=0, RD=1, RA=1, Z=0, RCODE=0
+    // Формируем ответ: флаги = QR + RD + RA + AA (авторитетный ответ)
+    uint16_t flags = htons(0x8580); // QR=1, OPCODE=0, AA=1, TC=0, RD=1, RA=1, Z=0, RCODE=0
     uint16_t questions = htons(ntohs(hdr->questions));
     uint16_t answer_rrs = htons(1);
     uint16_t authority_rrs = 0;

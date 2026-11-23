@@ -22,8 +22,7 @@ static bool s_running = false;
 static char s_hostname[64] = {0};
 static bool s_service_added = false;
 
-// mDNS multicast адрес: 224.0.0.251
-#define MDNS_MULTICAST_IP 0xE00000FB  // 224.0.0.251 in network byte order (big-endian)
+// mDNS порт
 #define MDNS_PORT 5353
 
 // DNS заголовок (12 байт)
@@ -206,7 +205,7 @@ static void mdns_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
     // Сравниваем queryName с s_hostname.local
     char expectedName[128];
     snprintf(expectedName, sizeof(expectedName), "%s.local", s_hostname);
-    if (strcasecmp(queryName, expectedName) == 0) {
+    if (strcmp(queryName, expectedName) == 0) {
         isOurHostname = true;
     }
 
@@ -230,7 +229,7 @@ static void mdns_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
     uint16_t classIn = htons(DNS_QCLASS_IN);
 
     // Если это запрос PTR для _http._tcp.local — отвечаем SRV + TXT
-    if (s_service_added && strcasecmp(queryName, "_http._tcp.local") == 0 &&
+    if (s_service_added && strcmp(queryName, "_http._tcp.local") == 0 &&
         (qtype == DNS_QTYPE_PTR || qtype == DNS_QTYPE_ANY)) {
         // Отправляем PTR ответ
         uint8_t buf[512];
@@ -294,16 +293,23 @@ static void mdns_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
         uint16_t priority = htons(0);
         uint16_t weight = htons(0);
         uint16_t srvPort = htons(80);
+
+        // Сначала вычисляем длину целевого имени
+        size_t targetLen = encode_dns_name(buf + boff + 6, sizeof(buf) - boff - 6, expectedName);
+        uint16_t srvRdlen = htons(6 + (uint16_t)targetLen);
+
+        // Записываем rdlen, priority, weight, port
+        memcpy(buf + boff, &srvRdlen, 2);
+        boff += 2;
         memcpy(buf + boff, &priority, 2);
         boff += 2;
         memcpy(buf + boff, &weight, 2);
         boff += 2;
         memcpy(buf + boff, &srvPort, 2);
         boff += 2;
-        size_t targetLen = encode_dns_name(buf + boff + 6, sizeof(buf) - boff - 6, expectedName);
-        uint16_t srvRdlen = htons(6 + (uint16_t)targetLen);
-        memcpy(buf + boff - 6, &srvRdlen, 2);  // перезаписываем rdlen
-        boff += 6 + targetLen;
+
+        // Записываем целевое имя
+        boff += targetLen;
 
         struct pbuf *p2 = pbuf_alloc(PBUF_TRANSPORT, boff, PBUF_RAM);
         if (p2) {

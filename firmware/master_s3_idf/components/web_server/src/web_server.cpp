@@ -532,13 +532,21 @@ esp_err_t WebServer::onGetRoot(httpd_req_t* req)
 esp_err_t WebServer::sendJson(httpd_req_t* req, const char* json)
 {
     httpd_resp_set_type(req, "application/json");
-    return httpd_resp_send(req, json, strlen(json));
+    esp_err_t ret = httpd_resp_send(req, json, strlen(json));
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "sendJson failed: %s", esp_err_to_name(ret));
+    }
+    return ret;
 }
 
 esp_err_t WebServer::sendText(httpd_req_t* req, const char* text, size_t len)
 {
     httpd_resp_set_type(req, "text/plain");
-    return httpd_resp_send(req, text, len);
+    esp_err_t ret = httpd_resp_send(req, text, len);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "sendText failed: %s", esp_err_to_name(ret));
+    }
+    return ret;
 }
 
 esp_err_t WebServer::readBody(httpd_req_t* req, char* buf, size_t bufSize)

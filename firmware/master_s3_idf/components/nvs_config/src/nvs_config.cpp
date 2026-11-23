@@ -92,18 +92,23 @@ esp_err_t NvsConfig::load(NodeConfig& cfg)
     len = sizeof(cfg.wifiApSsid);
     ret = nvs_get_str(m_handle, kKeyWifiApSsid, cfg.wifiApSsid, &len);
     if (ret != ESP_OK) {
-        // Оставляем дефолтное значение из структуры NodeConfig
+        strncpy(cfg.wifiApSsid, "Audio21-Master", sizeof(cfg.wifiApSsid) - 1);
+        cfg.wifiApSsid[sizeof(cfg.wifiApSsid) - 1] = '\0';
     }
 
     len = sizeof(cfg.wifiApPassword);
     ret = nvs_get_str(m_handle, kKeyWifiApPassword, cfg.wifiApPassword, &len);
     if (ret != ESP_OK) {
-        // Оставляем дефолтное значение из структуры NodeConfig
+        strncpy(cfg.wifiApPassword, "Audio21-2026", sizeof(cfg.wifiApPassword) - 1);
+        cfg.wifiApPassword[sizeof(cfg.wifiApPassword) - 1] = '\0';
     }
 
     len = sizeof(cfg.hostname);
     ret = nvs_get_str(m_handle, kKeyHostname, cfg.hostname, &len);
-    if (ret != ESP_OK) strcpy(cfg.hostname, "audio-master");
+    if (ret != ESP_OK) {
+        strncpy(cfg.hostname, "audio-master", sizeof(cfg.hostname) - 1);
+        cfg.hostname[sizeof(cfg.hostname) - 1] = '\0';
+    }
 
     uint8_t ntpEnabled = 1;
     ret = nvs_get_u8(m_handle, kKeyNtpEnabled, &ntpEnabled);
@@ -111,7 +116,10 @@ esp_err_t NvsConfig::load(NodeConfig& cfg)
 
     len = sizeof(cfg.ntpServer);
     ret = nvs_get_str(m_handle, kKeyNtpServer, cfg.ntpServer, &len);
-    if (ret != ESP_OK) strcpy(cfg.ntpServer, "pool.ntp.org");
+    if (ret != ESP_OK) {
+        strncpy(cfg.ntpServer, "pool.ntp.org", sizeof(cfg.ntpServer) - 1);
+        cfg.ntpServer[sizeof(cfg.ntpServer) - 1] = '\0';
+    }
 
     len = sizeof(cfg.timezone);
     ret = nvs_get_str(m_handle, kKeyTimezone, cfg.timezone, &len);

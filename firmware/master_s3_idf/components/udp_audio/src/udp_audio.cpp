@@ -134,6 +134,11 @@ esp_err_t UdpAudio::receive(uint32_t timeoutMs, UdpAudioRxCallback* cb)
         // HMAC считается над: magic(2) + sequence(2) + timestampSamples(4) + payload(payloadLen)
         // Данные в буфере: [magic(2)][seq(2)][ts(4)][hmac(32)][payload(N)]
         // Нужно скопировать magic+seq+ts и payload, пропуская поле hmac
+        if (payloadLen > 1200) {
+            ESP_LOGW(TAG, "payload too large for HMAC buffer: %zu bytes", payloadLen);
+            m_authFailCount++;
+            return ESP_ERR_INVALID_SIZE;
+        }
         uint8_t hmacData[1208];  // 8 header bytes + max payload 1200
         size_t hmacDataLen = 0;
         memcpy(hmacData + hmacDataLen, m_rxBuffer, 8);           // magic + sequence + timestampSamples
