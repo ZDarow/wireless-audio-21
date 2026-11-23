@@ -30,8 +30,8 @@
 // Этап 4: Captive DNS — все DNS-запросы отвечают softAP IP (192.168.4.1)
 #include "dns_captive.h"
 
-// mDNS через lwip — отложено (требует модификации lwip ядра)
-// #include "mdns_lwip.h"
+// Этап 5: mDNS через сырой UDP (порт 5353) — доступ по http://<hostname>.local
+#include "mdns_raw.h"
 
 // Этап 5: OTA обновление
 #include "ota_update.h"
@@ -319,8 +319,20 @@ extern "C" void app_main(void)
             dns_captive_start(ip_info.ip.addr);
             ESP_LOGI(TAG, "Captive DNS started, responding with " IPSTR, IP2STR(&ip_info.ip));
         }
+
+        // Этап 5: mDNS — доступ по http://<hostname>.local
+        ret = mdns_raw_init(ap_netif, g_cfg.hostname);
+        if (ret == ESP_OK) {
+            ret = mdns_raw_add_service(ap_netif, "_http", "tcp", 80,
+                                       "Wireless Audio 2.1 Master");
+            if (ret == ESP_OK) {
+                ESP_LOGI(TAG, "mDNS: http://%s.local", g_cfg.hostname);
+            }
+        } else {
+            ESP_LOGE(TAG, "mDNS init failed: %s", esp_err_to_name(ret));
+        }
     } else {
-        ESP_LOGE(TAG, "DNS: could not get AP netif handle");
+        ESP_LOGE(TAG, "DNS/mDNS: could not get AP netif handle");
     }
 
     // Инициализация ESP-NOW транспорта
