@@ -64,6 +64,7 @@ esp_err_t EspNowTransport::deinit()
     m_initialized = false;
     m_rxCb = nullptr;
     g_espnow_instance = nullptr;
+    m_peerCount = 0;
 
 
     if (ret != ESP_OK) {
@@ -84,6 +85,18 @@ esp_err_t EspNowTransport::sendUnicast(const uint8_t* dstMac, const uint8_t* dat
         return ESP_ERR_INVALID_SIZE;
     }
 
+    // Проверяем лимит пиров (ESP-NOW обычно поддерживает до 20, с шифрованием до 10)
+    if (m_peerCount >= 10) {
+        // Удаляем пира первого сателлита, если он есть, чтобы освободить место
+        if (m_satellites[0].online) {
+            removePeer(m_satellites[0].mac);
+            m_satellites[0].online = false;
+        } else if (m_satellites[1].online) {
+            removePeer(m_satellites[1].mac);
+            m_satellites[1].online = false;
+        }
+    }
+
     // Добавляем peer если ещё не добавлен
     esp_now_peer_info_t peerInfo = {};
     memcpy(peerInfo.peer_addr, dstMac, 6);
@@ -92,7 +105,9 @@ esp_err_t EspNowTransport::sendUnicast(const uint8_t* dstMac, const uint8_t* dat
     peerInfo.ifidx = WIFI_IF_AP;
 
     esp_err_t ret = esp_now_add_peer(&peerInfo);
-    if (ret != ESP_OK && ret != ESP_ERR_ESPNOW_EXIST) {
+    if (ret == ESP_OK) {
+        m_peerCount++;
+    } else if (ret != ESP_ERR_ESPNOW_EXIST) {
         ESP_LOGE(TAG, "esp_now_add_peer failed: %s", esp_err_to_name(ret));
         return ret;
     }
@@ -131,6 +146,29 @@ esp_err_t EspNowTransport::sendBroadcast(const uint8_t* data, size_t len)
 void EspNowTransport::setRxCallback(EspNowRxCallback* cb)
 {
     m_rxCb = cb;
+}
+
+esp_err_t EspNowTransport::removePeer(const uint8_t* dstMac)
+{
+    if (!m_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t ret = esp_now_del_peer(dstMac);
+    if (ret == ESP_OK) {
+        if (m_peerCount > 0) {
+            m_peerCount--;
+        }
+        ESP_LOGD(TAG, "Peer removed: %02x:%02x:%02x:%02x:%02x:%02x",
+                 dstMac[0], dstMac[1], dstMac[2], dstMac[3], dstMac[4], dstMac[5]);
+    } else if (ret == ESP_ERR_ESPNOW_NOT_FOUND) {
+        // Пир не был добавлен — не ошибка
+        return ESP_OK;
+    } else {
+        ESP_LOGE(TAG, "esp_now_del_peer failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    return ESP_OK;
 }
 
 void EspNowTransport::handleRecv(const uint8_t* srcMac, const uint8_t* data, size_t len)

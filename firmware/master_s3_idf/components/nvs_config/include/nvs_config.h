@@ -39,12 +39,12 @@ struct NodeConfig {
     char wifiSsid[32] = {0};
     char wifiPassword[64] = {0};
     char wifiApSsid[32] = "Audio21-Master";
-    char wifiApPassword[64] = "1234567890";
+    char wifiApPassword[64] = "Audio21-2026";  // Минимум 8 символов — СМЕНИТЬ через Web UI
     char hostname[32] = "audio-master";
     uint8_t ntpEnabled = 1;
     char ntpServer[64] = "pool.ntp.org";
     char timezone[32] = "UTC-3";
-    char udpAuthKey[64] = {0};  // HMAC-SHA256 ключ для UDP аудио (V4)
+    char udpAuthKey[64] = "wA3!kL9#mP2@vR5&tY8";  // HMAC-SHA256 ключ для UDP аудио (V4) — СМЕНИТЬ через Web UI
     char espnowPmk[33] = {0};   // ESP-NOW Pairwise Master Key (hex, 32 chars)
     char espnowLmk[33] = {0};   // ESP-NOW Local Master Key (hex, 32 chars)
 };

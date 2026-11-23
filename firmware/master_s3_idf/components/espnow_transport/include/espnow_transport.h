@@ -85,6 +85,12 @@ public:
     // Вызвать коллбек приёма (используется из статического C-коллбэка ESP-NOW)
     static void handleRecv(const uint8_t* srcMac, const uint8_t* data, size_t len);
 
+    // Удалить пир из таблицы ESP-NOW
+    esp_err_t removePeer(const uint8_t* dstMac);
+
+    // Получить количество активных пиров
+    size_t peerCount() const { return m_peerCount; }
+
     // Получить статус сателлита по индексу (0 = left, 1 = right)
     const SatelliteStatus& satellite(size_t idx) const { return m_satellites[idx]; }
 
@@ -96,6 +102,7 @@ private:
     SatelliteStatus m_satellites[2];
     bool m_initialized = false;
     bool m_encrypted = false;
+    size_t m_peerCount = 0;
 
     static void onDataSent(const uint8_t* mac, esp_now_send_status_t status);
     static void onDataRecv(const uint8_t* mac, const uint8_t* data, int len);

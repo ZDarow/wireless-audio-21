@@ -39,6 +39,12 @@
 
 using namespace audio21;
 
+// Внешние функции CSRF токена из web_server.cpp
+namespace audio21 {
+    extern const char* web_server_get_csrf_token(void);
+    extern bool web_server_validate_csrf_token(const char* token);
+}
+
 static const char *TAG = "master";
 
 // Конфигурация аудио
@@ -160,6 +166,18 @@ static int getWifiConfigCallback(char* buf, size_t bufSize)
     return len;
 }
 
+static const char* getCsrfTokenCallback(void)
+{
+    // Возвращаем CSRF токен из веб-сервера
+    return web_server_get_csrf_token();
+}
+
+static bool validateCsrfTokenCallback(const char* token)
+{
+    // Проверяем токен против значения из веб-сервера
+    return web_server_validate_csrf_token(token);
+}
+
 // Предварительное объявление для переконфигурации Wi-Fi
 static esp_err_t wifi_reconfigure(void);
 
@@ -217,6 +235,8 @@ static const WebServerCallbacks g_webCallbacks = {
     .otaUpdate = otaUpdateCallback,
     .getWifiConfig = getWifiConfigCallback,
     .setWifiConfig = setWifiConfigCallback,
+    .getCsrfToken = getCsrfTokenCallback,
+    .validateCsrfToken = validateCsrfTokenCallback,
 };
 
 // Коллбек приёма UDP аудио
@@ -359,19 +379,11 @@ static esp_err_t wifi_reconfigure(void)
 
 extern "C" void app_main(void)
 {
-    // Инициализация NVS
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_LOGW(TAG, "NVS needs erase, erasing...");
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(ret);
-
-    // Инициализация NVS конфигурации
-    ret = g_nvsConfig.init();
+    // Инициализация NVS конфигурации (внутри вызывает nvs_flash_init())
+    esp_err_t ret = g_nvsConfig.init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "NVS config init failed: %s", esp_err_to_name(ret));
+        return;
     }
 
     // Загрузка конфигурации из NVS

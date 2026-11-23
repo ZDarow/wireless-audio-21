@@ -44,6 +44,12 @@ struct WebServerCallbacks {
                                const char* apPassword,
                                const char* staSsid,
                                const char* staPassword);
+
+    // Получить CSRF токен для защиты state-changing запросов
+    const char* (*getCsrfToken)(void);
+
+    // Проверить CSRF токен из заголовка X-CSRF-Token
+    bool (*validateCsrfToken)(const char* token);
 };
 
 class WebServer {
@@ -67,6 +73,7 @@ public:
 private:
     httpd_handle_t m_server = nullptr;
     const WebServerCallbacks* m_cb = nullptr;
+    char m_csrfToken[33] = {0};
 
     // Обработчики URI
     static esp_err_t onGetStatus(httpd_req_t* req);
@@ -82,6 +89,9 @@ private:
     static esp_err_t onSSE(httpd_req_t* req);
     static esp_err_t onGetRoot(httpd_req_t* req);
     static esp_err_t onNotFound(httpd_req_t* req);
+
+    // Проверка CSRF токена из заголовка X-CSRF-Token
+    bool validateCsrfToken(httpd_req_t* req);
 
     // Вспомогательные функции
     static esp_err_t sendJson(httpd_req_t* req, const char* json);

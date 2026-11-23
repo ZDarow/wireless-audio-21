@@ -90,11 +90,15 @@ esp_err_t NvsConfig::load(NodeConfig& cfg)
 
     len = sizeof(cfg.wifiApSsid);
     ret = nvs_get_str(m_handle, kKeyWifiApSsid, cfg.wifiApSsid, &len);
-    if (ret != ESP_OK) strcpy(cfg.wifiApSsid, "Audio21-Master");
+    if (ret != ESP_OK) {
+        // Оставляем дефолтное значение из структуры NodeConfig
+    }
 
     len = sizeof(cfg.wifiApPassword);
     ret = nvs_get_str(m_handle, kKeyWifiApPassword, cfg.wifiApPassword, &len);
-    if (ret != ESP_OK) strcpy(cfg.wifiApPassword, "1234567890");
+    if (ret != ESP_OK) {
+        // Оставляем дефолтное значение из структуры NodeConfig
+    }
 
     len = sizeof(cfg.hostname);
     ret = nvs_get_str(m_handle, kKeyHostname, cfg.hostname, &len);
@@ -114,15 +118,21 @@ esp_err_t NvsConfig::load(NodeConfig& cfg)
 
     len = sizeof(cfg.udpAuthKey);
     ret = nvs_get_str(m_handle, kKeyUdpAuthKey, cfg.udpAuthKey, &len);
-    if (ret != ESP_OK) cfg.udpAuthKey[0] = '\0';
+    if (ret != ESP_OK) {
+        // Оставляем дефолтное значение из структуры NodeConfig
+    }
 
     len = sizeof(cfg.espnowPmk);
     ret = nvs_get_str(m_handle, kKeyEspNowPmk, cfg.espnowPmk, &len);
-    if (ret != ESP_OK) cfg.espnowPmk[0] = '\0';
+    if (ret != ESP_OK) {
+        // Оставляем дефолтное значение из структуры NodeConfig
+    }
 
     len = sizeof(cfg.espnowLmk);
     ret = nvs_get_str(m_handle, kKeyEspNowLmk, cfg.espnowLmk, &len);
-    if (ret != ESP_OK) cfg.espnowLmk[0] = '\0';
+    if (ret != ESP_OK) {
+        // Оставляем дефолтное значение из структуры NodeConfig
+    }
 
     ESP_LOGI(TAG, "Config loaded from NVS: volume=%d%%, crossover=%d Hz", cfg.volume, cfg.crossoverHz);
     return ESP_OK;

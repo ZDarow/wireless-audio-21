@@ -1,11 +1,17 @@
 // web_server.cpp — реализация HTTP сервера.
 #include "web_server.h"
 #include "esp_log.h"
+#include "esp_random.h"
+#include <string.h>
+#include <inttypes.h>
 #include "cJSON.h"
 
 namespace audio21 {
 
 static const char *TAG = "web_server";
+
+// Глобальный CSRF токен для доступа из main.cpp
+static char g_csrf_token[33] = {0};
 
 // Список подключённых SSE клиентов
 static httpd_handle_t s_sseServer = nullptr;
@@ -143,6 +149,13 @@ esp_err_t WebServer::init(uint16_t port)
     });
 
     ESP_LOGI(TAG, "Web server started on port %u", port);
+
+    // Генерация CSRF токена
+    uint32_t random_val;
+    esp_fill_random(&random_val, sizeof(random_val));
+    snprintf(m_csrfToken, sizeof(m_csrfToken), "%08" PRIX32 "%08" PRIX32, random_val, random_val >> 16);
+    snprintf(g_csrf_token, sizeof(g_csrf_token), "%s", m_csrfToken);
+
     return ESP_OK;
 }
 
@@ -202,6 +215,12 @@ esp_err_t WebServer::onPostVolume(httpd_req_t* req)
         return ESP_FAIL;
     }
 
+    // Проверка CSRF токена
+    if (!self->validateCsrfToken(req)) {
+        httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "CSRF token missing or invalid");
+        return ESP_FAIL;
+    }
+
     char buf[64];
     esp_err_t ret = self->readBody(req, buf, sizeof(buf));
     if (ret != ESP_OK) {
@@ -253,6 +272,12 @@ esp_err_t WebServer::onPostCrossover(httpd_req_t* req)
     WebServer* self = static_cast<WebServer*>(req->user_ctx);
     if (!self || !self->m_cb || !self->m_cb->setCrossoverHz) {
         httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    // Проверка CSRF токена
+    if (!self->validateCsrfToken(req)) {
+        httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "CSRF token missing or invalid");
         return ESP_FAIL;
     }
 
@@ -310,6 +335,12 @@ esp_err_t WebServer::onPostReboot(httpd_req_t* req)
         return ESP_FAIL;
     }
 
+    // Проверка CSRF токена
+    if (!self->validateCsrfToken(req)) {
+        httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "CSRF token missing or invalid");
+        return ESP_FAIL;
+    }
+
     // Отправляем ответ перед перезагрузкой
     self->sendJson(req, "{\"ok\":true, \"rebooting\":true}");
 
@@ -332,6 +363,12 @@ esp_err_t WebServer::onPostFactoryReset(httpd_req_t* req)
         return ESP_FAIL;
     }
 
+    // Проверка CSRF токена
+    if (!self->validateCsrfToken(req)) {
+        httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "CSRF token missing or invalid");
+        return ESP_FAIL;
+    }
+
     self->sendJson(req, "{\"ok\":true, \"resetting\":true}");
     vTaskDelay(pdMS_TO_TICKS(100));
 
@@ -348,6 +385,12 @@ esp_err_t WebServer::onPostOta(httpd_req_t* req)
     WebServer* self = static_cast<WebServer*>(req->user_ctx);
     if (!self || !self->m_cb || !self->m_cb->otaUpdate) {
         httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    // Проверка CSRF токена
+    if (!self->validateCsrfToken(req)) {
+        httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "CSRF token missing or invalid");
         return ESP_FAIL;
     }
 
@@ -411,6 +454,12 @@ esp_err_t WebServer::onPostWifi(httpd_req_t* req)
         return ESP_FAIL;
     }
 
+    // Проверка CSRF токена
+    if (!self->validateCsrfToken(req)) {
+        httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "CSRF token missing or invalid");
+        return ESP_FAIL;
+    }
+
     char buf[512];
     esp_err_t ret = self->readBody(req, buf, sizeof(buf));
     if (ret != ESP_OK) {
@@ -453,7 +502,6 @@ esp_err_t WebServer::onSSE(httpd_req_t* req)
     httpd_resp_set_type(req, "text/event-stream");
     httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
     httpd_resp_set_hdr(req, "Connection", "keep-alive");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
 
     const char* msg = "data: {\"type\":\"connected\"}\n\n";
     httpd_resp_send(req, msg, strlen(msg));
@@ -487,14 +535,12 @@ esp_err_t WebServer::onGetRoot(httpd_req_t* req)
 esp_err_t WebServer::sendJson(httpd_req_t* req, const char* json)
 {
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     return httpd_resp_send(req, json, strlen(json));
 }
 
 esp_err_t WebServer::sendText(httpd_req_t* req, const char* text, size_t len)
 {
     httpd_resp_set_type(req, "text/plain");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     return httpd_resp_send(req, text, len);
 }
 
@@ -516,6 +562,41 @@ esp_err_t WebServer::readBody(httpd_req_t* req, char* buf, size_t bufSize)
     }
     buf[received] = '\0';
     return ESP_OK;
+}
+
+// Проверка CSRF токена из заголовка X-CSRF-Token
+bool WebServer::validateCsrfToken(httpd_req_t* req)
+{
+    if (!m_cb || !m_cb->validateCsrfToken) {
+        return false;
+    }
+
+    char token[128];
+    size_t token_size = sizeof(token);
+    int ret = httpd_req_get_hdr_value_str(req, "X-CSRF-Token", token, token_size);
+    if (ret <= 0) {
+        return false;
+    }
+
+    return m_cb->validateCsrfToken(token);
+}
+
+} // namespace audio21
+
+// Глобальный CSRF токен для доступа из main.cpp (объявлен выше в этом файле)
+namespace audio21 {
+
+const char* web_server_get_csrf_token(void)
+{
+    return g_csrf_token;
+}
+
+bool web_server_validate_csrf_token(const char* token)
+{
+    if (!token || token[0] == '\0') {
+        return false;
+    }
+    return strcmp(token, g_csrf_token) == 0;
 }
 
 } // namespace audio21
