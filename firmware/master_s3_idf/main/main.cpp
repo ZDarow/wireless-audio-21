@@ -24,6 +24,12 @@
 #include "udp_audio.h"
 #include "web_server.h"
 
+// Этап 4: NVS конфигурация
+#include "nvs_config.h"
+
+// mDNS будет добавлено через lwip в следующей итерации
+// #include "mdns.h"
+
 using namespace audio21;
 
 static const char *TAG = "master";
@@ -49,6 +55,10 @@ static I2sOutput g_i2sOut;
 static UdpAudio g_udpAudio;
 static WebServer g_webServer;
 
+// Этап 4: NVS конфигурация
+static NvsConfig g_nvsConfig;
+static NodeConfig g_cfg;
+
 // Состояние
 static bool g_i2sOn = false;
 static int g_volumePercent = 100;
@@ -59,9 +69,11 @@ static int getStatusCallback(char* buf, size_t bufSize)
 {
     int len = snprintf(buf, bufSize,
         "{\"sampleRate\":%" PRIu32 ",\"volume\":%d,\"crossoverHz\":%d,"
-        "\"i2sOn\":%s,\"jitterAvailable\":%" PRIu32 ",\"espNowSatellites\":2}",
-        kSampleRate, g_volumePercent, g_crossoverHz,
-        g_i2sOn ? "true" : "false", g_jitter.available());
+        "\"i2sOn\":%s,\"jitterAvailable\":%" PRIu32 ",\"espNowSatellites\":2,"
+        "\"hostname\":\"%s\",\"wifiApSsid\":\"%s\"}",
+        kSampleRate, g_cfg.volume, g_cfg.crossoverHz,
+        g_i2sOn ? "true" : "false", g_jitter.available(),
+        g_cfg.hostname, g_cfg.wifiApSsid);
     return len;
 }
 
@@ -69,27 +81,31 @@ static esp_err_t setVolumeCallback(int volume)
 {
     if (volume < 0) volume = 0;
     if (volume > 100) volume = 100;
+    g_cfg.volume = volume;
     g_volumePercent = volume;
     g_volume.setVolume(volume);
-    ESP_LOGI(TAG, "volume set to %d%%", volume);
+    // Сохраняем в NVS
+    g_nvsConfig.save(g_cfg);
+    ESP_LOGI(TAG, "volume set to %d%% (saved to NVS)", volume);
     return ESP_OK;
 }
 
 static int getVolumeCallback(void)
 {
-    return g_volumePercent;
+    return g_cfg.volume;
 }
 
 static esp_err_t setCrossoverHzCallback(int hz)
 {
     if (hz < 40) hz = 40;
     if (hz > 500) hz = 500;
+    g_cfg.crossoverHz = hz;
     g_crossoverHz = hz;
     g_crossover.configure(CrossoverKind::LowPass, CrossoverType::LinkwitzRiley, 4,
                           (float)hz, (float)kSampleRate);
-    // Также нужно настроить HPF — но Crossover класс поддерживает только один тип за раз
-    // В реальности нужно два отдельных объекта Crossover для LPF и HPF
-    ESP_LOGI(TAG, "crossover set to %d Hz", hz);
+    // Сохраняем в NVS
+    g_nvsConfig.save(g_cfg);
+    ESP_LOGI(TAG, "crossover set to %d Hz (saved to NVS)", hz);
     return ESP_OK;
 }
 
@@ -108,8 +124,17 @@ static esp_err_t rebootCallback(void)
 static esp_err_t factoryResetCallback(void)
 {
     ESP_LOGW(TAG, "factory reset requested via Web UI");
-    // В реальности нужно стереть NVS и перезагрузиться
-    return ESP_OK;
+    esp_err_t ret = g_nvsConfig.erase();
+    if (ret == ESP_OK) {
+        // Загружаем дефолтные значения после сброса
+        g_cfg = NodeConfig();
+        g_volumePercent = g_cfg.volume;
+        g_crossoverHz = g_cfg.crossoverHz;
+        g_volume.setVolume(g_cfg.volume);
+        g_crossover.configure(CrossoverKind::LowPass, CrossoverType::LinkwitzRiley, 4,
+                              (float)g_cfg.crossoverHz, (float)kSampleRate);
+    }
+    return ret;
 }
 
 static const WebServerCallbacks g_webCallbacks = {
@@ -186,26 +211,57 @@ extern "C" void app_main(void)
     // Инициализация NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_LOGW(TAG, "NVS needs erase, erasing...");
         ESP_ERROR_CHECK(nvs_flash_erase());
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
 
+    // Инициализация NVS конфигурации
+    ret = g_nvsConfig.init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "NVS config init failed: %s", esp_err_to_name(ret));
+    }
+
+    // Загрузка конфигурации из NVS
+    ret = g_nvsConfig.load(g_cfg);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Using default config (no saved config in NVS)");
+        g_cfg = NodeConfig();
+    }
+    g_volumePercent = g_cfg.volume;
+    g_crossoverHz = g_cfg.crossoverHz;
+
     ESP_LOGI(TAG, "Wireless Audio 2.1 Master (ESP-IDF) starting...");
     ESP_LOGI(TAG, "Chip: ESP32-S3, FreeRTOS heap: %" PRIu32 " bytes", esp_get_free_heap_size());
+    ESP_LOGI(TAG, "Loaded config: volume=%d%%, crossover=%d Hz, hostname=%s",
+             g_cfg.volume, g_cfg.crossoverHz, g_cfg.hostname);
 
     // Инициализация DSP конвейера
     g_pipeline.configure((float)kSampleRate);
-    g_pipeline.setCrossoverHz(g_crossoverHz);
-    g_pipeline.setVolume(g_volumePercent);
+    g_pipeline.setCrossoverHz(g_cfg.crossoverHz);
+    g_pipeline.setVolume(g_cfg.volume);
     g_jitter.setTargetMs(kJitterTargetMs, kSampleRate);
     g_limiter.setThreshold(0.95f);
 
     ESP_LOGI(TAG, "DSP pipeline initialized: sampleRate=%" PRIu32 " Hz, crossover=%d Hz, volume=%d%%",
-             kSampleRate, g_crossoverHz, g_volumePercent);
+             kSampleRate, g_cfg.crossoverHz, g_cfg.volume);
 
     // Инициализация Wi-Fi AP
     wifi_init_softap();
+
+    // Этап 4: mDNS — доступ по http://<hostname>.local
+// В ESP-IDF v5.3.1 нет отдельного mdns компонента, используем lwip mDNS напрямую (позже)
+/*
+    if (mdns_init() == ESP_OK) {
+        mdns_hostname_set(g_cfg.hostname);
+        mdns_instance_name_set("Wireless Audio 2.1 Master");
+        ESP_LOGI(TAG, "mDNS initialized: http://%s.local", g_cfg.hostname);
+    } else {
+        ESP_LOGE(TAG, "mDNS init failed");
+    }
+*/
+    ESP_LOGI(TAG, "mDNS skipped (will use lwip mDNS in next iteration)");
 
     // Инициализация ESP-NOW транспорта
     ret = g_espnow.init(false); // без шифрования пока
@@ -226,7 +282,7 @@ extern "C" void app_main(void)
     }
 
     // Инициализация UDP аудио приёма
-    ret = g_udpAudio.init(kUdpAudioPort, nullptr); // без аутентификации пока
+    ret = g_udpAudio.init(kUdpAudioPort, g_cfg.udpAuthKey[0] ? g_cfg.udpAuthKey : nullptr);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "UDP audio init failed: %s", esp_err_to_name(ret));
     } else {
