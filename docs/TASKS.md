@@ -630,7 +630,7 @@
 | AP-4 | **Дефолт `AUDIO_UDP_AUTH_KEY` непустой** — аутентификация UDP-аудио включена по умолчанию (не пустая строка) | `config.example.env`, `node_config.h` | 🟠 Высоко | ✅ (уже в коммите 935e9b8: `AUDIO_UDP_AUTH_KEY=change-me-32-chars-min-at-least`, 32 символа) |
 | M2 | **Создать тег `v0.1.0` + GitHub Release** — первая публичная версия с описанием изменений | GitHub репозиторий | 🟡 Средне | ✅ (23.11.2026: тег v0.1.0 создан и запушен, GitHub Release опубликован: https://github.com/ZDarow/wireless-audio-21/releases/tag/v0.1.0) |
 | M3 | **Декомпозиция `master_s3/src/main.cpp`** — выделить класс `MasterApp` (сеть, DSP, веб-сервер, консоль) вместо монолита ~979 строк | `firmware/master_s3/src/main.cpp` | 🟡 Средне | ⬜ |
-| M4 | **Шаблоны issues/PR, `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md`** — стандарт для контрибьюторов | корень репозитория, `.github/` | 🟡 Средне | ⬜ |
+| M4 | **Шаблоны issues/PR, `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md`** — стандарт для контрибьюторов | корень репозитория, `.github/` | 🟡 Средне | ✅ (23.11.2026: созданы .github/ISSUE_TEMPLATE/bug_report.md, .github/ISSUE_TEMPLATE/feature_request.md, .github/PULL_REQUEST_TEMPLATE.md, CONTRIBUTING.md, SECURITY.md, CHANGELOG.md) |
 | M5 | **Добавить `.editorconfig` и `.gitattributes`** — единый стиль кода и окончания строк для всех агентов | корень репозитория | 🟢 Низко | ⬜ |
 | L3 | **Закрепить точную версию `ArduinoJson`** (не `^7.4.3`) + остальные библиотеки (`Preferences`, `WebServer`, `HTTPClient`, `Update`, `Network`, `U8g2`) | `platformio.ini` | 🟡 Средне | ⬜ |
 | L4 | **Добавить бейджи shields.io в `README.md`** (CI status, license, PlatformIO) | `README.md` | 🟢 Низко | ⬜ |
