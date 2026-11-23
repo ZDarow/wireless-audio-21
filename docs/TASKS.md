@@ -620,7 +620,7 @@
 
 | ID | Задача | Место | Приоритет | Статус |
 |---|---|---|---|---|
-| C2 | **Добавить файл LICENSE (GPL-3.0)** — репозиторий публичный, legacy `master_a2dp` линкуется с `arduino-audio-tools` (GPL-3.0). Без LICENSE репозиторий не соответствует лицензии зависимостей. | корень репозитория | 🔴 Критично | ⬜ |
+| C2 | **Добавить файл LICENSE (GPL-3.0)** — репозиторий публичный, legacy `master_a2dp` линкуется с `arduino-audio-tools` (GPL-3.0). Без LICENSE репозиторий не соответствует лицензии зависимостей. | корень репозитория | 🔴 Критично | ✅ (23.11.2026: файл LICENSE с полным текстом GPL-3.0 добавлен в корень репозитория) |
 | CI-2 | **Добавить `permissions: contents: read`** в `.github/workflows/ci.yml` (требование GitHub для workflows) | `.github/workflows/ci.yml` | 🟠 Высоко | ⬜ |
 | CI-3 | **Добавить `timeout-minutes: 30`** в job ci.yml (защита от зависших runs) | `.github/workflows/ci.yml` | 🟠 Высоко | ⬜ |
 | CI-4 | **Заменить плавающие теги actions (`@v4`, `@v5`) на SHA-пины** — воспроизводимая сборка CI | `.github/workflows/ci.yml` | 🟠 Высоко | ⬜ |
