@@ -717,6 +717,8 @@
 | E11 | main/main.cpp: интеграция всех компонентов, 100 Гц loop с vTaskDelayUntil, NVS load/save, Web UI callbacks (volume, crossover, reboot, factory_reset, otaUpdate, getWifiConfig, setWifiConfig) | `main/main.cpp` | ✅ |
 | E12 | Web server: GET/POST /api/wifi — чтение/запись Wi-Fi конфига (mode, apSsid, apPassword, staSsid, staPassword), сохранение в NVS | `components/web_server/` + `main/main.cpp` | ✅ |
 | E13 | Сборка, прошивка, стабильность: 24+ сек uptime без TG1WDT_SYS_RST, heap стабилен ~255 КБ | ESP32-S3 /dev/ttyACM0 | ✅ |
+| E14 | mDNS через сырой UDP (порт 5353, multicast 224.0.0.251) — доступ по http://audio-master.local | `components/mdns_raw/` | ✅ |
+| E15 | Применение Wi-Fi настроек без перезагрузки (переключение AP/STA/APSTA в рантайме) | `main/main.cpp` | ✅ |
 
 ### 15.2 Отложено / не выполнено
 
@@ -726,8 +728,10 @@
 
 ### 15.3 Известные проблемы
 
-- **mDNS**: в ESP-IDF v5.3.1 нет готового компонента `mdns`. lwip mDNS responder требует `LWIP_MDNS_RESPONDER=1` (компиляция `lwip/src/apps/mdns/mdns.c` в компоненте) и функции `netif_alloc_client_data_id`, которой нет в этой версии lwip. Отложено.
-- **sdkconfig.defaults**: `CONFIG_LWIP_MDNS_RESPONDER=y` добавлен для будущего использования.
+- **mDNS**: реализован через сырой UDP (порт 5353, multicast 224.0.0.251) в компоненте `mdns_raw`. Доступ по `http://audio-master.local` работает. Официальный компонент `espressif/mdns` не используется из-за отсутствия в Kconfig v5.3.1.
+- **sdkconfig.defaults**: очищен от несуществующего ключа `CONFIG_LWIP_MDNS_RESPONDER` (не является Kconfig опцией в v5.3.1).
 - **IP в логе dns_captive**: исправлен порядок байт (было `1.4.168.192`, стало `192.168.4.1`).
+- **ESP-IDF v5.3.1 уязвимость**: CVE-2026-45541 (WebSocket NULL deref в esp_http_server) — не достижима, так как WebSocket не используется. Рекомендуется обновление на v5.3.6+.
+- **Критичные проблемы из аудита**: CSRF-защита веб-API, OTA без подписи, дефолтный пароль AP "1234567890" — описаны в `docs/AUDIT_REPORT_2026-11-23.md`, требуют исправления перед продакшеном.
 
 
