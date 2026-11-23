@@ -20,7 +20,7 @@
 // Новые компоненты Этапа 3
 #include "driver/i2s_std.h"
 #include "espnow_transport.h"
-#include "i2s_output.h"
+#include "../components/i2s_output/include/i2s_output.h"
 #include "udp_audio.h"
 #include "web_server.h"
 
@@ -45,7 +45,7 @@ static PcmPipeline g_pipeline;
 
 // Глобальные компоненты транспорта
 static EspNowTransport g_espnow;
-// static I2sOutput g_i2sOut; // TODO: разобраться с видимостью типа
+static I2sOutput g_i2sOut;
 static UdpAudio g_udpAudio;
 static WebServer g_webServer;
 
@@ -140,10 +140,10 @@ public:
             subSample = g_delaySub.process(subSample);
 
             // I2S вывод (моно сабвуфер)
-            // if (g_i2sOn) {
-            //     int16_t outBuf[1] = { subSample };
-            //     g_i2sOut.write(outBuf, 1, 10);
-            // }
+            if (g_i2sOn) {
+                int16_t outBuf[1] = { subSample };
+                g_i2sOut.write(outBuf, 1, 10);
+            }
         }
     }
 };
@@ -215,15 +215,15 @@ extern "C" void app_main(void)
         ESP_LOGI(TAG, "ESP-NOW transport initialized");
     }
 
-    // Инициализация I2S вывода (TODO: разобраться с видимостью типа)
-    // I2sOutputPins i2sPins = {4, 5, 6}; // BCK=4, WS=5, DATA=6
-    // ret = g_i2sOut.init(i2sPins, kSampleRate, true);
-    // if (ret != ESP_OK) {
-    //     ESP_LOGE(TAG, "I2S init failed: %s", esp_err_to_name(ret));
-    // } else {
-    //     g_i2sOn = true;
-    //     ESP_LOGI(TAG, "I2S output initialized");
-    // }
+    // Инициализация I2S вывода
+    I2sOutputPins i2sPins = {4, 5, 6}; // BCK=4, WS=5, DATA=6
+    ret = g_i2sOut.init(i2sPins, kSampleRate, true);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "I2S init failed: %s", esp_err_to_name(ret));
+    } else {
+        g_i2sOn = true;
+        ESP_LOGI(TAG, "I2S output initialized");
+    }
 
     // Инициализация UDP аудио приёма
     ret = g_udpAudio.init(kUdpAudioPort, nullptr); // без аутентификации пока
