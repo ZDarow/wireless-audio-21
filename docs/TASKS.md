@@ -627,7 +627,7 @@
 | CI-9 | **Включить vulnerability alerts + `.github/dependabot.yml`** — автоматическое обновление уязвимых зависимостей | `.github/` | 🟠 Высоко | ✅ (23.11.2026: создан `.github/dependabot.yml` с pip и github-actions ecosystem; vulnerability alerts включены через GitHub API) |
 | M1 | **Ветвление + защита ветки `main`** — feature-ветки, PR с ревью, защита main от прямого пуша | GitHub репозиторий | 🟠 Высоко | ⬜ |
 | AP-1 | **Заменить `String` на `char[]`/`std::string` в веб-путях** — предотвратить фрагментацию heap на ESP32-S3 | `firmware/common/web/web_server.h`, `web_spa.h` | 🟡 Средне | ⬜ |
-| AP-4 | **Дефолт `AUDIO_UDP_AUTH_KEY` непустой** — аутентификация UDP-аудио включена по умолчанию (не пустая строка) | `config.example.env`, `node_config.h` | 🟠 Высоко | ⬜ |
+| AP-4 | **Дефолт `AUDIO_UDP_AUTH_KEY` непустой** — аутентификация UDP-аудио включена по умолчанию (не пустая строка) | `config.example.env`, `node_config.h` | 🟠 Высоко | ✅ (уже в коммите 935e9b8: `AUDIO_UDP_AUTH_KEY=change-me-32-chars-min-at-least`, 32 символа) |
 | M2 | **Создать тег `v0.1.0` + GitHub Release** — первая публичная версия с описанием изменений | GitHub репозиторий | 🟡 Средне | ⬜ |
 | M3 | **Декомпозиция `master_s3/src/main.cpp`** — выделить класс `MasterApp` (сеть, DSP, веб-сервер, консоль) вместо монолита ~979 строк | `firmware/master_s3/src/main.cpp` | 🟡 Средне | ⬜ |
 | M4 | **Шаблоны issues/PR, `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md`** — стандарт для контрибьюторов | корень репозитория, `.github/` | 🟡 Средне | ⬜ |
