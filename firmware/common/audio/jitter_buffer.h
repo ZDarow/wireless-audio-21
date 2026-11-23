@@ -64,6 +64,8 @@ public:
                 m_readIdx++;
                 if (m_readIdx >= m_capacity) m_readIdx = 0;
                 m_count--;
+                m_overflowCount++; // P17: считаем переполнения
+                m_overflowFlag = true;
             }
             m_buffer[m_writeIdx] = data[i];
             m_writeIdx++;
@@ -92,6 +94,16 @@ public:
     // Полный или нет (по целевому уровню).
     bool ready() const { return m_count >= m_targetLevel; }
 
+    // P17: количество переполнений буфера с момента создания/сброса.
+    uint32_t overflowCount() const { return m_overflowCount; }
+
+    // P17: был ли хотя бы один переполнение с момента последнего сброса флага.
+    bool overflowOccurred() {
+        bool occurred = m_overflowFlag;
+        m_overflowFlag = false;
+        return occurred;
+    }
+
     void clear() {
         memset(m_buffer, 0, m_capacity * sizeof(int16_t));
         m_readIdx = 0;
@@ -107,6 +119,8 @@ private:
     uint32_t m_readIdx = 0;
     uint32_t m_writeIdx = 0;
     uint32_t m_count = 0;
+    uint32_t m_overflowCount = 0; // P17: счётчик переполнений
+    bool m_overflowFlag = false;  // P17: флаг переполнения (сбрасывается при чтении)
 };
 
 } // namespace audio21

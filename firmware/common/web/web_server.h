@@ -146,6 +146,12 @@ private:
 
     bool csrfOk(WebServer& s) const;
 
+    // P19: объединённая проверка авторизации — forcedPasswordChange + CSRF.
+    // Возвращает true если запрос разрешён, false — если нужно вернуть ошибку
+    // (обработчик уже отправил odpowiedź). Уменьшает дублирование кода в
+    // 20+ обработчиках web_api.cpp.
+    bool checkAuth(WebServer& s);
+
     // V5: проверить Ed25519 подпись OTA-образа.
     // m_otaHash — SHA-256 образа, m_otaSignatureHex — hex-подпись из заголовка.
     // Возвращает true если подпись верна (или ключ не настроен).

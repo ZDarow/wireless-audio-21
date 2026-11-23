@@ -50,6 +50,16 @@ bool MasterWebServer::csrfOk(WebServer& s) const {
     return header == expected;
 }
 
+// P19: объединённая проверка авторизации — forcedPasswordChange + CSRF.
+// Возвращает true если запрос разрешён, false — если нужно вернуть ошибку
+// (обработчик уже отправил odpowiedź). Уменьшает дублирование кода в
+// 20+ обработчиках web_api.cpp.
+bool MasterWebServer::checkAuth(WebServer& s) {
+    if (sendForcedPasswordChange(s)) return false;
+    if (!csrfOk(s)) { s.send(401, "application/json", "{\"ok\":false,\"error\":\"csrf\"}"); return false; }
+    return true;
+}
+
 void MasterWebServer::sendSessionCookie(WebServer& s, const char* token) {
     s.sendHeader("Set-Cookie",
                  String("session=") + token + "; Path=/; HttpOnly; SameSite=Lax; Max-Age="

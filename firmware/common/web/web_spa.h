@@ -224,7 +224,15 @@ static const char kSpaHtml[] = R"rawliteral(
 
 <script>
 const $ = id => document.getElementById(id);
-const api = (path, opts={}) => fetch(path, Object.assign({headers:{'X-CSRF-Token': csrf}}, opts)).then(r => r.json());
+let csrf = '';
+async function ensureCsrf() {
+  if (csrf) return;
+  try {
+    const s = await fetch('/api/status').then(r => r.json());
+    csrf = s.system.csrf || '';
+  } catch (e) {}
+}
+const api = (path, opts={}) => { ensureCsrf(); return fetch(path, Object.assign({headers:{'X-CSRF-Token': csrf}}, opts)).then(r => r.json()); };
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.style.display='block'; setTimeout(()=>t.style.display='none', 2000); }
 function setVal(id,v){ const el=$(id); if(el) el.textContent=v; }
 
@@ -232,6 +240,7 @@ const pages = { dashboard:'p-dashboard', wifi:'p-wifi', internet:'p-internet', a
 // W-2: единый helper — проверяет HTTP-статус, показывает ошибку в toast
 // (раньше 401/500 молча игнорировались через пустой catch).
 async function req(path, opts={}) {
+  await ensureCsrf();
   const r = await fetch(path, Object.assign({headers:{'X-CSRF-Token': csrf}}, opts));
   let j = null;
   try { j = await r.json(); } catch (e) {}
@@ -375,6 +384,7 @@ $('wApply').onclick = async () => {
 
 $('uBtn').onclick = async () => {
   const file = $('uFile').files[0]; if (!file) return;
+  await ensureCsrf();
   const xhr = new XMLHttpRequest();
   xhr.open('POST', '/api/update', true);
   xhr.setRequestHeader('X-CSRF-Token', csrf);

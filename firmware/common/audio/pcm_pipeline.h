@@ -137,7 +137,14 @@ public:
         PipelineOutput out;
         out.left = m_hpf.process(l);
         out.right = m_hpf.process(r);
-        out.sub = m_lpf.process((l + r) * 0.5f); // моно-микс для сабвуфера
+        // Моно-микс для сабвуфера: среднее арифметическое L+R.
+        // Каждый канал уже ограничен лимитером (±0.98), так что среднее
+        // не может превысить ±0.98, но добавляем clamping на случай
+        // усилений в кроссовере.
+        float subMix = (l + r) * 0.5f;
+        if (subMix > 1.0f) subMix = 1.0f;
+        else if (subMix < -1.0f) subMix = -1.0f;
+        out.sub = m_lpf.process(subMix);
         // Канальные громкости (C2.2) — после кроссовера, с плавным фейдом.
         out.left = m_volLeft.process(out.left);
         out.right = m_volRight.process(out.right);

@@ -50,7 +50,12 @@ public:
     int16_t process(int16_t sample) {
         // Кольцевой буфер: читаем из ячейки, отстоящей на m_delaySamples
         // от точки записи, затем пишем новый семпл.
-        size_t readIdx = (m_writeIdx + m_capacitySamples - m_delaySamples) % m_capacitySamples;
+        // Используем ветвление вместо модульной арифметики для ясности:
+        // если writeIdx >= delaySamples, читаем назад; иначе оборачиваемся
+        // в конец буфера.
+        size_t readIdx = (m_writeIdx >= m_delaySamples)
+            ? m_writeIdx - m_delaySamples
+            : m_writeIdx + m_capacitySamples - m_delaySamples;
         int16_t out = m_buffer[readIdx];
         m_buffer[m_writeIdx] = sample;
         m_writeIdx++;
