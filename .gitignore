@@ -24,6 +24,9 @@ test/*.d
 .pio-core-master/
 .vscode/
 
+# ESP-IDF build артефакты (не коммитится)
+firmware/master_s3_idf/build/
+
 # Системное
 .DS_Store
 *.swp
