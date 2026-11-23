@@ -1428,7 +1428,6 @@ static void appLoop() {
     // ТЗ_Веб §21). Только для режимов STA/APSTA — ApDirect не подключается к upstream.
     if (g_cfg.wifiMode == WifiMode::ApDirect || g_setupMode) {
         // В режиме ApDirect не подключаемся к upstream сети.
-        // g_wifiWasConnected сбрасываем, чтобы не было ложных попыток reconnect.
         g_wifiWasConnected = false;
     } else {
         wl_status_t st = WiFi.status();
@@ -1438,10 +1437,14 @@ static void appLoop() {
             Logger::warn("wifi", "STA lost — auto reconnect");
             g_logs.addf(LogCat::Wifi, 2, "STA lost — auto reconnect");
             WiFi.setAutoReconnect(false);
+            esp_task_wdt_reset();
             WiFi.disconnect(false, true);
+            esp_task_wdt_reset();
             delay(200);
             applyStaticIpFromProfile(); // C5.1
+            esp_task_wdt_reset();
             WiFi.begin(g_cfg.wifiSsid, g_cfg.wifiPassword);
+            esp_task_wdt_reset();
             g_reconnectPending = true;
             g_reconnectAtMs = millis();
         }
@@ -1470,9 +1473,12 @@ static void appLoop() {
         } else if (!keepAp) {
             WiFi.mode(WIFI_STA);
         }
+        esp_task_wdt_reset();
         WiFi.disconnect(false, true);
+        esp_task_wdt_reset();
         delay(200);
         WiFi.begin(g_cfg.wifiSsid, g_cfg.wifiPassword);
+        esp_task_wdt_reset();
         g_reconnectPending = true;
         g_reconnectAtMs = millis();
     }
@@ -1488,7 +1494,9 @@ static void appLoop() {
                    st == WL_CONNECTION_LOST || (millis() - g_reconnectAtMs > kReconnectTimeoutMs)) {
             g_reconnectPending = false;
             WiFi.setAutoReconnect(false);
+            esp_task_wdt_reset();
             WiFi.disconnect(false, true);
+            esp_task_wdt_reset();
             if (g_cfg.wifiMode != WifiMode::ApDirect) {
                 Logger::warn("wifi", "reconnect failed — setup AP");
                 g_setupMode = true;
