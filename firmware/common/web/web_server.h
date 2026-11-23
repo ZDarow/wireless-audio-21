@@ -93,7 +93,7 @@ public:
 
     // Кеш найденных Wi-Fi сетей (заполняется до старта AP, B9).
     struct WifiNetInfo {
-        String ssid;
+        char ssid[33];
         int rssi;
         bool open;
     };
@@ -275,7 +275,7 @@ private:
 
     void handleConfigExport(WebServer& s);
 
-    static String macToStr(const MacAddr& mac);
+    static void macToStr(const MacAddr& mac, char out[18]);
 
     void handleConfigImport(WebServer& s);
 
@@ -288,7 +288,7 @@ private:
     static int parseLogSeverity(const char* line);
 
     // "[ts] [LEVEL] [CAT] msg" — категория после третьего '['
-    static bool logLineHasModule(const char* line, const String& module);
+    static bool logLineHasModule(const char* line, const char* module);
 
     // ------------------------------------------------------------------
     // GET /api/diagnostics (ТЗ §17.6)

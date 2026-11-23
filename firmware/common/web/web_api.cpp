@@ -480,17 +480,18 @@ void MasterWebServer::handleConfigExport(WebServer& s) {
     doc["config"]["ntp_enabled"] = m_cfg.ntpEnabled;
     doc["config"]["ntp_server"] = m_cfg.ntpServer;
     doc["config"]["timezone"] = m_cfg.timezone;
-    doc["config"]["left_sat_mac"] = macToStr(m_cfg.leftSatMac);
-    doc["config"]["right_sat_mac"] = macToStr(m_cfg.rightSatMac);
+    char leftMac[18], rightMac[18];
+    macToStr(m_cfg.leftSatMac, leftMac);
+    macToStr(m_cfg.rightSatMac, rightMac);
+    doc["config"]["left_sat_mac"] = leftMac;
+    doc["config"]["right_sat_mac"] = rightMac;
     sendJson(s, 200, doc);
 }
 
-String MasterWebServer::macToStr(const MacAddr& mac) {
-    char buf[18];
-    snprintf(buf, sizeof(buf), "%02X:%02X:%02X:%02X:%02X:%02X",
+void MasterWebServer::macToStr(const MacAddr& mac, char out[18]) {
+    snprintf(out, 18, "%02X:%02X:%02X:%02X:%02X:%02X",
              mac.bytes[0], mac.bytes[1], mac.bytes[2],
              mac.bytes[3], mac.bytes[4], mac.bytes[5]);
-    return String(buf);
 }
 
 void MasterWebServer::handleConfigImport(WebServer& s) {
@@ -554,7 +555,7 @@ void MasterWebServer::handleLogs(WebServer& s) {
         for (int i = 0; i < n; i++) {
             const char* line = lines[i];
             if (parseLogSeverity(line) < minLevel) continue;
-            if (module.length() > 0 && !logLineHasModule(line, module)) continue;
+            if (module.length() > 0 && !logLineHasModule(line, module.c_str())) continue;
             arr.add(line);
         }
     }
@@ -573,7 +574,7 @@ int MasterWebServer::parseLogSeverity(const char* line) {
     return 1; // INFO
 }
 
-bool MasterWebServer::logLineHasModule(const char* line, const String& module) {
+bool MasterWebServer::logLineHasModule(const char* line, const char* module) {
     const char* p = strchr(line, '[');
     if (!p) return false;
     p = strchr(p + 1, '[');
@@ -584,7 +585,7 @@ bool MasterWebServer::logLineHasModule(const char* line, const String& module) {
     const char* end = strchr(p, ']');
     if (!end) return false;
     int len = (int)(end - p);
-    return len == (int)module.length() && strncasecmp(p, module.c_str(), len) == 0;
+    return len == (int)strlen(module) && strncasecmp(p, module, len) == 0;
 }
 
 // ---------------------------------------------------------------------------

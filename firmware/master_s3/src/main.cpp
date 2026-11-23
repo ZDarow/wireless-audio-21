@@ -536,7 +536,7 @@ static void scanWifiBeforeAp() {
     if (n > 0) cache.reserve(static_cast<size_t>(n));
     for (int i = 0; i < n; i++) {
         MasterWebServer::WifiNetInfo info;
-        info.ssid = WiFi.SSID(i);
+        strlcpy(info.ssid, WiFi.SSID(i).c_str(), sizeof(info.ssid));
         info.rssi = WiFi.RSSI(i);
         info.open = WiFi.encryptionType(i) == WIFI_AUTH_OPEN;
         cache.push_back(std::move(info));
