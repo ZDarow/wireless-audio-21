@@ -362,6 +362,9 @@ private:
 
     // N3: SSE — активные клиенты /api/events.
     std::vector<WiFiClient*> m_sseClients;
+
+public:
+    // N3: SSE — поток событий статуса сателлитов (public для вызова из main.cpp).
     void sseBroadcast(const char* event, const char* data);
 
     static constexpr uint32_t kSessionTimeoutMs = 3600 * 1000UL; // ТЗ §11.4/§23.1
@@ -373,6 +376,3 @@ private:
 };
 
 } // namespace audio21
-
-// N3: глобальный указатель для вызова sseBroadcast из main.cpp мастера.
-extern audio21::MasterWebServer* g_webServer;

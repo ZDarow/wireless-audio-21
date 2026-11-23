@@ -120,46 +120,50 @@ public:
         esp_now_add_peer(&bc);
 
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
-        esp_now_register_recv_cb([this](const esp_now_recv_info_t* info, const uint8_t* data, int len) {
+        esp_now_register_recv_cb([](const esp_now_recv_info_t* info, const uint8_t* data, int len) {
+            if (!s_instance) return;
             MacAddr from;
             memcpy(from.bytes, info->src_addr, 6);
             // P6: анти-replay проверка
             if (len >= (int)sizeof(AudioPacketHeader)) {
                 AudioPacketHeader hdr;
                 memcpy(&hdr, data, sizeof(AudioPacketHeader));
-                if (!m_replayCache.checkAndRecord(from.bytes, hdr.packetId)) {
+                if (!s_instance->m_replayCache.checkAndRecord(from.bytes, hdr.packetId)) {
                     return; // реплей — отбрасываем
                 }
             }
             if (g_rxCallback) g_rxCallback(data, static_cast<size_t>(len), from);
-            if (this && this->m_itRx) this->m_itRx(data, static_cast<size_t>(len), from.bytes, 6);
+            if (s_instance->m_itRx) s_instance->m_itRx(data, static_cast<size_t>(len), from.bytes, 6);
         });
-        esp_now_register_send_cb([this](const wifi_tx_info_t* info, esp_now_send_status_t status) {
+        esp_now_register_send_cb([](const wifi_tx_info_t* info, esp_now_send_status_t status) {
+            if (!s_instance) return;
             MacAddr from;
             memcpy(from.bytes, info->des_addr, 6);
             if (g_sentCallback) g_sentCallback(from, status == ESP_NOW_SEND_SUCCESS);
-            if (this && this->m_itSent) this->m_itSent(from.bytes, status == ESP_NOW_SEND_SUCCESS);
+            if (s_instance->m_itSent) s_instance->m_itSent(from.bytes, status == ESP_NOW_SEND_SUCCESS);
         });
 #else
-        esp_now_register_recv_cb([this](const uint8_t* mac, const uint8_t* data, int len) {
+        esp_now_register_recv_cb([](const uint8_t* mac, const uint8_t* data, int len) {
+            if (!s_instance) return;
             MacAddr from;
             memcpy(from.bytes, mac, 6);
             // P6: анти-replay проверка
             if (len >= (int)sizeof(AudioPacketHeader)) {
                 AudioPacketHeader hdr;
                 memcpy(&hdr, data, sizeof(AudioPacketHeader));
-                if (!m_replayCache.checkAndRecord(from.bytes, hdr.packetId)) {
+                if (!s_instance->m_replayCache.checkAndRecord(from.bytes, hdr.packetId)) {
                     return; // реплей — отбрасываем
                 }
             }
             if (g_rxCallback) g_rxCallback(data, static_cast<size_t>(len), from);
-            if (this && this->m_itRx) this->m_itRx(data, static_cast<size_t>(len), from.bytes, 6);
+            if (s_instance->m_itRx) s_instance->m_itRx(data, static_cast<size_t>(len), from.bytes, 6);
         });
-        esp_now_register_send_cb([this](const uint8_t* mac, esp_now_send_status_t status) {
+        esp_now_register_send_cb([](const uint8_t* mac, esp_now_send_status_t status) {
+            if (!s_instance) return;
             MacAddr from;
             memcpy(from.bytes, mac, 6);
             if (g_sentCallback) g_sentCallback(from, status == ESP_NOW_SEND_SUCCESS);
-            if (this && this->m_itSent) this->m_itSent(from.bytes, status == ESP_NOW_SEND_SUCCESS);
+            if (s_instance->m_itSent) s_instance->m_itSent(from.bytes, status == ESP_NOW_SEND_SUCCESS);
         });
 #endif
 

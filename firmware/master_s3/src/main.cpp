@@ -195,8 +195,6 @@ static AudioContext g_audioCtx{
     nullptr // a2dpConnected (не используется на S3)
 };
 static MasterWebServer g_webServer(g_cfg, g_audioCtx);
-// N3: глобальный указатель для SSE (web_sse.cpp).
-audio21::MasterWebServer* g_webServerPtr = &g_webServer;
 static bool g_setupMode = false;
 
 // ---------------------------------------------------------------------------
@@ -476,13 +474,11 @@ static void onEspNowPacketProcess(const uint8_t* data, size_t size, const MacAdd
             g_rightLastSeenMs = now;
         }
         // N3: SSE — уведомляем Web UI об изменении статуса сателлита.
-        if (g_webServerPtr) {
-            char buf[128];
-            snprintf(buf, sizeof(buf), "{\"left\":\"%s\",\"right\":\"%s\"}",
-                     g_leftOnline ? "online" : "offline",
-                     g_rightOnline ? "online" : "offline");
-            g_webServerPtr->sseBroadcast("satellite", buf);
-        }
+        char buf[128];
+        snprintf(buf, sizeof(buf), "{\"left\":\"%s\",\"right\":\"%s\"}",
+                 g_leftOnline ? "online" : "offline",
+                 g_rightOnline ? "online" : "offline");
+        g_webServer.sseBroadcast("satellite", buf);
         return;
     }
     (void)from; // MAC источника не нужен для heartbeat
@@ -601,11 +597,16 @@ static void enableNapt() {
 }
 
 // S-1 (REPO_AUDIT V3): предупреждение, пока AP мастера использует заводской
-// пароль из дефолтов — сменить через Web UI (Wi-Fi → AP) или config.env.
+// пароль из дефолтов ("audio21master") — сменить через Web UI (Wi-Fi → AP) или config.env.
 static void logDefaultPasswordWarning() {
-    if (strcmp(g_cfg.wifiApPassword, AUDIO_WIFI_AP_PASSWORD) == 0) {
-        Logger::warn("wifi",
-                     "AP password is DEFAULT ('audio21master') — change it via Web UI / config.env!");
+    if (strcmp(g_cfg.wifiApPassword, "audio21master") == 0) {
+        Logger::warnf("wifi",
+                     "AP password is DEFAULT ('%s') — change it via Web UI / config.env!",
+                     g_cfg.wifiApPassword);
+    } else {
+        Logger::infof("wifi",
+                     "AP password changed from default ('%s') — OK",
+                     g_cfg.wifiApPassword);
     }
 }
 
@@ -1349,12 +1350,12 @@ static void appLoop() {
     if (g_leftOnline && (now - g_leftLastSeenMs > kSatelliteTimeoutMs)) g_leftOnline = false;
     if (g_rightOnline && (now - g_rightLastSeenMs > kSatelliteTimeoutMs)) g_rightOnline = false;
     // N3: SSE — уведомляем Web UI об изменении статуса сателлита.
-    if (g_webServerPtr && (leftWas != g_leftOnline || rightWas != g_rightOnline)) {
+    if (leftWas != g_leftOnline || rightWas != g_rightOnline) {
         char buf[128];
         snprintf(buf, sizeof(buf), "{\"left\":\"%s\",\"right\":\"%s\"}",
                  g_leftOnline ? "online" : "offline",
                  g_rightOnline ? "online" : "offline");
-        g_webServerPtr->sseBroadcast("satellite", buf);
+        g_webServer.sseBroadcast("satellite", buf);
     }
 
     // Discovery-запрос сателлитам: пока кто-то offline — каждые 2 с, чтобы
@@ -1424,8 +1425,12 @@ static void appLoop() {
     }
 
     // C6.2: авто-переподключение STA при обрыве в рантайме (ТЗ §16.3,
-    // ТЗ_Веб §21). Fallback на setup AP — в существующей логике ниже.
-    if (g_cfg.wifiMode != WifiMode::ApDirect && !g_setupMode) {
+    // ТЗ_Веб §21). Только для режимов STA/APSTA — ApDirect не подключается к upstream.
+    if (g_cfg.wifiMode == WifiMode::ApDirect || g_setupMode) {
+        // В режиме ApDirect не подключаемся к upstream сети.
+        // g_wifiWasConnected сбрасываем, чтобы не было ложных попыток reconnect.
+        g_wifiWasConnected = false;
+    } else {
         wl_status_t st = WiFi.status();
         if (st == WL_CONNECTED) {
             g_wifiWasConnected = true;
@@ -1452,7 +1457,8 @@ static void appLoop() {
     }
 
     // Переподключение Wi-Fi по запросу Web UI (POST /api/wifi/connect).
-    if (g_webServer.reconnectRequested()) {
+    // В режиме ApDirect не подключаемся к upstream сети.
+    if (g_webServer.reconnectRequested() && g_cfg.wifiMode != WifiMode::ApDirect) {
         g_webServer.clearReconnectRequested();
         Logger::infof("wifi", "reconnect requested via Web UI (ssid %s)", g_cfg.wifiSsid);
         g_logs.addf(LogCat::Wifi, 1, "reconnect requested: %s", g_cfg.wifiSsid);
