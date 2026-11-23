@@ -147,5 +147,5 @@
 | Этап 2 | ESP-NOW транспорт, UDP аудио, Web server, I2S вывод | ✅ |
 | Этап 3 | NVS конфигурация (компонент nvs_config) | ✅ |
 | Этап 4 | Captive DNS портал, OTA обновление, Wi-Fi API (/api/wifi) | ✅ |
-| Этап 5 | mDNS через сырой UDP (порт 5353), captive portal финализация | ✅ |
+| Этап 5 | mDNS через сырой UDP (порт 5353), captive portal, Wi-Fi переконфигурация без перезагрузки | ✅ |
 

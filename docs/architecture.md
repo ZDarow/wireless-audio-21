@@ -349,8 +349,13 @@ Wi-Fi UDP RX (порт 5004, magic 0xA210/0xA211 с HMAC)
 ```
 
 Управление: serial-консоль, Web UI + REST API на порту 80, Captive DNS на порту 53,
-OTA через `POST /api/system/ota`, NVS конфигурация, mDNS через `.local` домен.
+OTA через `POST /api/system/ota`, NVS конфигурация, mDNS через `.local` домен,
+Wi-Fi переконфигурация без перезагрузки через `POST /api/wifi`.
 
 mDNS реализован через сырой UDP (порт 5353, multicast 224.0.0.251) без зависимости
 от lwip mdns.c. Отвечает на A-записи для `<hostname>.local` и регистрирует
 сервис `_http._tcp.local` на порту 80.
+
+Wi-Fi настройки (SSID/пароль AP) можно менять через `POST /api/wifi` без
+перезагрузки устройства — изменения применяютсяruntime через перезапуск
+Wi-Fi интерфейса, captive DNS и mDNS.
