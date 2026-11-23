@@ -621,10 +621,10 @@
 | ID | Задача | Место | Приоритет | Статус |
 |---|---|---|---|---|
 | C2 | **Добавить файл LICENSE (GPL-3.0)** — репозиторий публичный, legacy `master_a2dp` линкуется с `arduino-audio-tools` (GPL-3.0). Без LICENSE репозиторий не соответствует лицензии зависимостей. | корень репозитория | 🔴 Критично | ✅ (23.11.2026: файл LICENSE с полным текстом GPL-3.0 добавлен в корень репозитория) |
-| CI-2 | **Добавить `permissions: contents: read`** в `.github/workflows/ci.yml` (требование GitHub для workflows) | `.github/workflows/ci.yml` | 🟠 Высоко | ⬜ |
-| CI-3 | **Добавить `timeout-minutes: 30`** в job ci.yml (защита от зависших runs) | `.github/workflows/ci.yml` | 🟠 Высоко | ⬜ |
-| CI-4 | **Заменить плавающие теги actions (`@v4`, `@v5`) на SHA-пины** — воспроизводимая сборка CI | `.github/workflows/ci.yml` | 🟠 Высоко | ⬜ |
-| CI-9 | **Включить vulnerability alerts + `.github/dependabot.yml`** — автоматическое обновление уязвимых зависимостей | `.github/` | 🟠 Высоко | ⬜ |
+| CI-2 | **Добавить `permissions: contents: read`** в `.github/workflows/ci.yml` (требование GitHub для workflows) | `.github/workflows/ci.yml` | 🟠 Высоко | ✅ (уже в коммите a945df3: строка 12 ci.yml) |
+| CI-3 | **Добавить `timeout-minutes: 30`** в job ci.yml (защита от зависших runs) | `.github/workflows/ci.yml` | 🟠 Высоко | ✅ (уже в коммите a945df3: строка 23 ci.yml) |
+| CI-4 | **Заменить плавающие теги actions (`@v4`, `@v5`) на SHA-пины** — воспроизводимая сборка CI | `.github/workflows/ci.yml` | 🟠 Высоко | ✅ (уже в коммите a945df3: checkout@11d5960..., setup-python@a26af69..., cache@0057852...) |
+| CI-9 | **Включить vulnerability alerts + `.github/dependabot.yml`** — автоматическое обновление уязвимых зависимостей | `.github/` | 🟠 Высоко | ✅ (23.11.2026: создан `.github/dependabot.yml` с pip и github-actions ecosystem; vulnerability alerts включены через GitHub API) |
 | M1 | **Ветвление + защита ветки `main`** — feature-ветки, PR с ревью, защита main от прямого пуша | GitHub репозиторий | 🟠 Высоко | ⬜ |
 | AP-1 | **Заменить `String` на `char[]`/`std::string` в веб-путях** — предотвратить фрагментацию heap на ESP32-S3 | `firmware/common/web/web_server.h`, `web_spa.h` | 🟡 Средне | ⬜ |
 | AP-4 | **Дефолт `AUDIO_UDP_AUTH_KEY` непустой** — аутентификация UDP-аудио включена по умолчанию (не пустая строка) | `config.example.env`, `node_config.h` | 🟠 Высоко | ⬜ |
