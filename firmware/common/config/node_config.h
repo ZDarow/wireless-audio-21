@@ -7,6 +7,20 @@
 #include <stdint.h>
 #include <string.h>
 
+// strlcpy — BSD-расширение, не стандарт C++. ESP-IDF (ESP32) предоставляет
+// его в libc, но на хосте (g++ для тестов) может отсутствовать. Shim для
+// переносимости (P12/P13).
+#if !defined(ESP32)
+static inline size_t strlcpy(char* dst, const char* src, size_t size) {
+    size_t i;
+    for (i = 0; i + 1 < size && src[i] != '\0'; i++)
+        dst[i] = src[i];
+    if (i < size) dst[i] = '\0';
+    while (src[i] != '\0') i++;
+    return i;
+}
+#endif
+
 #ifdef GENERATED_CONFIG_H
 #include "generated_config.h"
 #endif

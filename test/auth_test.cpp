@@ -62,8 +62,8 @@ static void testPbkdf2Vectors() {
 static void testHashPasswordFormat() {
     char hash[65];
     Auth::hashPassword("secret42", hash);
-    assert(strncmp(hash, "pbkdf2$10000$", 13) == 0);
-    assert(strlen(hash) == 13 + 40);
+    assert(strncmp(hash, "pbkdf2$210000$", 14) == 0);
+    assert(strlen(hash) == 14 + 40);
 
     // round-trip: корректный пароль проходит, неверный — нет.
     assert(Auth::checkPassword("secret42", hash));

@@ -1,5 +1,18 @@
 // espnow.h — ESP-NOW транспорт (TX и RX в одном модуле).
 // Header-only. Использует ESP-NOW API ESP-IDF (доступен в Arduino core).
+//
+// ⚠️ ОГРАНИЧЕНИЕ БЕЗОПАСНОСТИ (REPO_AUDIT V1, не исправимо на уровне протокола):
+// Шифрование multicast/broadcast в ESP-NOW НЕ поддерживается ESP-IDF.
+// Broadcast-пакеты (heartbeat, discovery) отправляются с encrypt=false.
+// unicast-пакеты (аудио, команды) шифруются LMK через addPeer(encrypt=true).
+// Если требуется конфиденциальность broadcast-трафика — добавить сквозное
+// шифрование полезной нагрузки на уровне приложения.
+//
+// ⚠️ ЗАЩИТА ОТ REPLAY-АТАК (CVE-2024-42483):
+// EspNowTransport отслеживает последние kReplayCacheSize packetId от каждого
+// пира. Повторно полученный packetId отбрасывается — атакующий не может
+// перехватить и повторно отправить пакет (cleartext broadcast или зашифрованный
+// unicast с уязвимым пиром).
 #pragma once
 
 #include <Arduino.h>
@@ -12,6 +25,65 @@
 #include "transport.h"
 
 namespace audio21 {
+
+// Кэш анти-replay: отслеживает последние packetId от каждого пира.
+// При получении пакета с уже gesehenным packetId от того же пира — отбрасывает.
+// Размер кэша совпадает с лимитом ESP-NOW (32 пира) — защита от CVE-2024-42483.
+class ReplayCache {
+public:
+    static constexpr size_t kCacheSize = 32;
+
+    // Проверить и зарегистрировать packetId от пира. Возвращает true,
+    // если пакет новый (не реплей), false — если дубликат.
+    bool checkAndRecord(const uint8_t* mac, uint32_t packetId) {
+        for (size_t i = 0; i < kCacheSize; i++) {
+            if (m_entries[i].used && memcmp(m_entries[i].mac, mac, 6) == 0) {
+                // Пир найден — проверить packetId
+                for (size_t j = 0; j < m_entries[i].count; j++) {
+                    if (m_entries[i].ids[j] == packetId) return false; // реплей
+                }
+                // Добавить новый ID (вытеснить старый если кэш полон)
+                if (m_entries[i].count < kIdsPerPeer) {
+                    m_entries[i].ids[m_entries[i].count++] = packetId;
+                } else {
+                    // Сдвинуть окно: самый старый вытесняется
+                    memmove(m_entries[i].ids, m_entries[i].ids + 1,
+                            (kIdsPerPeer - 1) * sizeof(uint32_t));
+                    m_entries[i].ids[kIdsPerPeer - 1] = packetId;
+                }
+                return true;
+            }
+        }
+        // Пир не найден — создать новую запись
+        for (size_t i = 0; i < kCacheSize; i++) {
+            if (!m_entries[i].used) {
+                m_entries[i].used = true;
+                memcpy(m_entries[i].mac, mac, 6);
+                m_entries[i].count = 1;
+                m_entries[i].ids[0] = packetId;
+                return true;
+            }
+        }
+        // Кэш полон — вытеснить самую старую запись (простая стратегия: первую свободную не нашли,
+        // значит все заняты — перезаписываем запись с индексом 0)
+        m_entries[0].used = true;
+        memcpy(m_entries[0].mac, mac, 6);
+        m_entries[0].count = 1;
+        m_entries[0].ids[0] = packetId;
+        return true;
+    }
+
+private:
+    static constexpr size_t kIdsPerPeer = 4;
+
+    struct PeerEntry {
+        bool used = false;
+        uint8_t mac[6];
+        uint8_t count = 0;
+        uint32_t ids[kIdsPerPeer];
+    };
+    PeerEntry m_entries[kCacheSize];
+};
 
 // Callback при получении пакета от мастера (используется сателлитами).
 using EspNowRxCallback = void (*)(const uint8_t* data, size_t size, const MacAddr& from);
@@ -48,34 +120,46 @@ public:
         esp_now_add_peer(&bc);
 
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
-        esp_now_register_recv_cb([](const esp_now_recv_info_t* info, const uint8_t* data, int len) {
+        esp_now_register_recv_cb([this](const esp_now_recv_info_t* info, const uint8_t* data, int len) {
             MacAddr from;
             memcpy(from.bytes, info->src_addr, 6);
+            // P6: анти-replay проверка
+            if (len >= (int)sizeof(AudioPacketHeader)) {
+                AudioPacketHeader hdr;
+                memcpy(&hdr, data, sizeof(AudioPacketHeader));
+                if (!m_replayCache.checkAndRecord(from.bytes, hdr.packetId)) {
+                    return; // реплей — отбрасываем
+                }
+            }
             if (g_rxCallback) g_rxCallback(data, static_cast<size_t>(len), from);
-            auto* self = EspNowTransport::instance();
-            if (self && self->m_itRx) self->m_itRx(data, static_cast<size_t>(len), from.bytes, 6);
+            if (this && this->m_itRx) this->m_itRx(data, static_cast<size_t>(len), from.bytes, 6);
         });
-        esp_now_register_send_cb([](const wifi_tx_info_t* info, esp_now_send_status_t status) {
+        esp_now_register_send_cb([this](const wifi_tx_info_t* info, esp_now_send_status_t status) {
             MacAddr from;
             memcpy(from.bytes, info->des_addr, 6);
             if (g_sentCallback) g_sentCallback(from, status == ESP_NOW_SEND_SUCCESS);
-            auto* self = EspNowTransport::instance();
-            if (self && self->m_itSent) self->m_itSent(from.bytes, status == ESP_NOW_SEND_SUCCESS);
+            if (this && this->m_itSent) this->m_itSent(from.bytes, status == ESP_NOW_SEND_SUCCESS);
         });
 #else
-        esp_now_register_recv_cb([](const uint8_t* mac, const uint8_t* data, int len) {
+        esp_now_register_recv_cb([this](const uint8_t* mac, const uint8_t* data, int len) {
             MacAddr from;
             memcpy(from.bytes, mac, 6);
+            // P6: анти-replay проверка
+            if (len >= (int)sizeof(AudioPacketHeader)) {
+                AudioPacketHeader hdr;
+                memcpy(&hdr, data, sizeof(AudioPacketHeader));
+                if (!m_replayCache.checkAndRecord(from.bytes, hdr.packetId)) {
+                    return; // реплей — отбрасываем
+                }
+            }
             if (g_rxCallback) g_rxCallback(data, static_cast<size_t>(len), from);
-            auto* self = EspNowTransport::instance();
-            if (self && self->m_itRx) self->m_itRx(data, static_cast<size_t>(len), from.bytes, 6);
+            if (this && this->m_itRx) this->m_itRx(data, static_cast<size_t>(len), from.bytes, 6);
         });
-        esp_now_register_send_cb([](const uint8_t* mac, esp_now_send_status_t status) {
+        esp_now_register_send_cb([this](const uint8_t* mac, esp_now_send_status_t status) {
             MacAddr from;
             memcpy(from.bytes, mac, 6);
             if (g_sentCallback) g_sentCallback(from, status == ESP_NOW_SEND_SUCCESS);
-            auto* self = EspNowTransport::instance();
-            if (self && self->m_itSent) self->m_itSent(from.bytes, status == ESP_NOW_SEND_SUCCESS);
+            if (this && this->m_itSent) this->m_itSent(from.bytes, status == ESP_NOW_SEND_SUCCESS);
         });
 #endif
 
@@ -165,6 +249,7 @@ private:
     static EspNowTransport* s_instance;
     RxCallback m_itRx = nullptr;
     SentCallback m_itSent = nullptr;
+    ReplayCache m_replayCache; // P6: анти-replay кэш
 };
 
 inline EspNowRxCallback EspNowTransport::g_rxCallback = nullptr;

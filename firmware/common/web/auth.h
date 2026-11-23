@@ -195,11 +195,12 @@ public:
     // от rainbow-таблиц; случайная per-device соль — техдолг T22 (NVS v5).
     static constexpr const char* kSalt = "audio21-master-salt-v1";
 
-    // Итерации PBKDF2-HMAC-SHA256 (REPO_AUDIT V2): замедляет брутфорс в
-    // 10000 раз относительно одиночного SHA-256 при том же пароле.
-    static constexpr uint32_t kPbkdf2Iterations = 10000;
+    // Итерации PBKDF2-HMAC-SHA256 (REPO_AUDIT V2, OWASP 2026): 210000 итераций
+    // замедляет брутфорс в 210000 раз относительно одиночного SHA-256 при том
+    // же пароле. 10000 — недостаточно по современным стандартам.
+    static constexpr uint32_t kPbkdf2Iterations = 210000;
     // dkLen = 20 байт (160 бит) — хэш умещается в поле adminPasswordHash[65]:
-    // "pbkdf2$10000$" (13) + 40 hex + null = 54. Случайная соль потребует
+    // "pbkdf2$210000$" (15) + 40 hex + null = 56. Случайная соль потребует
     // расширения поля — техдолг (T22, миграция NVS v5).
     static constexpr int kPbkdf2DkLen = 20;
 

@@ -191,9 +191,8 @@ protected:
     void cmdStatus() override {
         Serial.printf("role: satellite (%s)\n", sideToString(g_cfg.side));
         Serial.printf("transport: %s\n", transportToString(g_cfg.transport));
-        uint8_t ch = 0; wifi_second_chan_t sec = WIFI_SECOND_CHAN_NONE;
-        esp_wifi_get_channel(&ch, &sec);
-        Serial.printf("wifi_channel: %u\n", (unsigned)ch);
+        // P11: WiFi.channel() — Arduino-совместимый API вместо esp_wifi_get_channel()
+        Serial.printf("wifi_channel: %u\n", (unsigned)WiFi.channel());
         Serial.printf("master_online: %s\n", g_masterOnline ? "yes" : "no");
         Serial.printf("packets_rx: %lu\n", (unsigned long)g_packetsRx);
         Serial.printf("heartbeats_sent: %lu\n", (unsigned long)g_heartbeatsSent);
@@ -351,12 +350,14 @@ void loop() {
     static bool g_streaming = false;
     if (g_i2sReady) {
         if (!g_streaming && g_jitter->ready()) g_streaming = true;
-        int16_t sample;
-        if (g_streaming && g_jitter->pop(sample)) {
-            int16_t out = g_delay->process(sample);
-            // C3.5: плавный fade-in/out + громкость канала сателлита.
-            out = (int16_t)(g_vol.process(out / 32768.0f) * 32768.0f);
-            writeSample(out);
+            int16_t sample;
+            if (g_streaming && g_jitter->pop(sample)) {
+                int16_t out = g_delay->process(sample);
+                // C3.5: плавный fade-in/out + громкость канала сателлита.
+                // Используем process(int16_t) с встроенным clamping —
+                // избегаем обёртки int16 при двойном преобразовании через float.
+                out = g_vol.process(out);
+                writeSample(out);
         } else if (g_jitter->available() == 0) {
             g_streaming = false;
         }
