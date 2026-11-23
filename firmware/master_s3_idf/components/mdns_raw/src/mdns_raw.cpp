@@ -347,7 +347,7 @@ esp_err_t mdns_raw_init(esp_netif_t* netif, const char* hostname)
 
     // Присоединяемся к multicast группе 224.0.0.251
     ip4_addr_t multicastAddr;
-    IP4_ADDR(&multicastAddr, 224, 0, 0, 251);
+    multicastAddr.addr = PP_HTONL(LWIP_MAKEU32(224, 0, 0, 251));
     err = igmp_joingroup(ip_2_ip4(&ip_addr_any), &multicastAddr);
     if (err != ERR_OK) {
         ESP_LOGW(TAG, "igmp_joingroup failed: %d (may still work)", err);

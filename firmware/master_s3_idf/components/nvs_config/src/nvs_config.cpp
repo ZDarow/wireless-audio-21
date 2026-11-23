@@ -68,11 +68,17 @@ esp_err_t NvsConfig::load(NodeConfig& cfg)
     // Читаем все поля
     int32_t vol = 100;
     ret = nvs_get_i32(m_handle, kKeyVolume, &vol);
-    if (ret == ESP_OK) cfg.volume = (int)vol;
+    if (ret == ESP_OK) {
+        cfg.volume = (int)vol;
+        if (cfg.volume < 0 || cfg.volume > 100) cfg.volume = 100;
+    }
 
     int32_t xover = 90;
     ret = nvs_get_i32(m_handle, kKeyCrossoverHz, &xover);
-    if (ret == ESP_OK) cfg.crossoverHz = (int)xover;
+    if (ret == ESP_OK) {
+        cfg.crossoverHz = (int)xover;
+        if (cfg.crossoverHz < 40 || cfg.crossoverHz > 500) cfg.crossoverHz = 90;
+    }
 
     size_t len = sizeof(cfg.wifiSsid);
     ret = nvs_get_str(m_handle, kKeyWifiSsid, cfg.wifiSsid, &len);

@@ -9,6 +9,7 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "esp_netif.h"
+#include "esp_task_wdt.h"
 
 // DSP модули
 #include "pcm_pipeline.h"
@@ -461,6 +462,16 @@ extern "C" void app_main(void)
 
     ESP_LOGI(TAG, "setup complete, entering main loop");
 
+    // Инициализация watchdog (30 секунд, без паники при срабатывании)
+    esp_task_wdt_config_t twdt_config = {
+        .timeout_ms = 30000,
+        .idle_core_mask = 0,
+        .trigger_panic = false,
+    };
+    esp_task_wdt_init(&twdt_config);
+    // Подписать текущую задачу (app_main) на watchdog
+    esp_task_wdt_add(NULL);
+
     // Основной цикл
     uint32_t loopCounter = 0;
     TickType_t lastWakeTime = xTaskGetTickCount();
@@ -476,6 +487,9 @@ extern "C" void app_main(void)
             ESP_LOGI(TAG, "loop: heap=%" PRIu32 " bytes, counter=%" PRIu32,
                      esp_get_free_heap_size(), loopCounter);
         }
+
+        // Сброс watchdog
+        esp_task_wdt_reset();
 
         // Цикл примерно 10 мс (100 Гц)
         vTaskDelayUntil(&lastWakeTime, pdMS_TO_TICKS(10));

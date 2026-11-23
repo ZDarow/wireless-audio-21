@@ -8,6 +8,9 @@ namespace audio21 {
 
 static const char *TAG = "espnow";
 
+// Указатель на экземпляр для статического коллбека приёма
+static EspNowTransport* g_espnow_instance = nullptr;
+
 EspNowTransport::~EspNowTransport()
 {
     deinit();
@@ -18,6 +21,8 @@ esp_err_t EspNowTransport::init(bool encrypt)
     if (m_initialized) {
         return ESP_OK;
     }
+    g_espnow_instance = this;
+
 
     // Wi-Fi должен быть в режиме AP или AP_STA для ESP-NOW
     wifi_mode_t mode;
@@ -36,8 +41,7 @@ esp_err_t EspNowTransport::init(bool encrypt)
     esp_now_register_send_cb(onDataSent);
     // В ESP-IDF v5.3 сигнатура recv_cb: void(*)(const esp_now_recv_info*, const uint8_t*, int)
     esp_now_register_recv_cb([](const esp_now_recv_info* info, const uint8_t* data, int len) {
-        // Статический коллбек — нужна ссылка на экземпляр транспорта
-        // Для простоты пока только логируем
+        EspNowTransport::handleRecv(info->src_addr, data, len);
         ESP_LOGD(TAG, "ESP-NOW recv from %02x:%02x:%02x:%02x:%02x:%02x len=%d",
                  info->src_addr[0], info->src_addr[1], info->src_addr[2],
                  info->src_addr[3], info->src_addr[4], info->src_addr[5], len);
@@ -59,6 +63,8 @@ esp_err_t EspNowTransport::deinit()
     esp_err_t ret = esp_now_deinit();
     m_initialized = false;
     m_rxCb = nullptr;
+    g_espnow_instance = nullptr;
+
 
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "esp_now_deinit failed: %s", esp_err_to_name(ret));
@@ -125,6 +131,13 @@ esp_err_t EspNowTransport::sendBroadcast(const uint8_t* data, size_t len)
 void EspNowTransport::setRxCallback(EspNowRxCallback* cb)
 {
     m_rxCb = cb;
+}
+
+void EspNowTransport::handleRecv(const uint8_t* srcMac, const uint8_t* data, size_t len)
+{
+    if (g_espnow_instance && g_espnow_instance->m_rxCb) {
+        g_espnow_instance->m_rxCb->onPacket(srcMac, data, len);
+    }
 }
 
 void EspNowTransport::updateSatellite(const uint8_t* srcMac, int8_t rssi)

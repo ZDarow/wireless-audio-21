@@ -130,13 +130,17 @@ esp_err_t UdpAudio::receive(uint32_t timeoutMs, UdpAudioRxCallback* cb)
             m_authFailCount++;
             return ESP_ERR_INVALID_SIZE;
         }
-        // HMAC находится в заголовке (после timestampSamples)
-        // Проверяем HMAC над данными без самого HMAC поля
-        size_t hmacDataLen = sizeof(UdpAudioHeader) - sizeof(hdr->hmac) + payloadLen - 32;
-        // На самом деле структура: magic(2) + sequence(2) + timestampSamples(4) + hmac(32) + payload
-        // HMAC считается над magic+sequence+timestampSamples+payload
-        size_t hmacCoverLen = 8 + (payloadLen - 32);
-        authOk = verifyHmac(m_rxBuffer, hmacCoverLen, hdr->hmac);
+        // HMAC поле находится в заголовке по смещению 8 (32 байта)
+        // HMAC считается над: magic(2) + sequence(2) + timestampSamples(4) + payload(payloadLen)
+        // Данные в буфере: [magic(2)][seq(2)][ts(4)][hmac(32)][payload(N)]
+        // Нужно скопировать magic+seq+ts и payload, пропуская поле hmac
+        uint8_t hmacData[1208];  // 8 header bytes + max payload 1200
+        size_t hmacDataLen = 0;
+        memcpy(hmacData + hmacDataLen, m_rxBuffer, 8);           // magic + sequence + timestampSamples
+        hmacDataLen += 8;
+        memcpy(hmacData + hmacDataLen, m_rxBuffer + sizeof(UdpAudioHeader), payloadLen);  // payload
+        hmacDataLen += payloadLen;
+        authOk = verifyHmac(hmacData, hmacDataLen, hdr->hmac);
         if (!authOk) {
             m_authFailCount++;
             ESP_LOGW(TAG, "HMAC verification failed");

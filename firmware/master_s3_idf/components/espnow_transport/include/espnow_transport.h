@@ -82,6 +82,9 @@ public:
     // Зарегистрировать коллбек приёма
     void setRxCallback(EspNowRxCallback* cb);
 
+    // Вызвать коллбек приёма (используется из статического C-коллбэка ESP-NOW)
+    static void handleRecv(const uint8_t* srcMac, const uint8_t* data, size_t len);
+
     // Получить статус сателлита по индексу (0 = left, 1 = right)
     const SatelliteStatus& satellite(size_t idx) const { return m_satellites[idx]; }
 

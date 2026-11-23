@@ -1,1 +1,2 @@
-CONFIG_LWIP_MDNS_RESPONDER=y
+# LWIP_MDNS_RESPONDER не является Kconfig опцией в v5.3.1
+# mDNS реализован через отдельный компонент mdns_raw
