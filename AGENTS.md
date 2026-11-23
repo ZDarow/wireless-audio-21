@@ -129,6 +129,7 @@
 | `i2s_output` | esp_driver_i2s Master TX моно 16-bit для PCM5102A (BCK=4, WS=5, DATA=6) |
 | `nvs_config` | NVS хранение NodeConfig (C API nvs_flash/nvs.h), версия схемы kConfigVersion=1 |
 | `dns_captive` | UDP DNS сервер на порту 53, отвечает softAP IP на все запросы (captive portal) |
+| `mdns_raw` | mDNS отвечатель на сыром UDP (порт 5353, multicast 224.0.0.251), доступ по `.local` |
 | `ota_update` | OTA через esp_https_ota, эндпоинт POST /api/system/ota |
 
 ### Интеграция в main/main.cpp
@@ -136,7 +137,7 @@
 - NVS конфиг загружается при старте (дефолты если не найден), сохраняется при изменении через Web UI
 - Wi-Fi AP (softAP), Captive DNS, ESP-NOW, I2S, UDP audio, Web server — все инициализируются в `app_main()`
 - Основной цикл 100 Гц с `vTaskDelayUntil()`, `esp_task_wdt_reset()` не требуется (стабильность без WDT)
-- mDNS отложено: в ESP-IDF v5.3.1 нет готового компонента mdns, lwip mDNS responder требует модификации ядра lwip
+- mDNS через сырой UDP (порт 5353) — доступ по `http://audio-master.local`
 
 ### Этапы миграции (завершены)
 
@@ -146,5 +147,5 @@
 | Этап 2 | ESP-NOW транспорт, UDP аудио, Web server, I2S вывод | ✅ |
 | Этап 3 | NVS конфигурация (компонент nvs_config) | ✅ |
 | Этап 4 | Captive DNS портал, OTA обновление, Wi-Fi API (/api/wifi) | ✅ |
-| Этап 5 | mDNS через lwip (отложено), captive portal финализация | ⬜ |
+| Этап 5 | mDNS через сырой UDP (порт 5353), captive portal финализация | ✅ |
 

@@ -349,7 +349,8 @@ Wi-Fi UDP RX (порт 5004, magic 0xA210/0xA211 с HMAC)
 ```
 
 Управление: serial-консоль, Web UI + REST API на порту 80, Captive DNS на порту 53,
-OTA через `POST /api/system/ota`, NVS конфигурация.
+OTA через `POST /api/system/ota`, NVS конфигурация, mDNS через `.local` домен.
 
-mDNS отложено: в ESP-IDF v5.3.1 нет готового компонента mdns, lwip mDNS responder
-требует модификации ядра lwip (нет `netif_alloc_client_data_id`).
+mDNS реализован через сырой UDP (порт 5353, multicast 224.0.0.251) без зависимости
+от lwip mdns.c. Отвечает на A-записи для `<hostname>.local` и регистрирует
+сервис `_http._tcp.local` на порту 80.
