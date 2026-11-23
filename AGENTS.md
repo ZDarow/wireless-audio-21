@@ -105,3 +105,46 @@
   10000 итераций; остаток — per-device соль в NVS v5). Остаётся: V4 — UDP-аудио
   без аутентификации источника (C5.7), V5 — OTA без подписи, S-1 — дефолтный
   AP-пароль (в прошивке предупреждение, сменить в config.env/Web UI).
+
+## ESP-IDF миграция (`firmware/master_s3_idf/`)
+
+Параллельно ведётся миграция мастера с Arduino/PlatformIO на чистый ESP-IDF v5.3.1
+для устранения циклических перезагрузок `TG1WDT_SYS_RST` (watchdog).
+
+- **Проект**: `firmware/master_s3_idf/` (CMake + `idf.py`, отдельно от Arduino `firmware/master_s3/`)
+- **Платформа**: ESP-IDF v5.3.1, уже установлена на `/home/mi/esp/esp-idf-v5.3.1/`
+- **Сборка**: `source /home/mi/esp/esp-idf-v5.3.1/export.sh && idf.py build`
+- **Прошивка**: `idf.py -p /dev/ttyACM0 flash` (после `erase_flash` при смене прошивки)
+- **Ветка Git**: `feature/esp32-idf-migration` (запушена в origin)
+- **Статус**: устройство стабильно 24+ сек без WDT перезагрузок (vs циклические ребуты на Arduino core)
+
+### Компоненты ESP-IDF проекта
+
+| Компонент | Назначение |
+|-----------|-----------|
+| `dsp_pipeline` | header-only DSP модули (pcm_pipeline, volume_control, crossover, delay_line, jitter_buffer, drift_correction, udp_audio_receiver, i2s_output) |
+| `espnow_transport` | ESP-NOW unicast/broadcast (магия 0xA210/0xA211/0xA212), AudioPacketHeader 16 байт |
+| `udp_audio` | UDP порт 5004, PCM приём, HMAC-SHA256 аутентификация через mbedTLS |
+| `web_server` | HTTP REST API + SSE, cJSON, эндпоинты /api/*, /api/system/* |
+| `i2s_output` | esp_driver_i2s Master TX моно 16-bit для PCM5102A (BCK=4, WS=5, DATA=6) |
+| `nvs_config` | NVS хранение NodeConfig (C API nvs_flash/nvs.h), версия схемы kConfigVersion=1 |
+| `dns_captive` | UDP DNS сервер на порту 53, отвечает softAP IP на все запросы (captive portal) |
+| `ota_update` | OTA через esp_https_ota, эндпоинт POST /api/system/ota |
+
+### Интеграция в main/main.cpp
+
+- NVS конфиг загружается при старте (дефолты если не найден), сохраняется при изменении через Web UI
+- Wi-Fi AP (softAP), Captive DNS, ESP-NOW, I2S, UDP audio, Web server — все инициализируются в `app_main()`
+- Основной цикл 100 Гц с `vTaskDelayUntil()`, `esp_task_wdt_reset()` не требуется (стабильность без WDT)
+- mDNS отложено: в ESP-IDF v5.3.1 нет готового компонента mdns, lwip mDNS responder требует модификации ядра lwip
+
+### Этапы миграции (завершены)
+
+| Этап | Описание | Статус |
+|------|----------|--------|
+| Этап 1 | Скелет проекта, CMake, main.cpp, DSP конвейер | ✅ |
+| Этап 2 | ESP-NOW транспорт, UDP аудио, Web server, I2S вывод | ✅ |
+| Этап 3 | NVS конфигурация (компонент nvs_config) | ✅ |
+| Этап 4 | Captive DNS портал, OTA обновление, Wi-Fi API (/api/wifi) | ✅ |
+| Этап 5 | mDNS через lwip (отложено), captive portal финализация | ⬜ |
+

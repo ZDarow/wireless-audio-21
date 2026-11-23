@@ -310,3 +310,46 @@ docs/                       # PLAN, TASKS, architecture, hardware, wiring, REPO_
   поддерживается HMAC-SHA256 (магия 0xA211), но ключ `AUDIO_UDP_AUTH_KEY`
   по умолчанию пуст (аутентификация отключена, принимаются только 0xA210).
   Включение требует согласованного ключа на мастере и в приложении-смартфона.
+
+## 11. ESP-IDF миграция (`firmware/master_s3_idf/`)
+
+Параллельно ведётся миграция мастера с Arduino/PlatformIO на чистый ESP-IDF v5.3.1
+для устранения циклических перезагрузок `TG1WDT_SYS_RST` (watchdog).
+
+- **Проект**: `firmware/master_s3_idf/` (CMake + `idf.py`, отдельно от Arduino `firmware/master_s3/`)
+- **Платформа**: ESP-IDF v5.3.1, `/home/mi/esp/esp-idf-v5.3.1/`
+- **Сборка**: `source /home/mi/esp/esp-idf-v5.3.1/export.sh && idf.py build`
+- **Прошивка**: `idf.py -p /dev/ttyACM0 flash`
+- **Ветка Git**: `feature/esp32-idf-migration`
+- **Статус**: устройство стабильно 24+ сек без WDT перезагрузок
+
+### Компоненты
+
+| Компонент | Назначение |
+|-----------|-----------|
+| `dsp_pipeline` | header-only DSP модули (pcm_pipeline, volume_control, crossover, delay_line, jitter_buffer, drift_correction, udp_audio_receiver, i2s_output) |
+| `espnow_transport` | ESP-NOW unicast/broadcast (0xA210/0xA211/0xA212), AudioPacketHeader 16 байт |
+| `udp_audio` | UDP порт 5004, PCM приём, HMAC-SHA256 через mbedTLS |
+| `web_server` | HTTP REST API + SSE, cJSON, эндпоинты /api/*, /api/system/* |
+| `i2s_output` | esp_driver_i2s Master TX моно 16-bit для PCM5102A (BCK=4, WS=5, DATA=6) |
+| `nvs_config` | NVS хранение NodeConfig (C API nvs_flash/nvs.h), kConfigVersion=1 |
+| `dns_captive` | UDP DNS сервер на порту 53, captive portal (softAP IP на все запросы) |
+| `ota_update` | OTA через esp_https_ota, POST /api/system/ota |
+
+### Поток данных (ESP-IDF мастер)
+
+```
+Wi-Fi UDP RX (порт 5004, magic 0xA210/0xA211 с HMAC)
+  → валидация HMAC (если AUDIO_UDP_AUTH_KEY задан)
+  → JitterBuffer
+  → PcmPipeline.process(l, r):
+      tone → volume → limiter → LR4 crossover (LPF sub, HPF left/right)
+  → left/right: DelayLine → громкость канала → батч 117 сэмплов → ESP-NOW/UDP TX
+  → sub:        DelayLine → громкость канала → I2S → PCM5102A
+```
+
+Управление: serial-консоль, Web UI + REST API на порту 80, Captive DNS на порту 53,
+OTA через `POST /api/system/ota`, NVS конфигурация.
+
+mDNS отложено: в ESP-IDF v5.3.1 нет готового компонента mdns, lwip mDNS responder
+требует модификации ядра lwip (нет `netif_alloc_client_data_id`).

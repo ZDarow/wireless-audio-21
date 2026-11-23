@@ -692,3 +692,44 @@
 | P24 | **Баннер с дефолтным паролем AP в HTML** — `audio21master` в plain text в `web_spa.h` | `firmware/common/web/web_spa.h:46-49` | 🟢 Низко | ⬜ |
 | P25 | **Библиотеки без версий в `platformio.ini`** — `WebServer`, `HTTPClient`, `Update`, `Network`, `U8g2` без закрепления версии. Невоспроиззимая сборка | `platformio.ini:119-125` | 🟢 Низко | ⬜ |
 
+---
+
+## 15. ESP-IDF миграция (`firmware/master_s3_idf/`)
+
+> Миграция мастера с Arduino/PlatformIO на чистый ESP-IDF v5.3.1 для устранения
+> циклических перезагрузок `TG1WDT_SYS_RST` (watchdog). Проект в отдельной
+> ветке `feature/esp32-idf-migration`, собирается через `idf.py build`.
+
+### 15.1 Выполнено (Этапы 1–4)
+
+| ID | Задача | Место | Статус |
+|----|--------|-------|--------|
+| E1 | Скелет проекта: CMakeLists.txt, main/CMakeLists.txt, main/main.cpp | `firmware/master_s3_idf/` | ✅ |
+| E2 | Компонент `dsp_pipeline`: header-only DSP модули (pcm_pipeline, volume_control, crossover, delay_line, jitter_buffer, drift_correction, udp_audio_receiver, i2s_output) + Arduino.h shim | `components/dsp_pipeline/` | ✅ |
+| E3 | Компонент `espnow_transport`: ESP-NOW unicast/broadcast (0xA210/0xA211/0xA212), AudioPacketHeader 16 байт, peer registration | `components/espnow_transport/` | ✅ |
+| E4 | Компонент `udp_audio`: UDP порт 5004 PCM приём, HMAC-SHA256 через mbedTLS, UdpAudioHeader 40 байт | `components/udp_audio/` | ✅ |
+| E5 | Компонент `web_server`: HTTP REST API + SSE, cJSON, эндпоинты /api/*, /api/system/* | `components/web_server/` | ✅ |
+| E6 | Компонент `i2s_output`: esp_driver_i2s Master TX моно 16-bit для PCM5102A (BCK=4, WS=5, DATA=6) | `components/i2s_output/` | ✅ |
+| E7 | Компонент `nvs_config`: NVS хранение NodeConfig (C API nvs_flash/nvs.h), kConfigVersion=1, load/save/erase | `components/nvs_config/` | ✅ |
+| E8 | Компонент `dns_captive`: UDP DNS сервер на порту 53, отвечает softAP IP на все запросы (captive portal) | `components/dns_captive/` | ✅ |
+| E9 | Компонент `ota_update`: OTA через esp_https_ota, endpoint POST /api/system/ota | `components/ota_update/` | ✅ |
+| E10 | partitions.csv с ota_0/ota_1 разделами для OTA | `partitions.csv` | ✅ |
+| E11 | main/main.cpp: интеграция всех компонентов, 100 Гц loop с vTaskDelayUntil, NVS load/save, Web UI callbacks (volume, crossover, reboot, factory_reset, otaUpdate, getWifiConfig, setWifiConfig) | `main/main.cpp` | ✅ |
+| E12 | Web server: GET/POST /api/wifi — чтение/запись Wi-Fi конфига (mode, apSsid, apPassword, staSsid, staPassword), сохранение в NVS | `components/web_server/` + `main/main.cpp` | ✅ |
+| E13 | Сборка, прошивка, стабильность: 24+ сек uptime без TG1WDT_SYS_RST, heap стабилен ~255 КБ | ESP32-S3 /dev/ttyACM0 | ✅ |
+
+### 15.2 Отложено / не выполнено
+
+| ID | Задача | Место | Причина | Статус |
+|----|--------|-------|---------|--------|
+| E14 | mDNS через lwip (`http://audio-master.local`) | `components/mdns_lwip/` | `LWIP_MDNS_RESPONDER` не в Kconfig, `netif_alloc_client_data_id` отсутствует в lwip v5.3.1, требует модификации ядра lwip | ⬜ |
+| E15 | Применение Wi-Fi настроек без перезагрузки (переключение AP/STA/APSTA в рантайме) | `main/main.cpp` | Требует переинициализации Wi-Fi + ESP-NOW | ⬜ |
+| E16 | Ручное тестирование звука на железе (§18 из ТЗ) | Железо | Требует подключения смартфона и измерений | ⬜ |
+
+### 15.3 Известные проблемы
+
+- **mDNS**: в ESP-IDF v5.3.1 нет готового компонента `mdns`. lwip mDNS responder требует `LWIP_MDNS_RESPONDER=1` (компиляция `lwip/src/apps/mdns/mdns.c` в компоненте) и функции `netif_alloc_client_data_id`, которой нет в этой версии lwip. Отложено.
+- **sdkconfig.defaults**: `CONFIG_LWIP_MDNS_RESPONDER=y` добавлен для будущего использования.
+- **IP в логе dns_captive**: исправлен порядок байт (было `1.4.168.192`, стало `192.168.4.1`).
+
+
