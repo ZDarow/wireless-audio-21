@@ -56,15 +56,15 @@ static const char kSpaHtml[] = R"rawliteral(
   </div>
 </div>
 <nav id="nav">
-  <button data-p="dashboard" class="active">Dashboard</button>
+  <button data-p="dashboard" class="active">Панель</button>
   <button data-p="wifi">Wi-Fi</button>
-  <button data-p="internet">Internet</button>
-  <button data-p="audio">Audio</button>
-  <button data-p="delays">Delays</button>
-  <button data-p="satellites">Satellites</button>
-  <button data-p="system">System</button>
-  <button data-p="update">Update</button>
-  <button data-p="logs">Logs</button>
+  <button data-p="internet">Интернет</button>
+  <button data-p="audio">Аудио</button>
+  <button data-p="delays">Задержки</button>
+  <button data-p="satellites">Сателлиты</button>
+  <button data-p="system">Система</button>
+  <button data-p="update">Обновление</button>
+  <button data-p="logs">Логи</button>
 </nav>
 
 <div id="p-dashboard" class="page active">
@@ -90,9 +90,9 @@ static const char kSpaHtml[] = R"rawliteral(
       <tr><td>Версия</td><td id="d_ver">-</td></tr>
     </table>
     <div class="row">
-      <button id="dMuteBtn">Mute</button>
+      <button id="dMuteBtn">Выкл звук</button>
       <button id="dSaveBtn" class="ghost">Сохранить (NVS)</button>
-      <button id="dRebootBtn" class="danger">Reboot</button>
+      <button id="dRebootBtn" class="danger">Перезагрузка</button>
       <button id="dLogoutBtn" class="ghost">Выйти</button>
     </div>
   </div>
@@ -111,9 +111,9 @@ static const char kSpaHtml[] = R"rawliteral(
     <h2>Wi-Fi</h2>
     <label>Режим</label>
     <select id="wMode">
-      <option value="AP_DIRECT">AP_DIRECT</option>
-      <option value="STA">STA</option>
-      <option value="APSTA">APSTA (репитер)</option>
+      <option value="AP_DIRECT">Точка доступа</option>
+      <option value="STA">Клиент (STA)</option>
+      <option value="APSTA">Репитер (AP+STA)</option>
     </select>
     <div class="row">
       <button id="wApply" class="ghost">Применить</button>
@@ -141,13 +141,13 @@ static const char kSpaHtml[] = R"rawliteral(
 <div id="p-audio" class="page">
   <div class="card">
     <h2>Аудио</h2>
-    <label>Master: <span id="a_volLabel" class="val">50</span></label>
+    <label>Мастер: <span id="a_volLabel" class="val">50</span></label>
     <input type="range" id="a_vol" min="0" max="100" value="50">
-    <label>Left: <span id="a_volLeftLabel" class="val">50</span></label>
+    <label>Левый: <span id="a_volLeftLabel" class="val">50</span></label>
     <input type="range" id="a_volLeft" min="0" max="100" value="50">
-    <label>Right: <span id="a_volRightLabel" class="val">50</span></label>
+    <label>Правый: <span id="a_volRightLabel" class="val">50</span></label>
     <input type="range" id="a_volRight" min="0" max="100" value="50">
-    <label>Sub: <span id="a_volSubLabel" class="val">50</span></label>
+    <label>Саб: <span id="a_volSubLabel" class="val">50</span></label>
     <input type="range" id="a_volSub" min="0" max="100" value="50">
     <label>Частота: <span id="a_xoLabel" class="val">90</span> Гц</label>
     <input type="range" id="a_xo" min="40" max="160" value="90">
@@ -160,11 +160,11 @@ static const char kSpaHtml[] = R"rawliteral(
 <div id="p-delays" class="page">
   <div class="card">
     <h2>Задержки</h2>
-    <label>Left: <span id="dly_l" class="val">0</span> мс</label>
+    <label>Левый: <span id="dly_l" class="val">0</span> мс</label>
     <input type="range" id="dlyL" min="0" max="200" value="0">
-    <label>Right: <span id="dly_r" class="val">0</span> мс</label>
+    <label>Правый: <span id="dly_r" class="val">0</span> мс</label>
     <input type="range" id="dlyR" min="0" max="200" value="0">
-    <label>Sub: <span id="dly_s" class="val">0</span> мс</label>
+    <label>Саб: <span id="dly_s" class="val">0</span> мс</label>
     <input type="range" id="dlyS" min="0" max="200" value="0">
     <div class="row">
       <button id="dApply" class="ghost">Применить</button>
@@ -185,7 +185,7 @@ static const char kSpaHtml[] = R"rawliteral(
 <div id="p-system" class="page">
   <div class="card">
     <h2>Система</h2>
-    <label>Hostname</label>
+    <label>Имя хоста</label>
     <input type="text" id="sysHost">
     <div class="row">
       <button id="sysApply" class="ghost">Применить</button>
@@ -212,9 +212,9 @@ static const char kSpaHtml[] = R"rawliteral(
     <h2>Логи</h2>
     <select id="logLevel">
       <option value="">Все</option>
-      <option value="I">Info</option>
-      <option value="W">Warn</option>
-      <option value="E">Error</option>
+      <option value="I">Инфо</option>
+      <option value="W">Предупр.</option>
+      <option value="E">Ошибка</option>
     </select>
     <div id="logOut" class="mono" style="background:#111;border:1px solid #333;border-radius:6px;padding:8px;height: 50vh; overflow:auto"></div>
   </div>
@@ -236,7 +236,7 @@ async function req(path, opts={}) {
   let j = null;
   try { j = await r.json(); } catch (e) {}
   if (!r.ok || (j && j.ok === false)) {
-    throw new Error((j && j.error) ? j.error : 'HTTP ' + r.status);
+    throw new Error((j && j.error) ? j.error : 'HTTP ' + r.status + ' (' + r.statusText + ')');
   }
   return j;
 }
@@ -385,7 +385,7 @@ $('uBtn').onclick = async () => {
   xhr.send(fd);
 };
 
-const logLevels = { I: 'INFO', W: 'WARN', E: 'ERROR' };
+const logLevels = { I: 'ИНФО', W: 'ПРЕДУПР.', E: 'ОШИБКА' };
 async function refreshLogs() {
   const lvl = $('logLevel').value;
   const r = await fetch('/api/logs?level=' + encodeURIComponent(lvl));
