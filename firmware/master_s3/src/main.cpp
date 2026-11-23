@@ -646,19 +646,21 @@ static void applyStaticIpFromProfile() {
 
 static bool initWifi() {
     if (g_cfg.wifiMode == WifiMode::ApDirect) {
-        scanWifiBeforeAp(); // список сетей для Web UI — ДО старта AP (B9)
-        WiFi.mode(WIFI_AP);
-        WiFi.disconnect(false, false); // сбросить предыдущее состояние после mode()
-        bool ok = WiFi.softAP(g_cfg.wifiApSsid, g_cfg.wifiApPassword, kDefaultWifiChannel);
-        if (!ok) {
-            Logger::error("wifi", "softAP failed");
-            return false;
-        }
-        delay(200);
-        Logger::infof("wifi", "AP '%s' on channel %d, IP: %s",
-                      g_cfg.wifiApSsid, kDefaultWifiChannel,
-                      WiFi.softAPIP().toString().c_str());
-        logDefaultPasswordWarning();
+        // TEMP: отключено для диагностики перезагрузок
+        // scanWifiBeforeAp();
+        // WiFi.mode(WIFI_AP);
+        // WiFi.disconnect(false, false);
+        // bool ok = WiFi.softAP(g_cfg.wifiApSsid, g_cfg.wifiApPassword, kDefaultWifiChannel);
+        // if (!ok) {
+        //     Logger::error("wifi", "softAP failed");
+        //     return false;
+        // }
+        // delay(200);
+        // Logger::infof("wifi", "AP '%s' on channel %d, IP: %s",
+        //               g_cfg.wifiApSsid, kDefaultWifiChannel,
+        //               WiFi.softAPIP().toString().c_str());
+        // logDefaultPasswordWarning();
+        Logger::info("wifi", "AP start skipped (diagnostic)");
         return true;
     }
 
@@ -929,14 +931,14 @@ static DelayLine* createDelayLinePsram(uint32_t capacityMs, uint32_t sampleRate)
 void setup() {
     Serial.begin(115200);
     delay(200);
-    // Watchdog: 30 секунд таймаут, не паниковать (избегаем сброса при долгих
-    // операциях Wi-Fi/Web UI в loop).
+    // Task WDT: Arduino уже инициализировал TWDT — используем reconfigure,
+    // а не init (иначе "TWDT already initialized" и старые настройки остаются).
     esp_task_wdt_config_t wdtConfig = {
-        .timeout_ms = 30000,
+        .timeout_ms = 60000,
         .idle_core_mask = 0,
         .trigger_panic = false,
     };
-    esp_task_wdt_init(&wdtConfig);
+    esp_task_wdt_reconfigure(&wdtConfig);
     esp_task_wdt_add(NULL);
     Logger::info("master", "Wireless Audio 2.1 Master (ESP32-S3) starting...");
 
@@ -948,33 +950,32 @@ void setup() {
         // C-3 (аудит): заводские PMK/LMK зашиты в репозиторий — любой, кто их
         // знает, расшифровывает ESP-NOW трафик. При первой инициализации NVS
         // генерируем уникальные ключи из аппаратного RNG и сохраняем их.
-        // Сателлиты получают те же ключи при pairing (wps_pbc / прошивка с
-        // config.env). ВНИМАНИЕ: после factory reset ключи сменятся —
-        // сателлиты нужно перепарить.
-        uint8_t rndKey[32];
-        esp_fill_random(rndKey, sizeof(rndKey));
-        for (size_t i = 0; i < 16; ++i) {
-            static const char hex[] = "0123456789abcdef";
-            g_cfg.espnowPmk[2 * i]     = hex[rndKey[i] >> 4];
-            g_cfg.espnowPmk[2 * i + 1] = hex[rndKey[i] & 0x0F];
-            g_cfg.espnowLmk[2 * i]     = hex[rndKey[16 + i] >> 4];
-            g_cfg.espnowLmk[2 * i + 1] = hex[rndKey[16 + i] & 0x0F];
-        }
-        g_cfg.espnowPmk[32] = '\0';
-        g_cfg.espnowLmk[32] = '\0';
-        ConfigStorage::save(g_cfg);
-        Logger::info("master", "ESP-NOW PMK/LMK regenerated from HW RNG (pair satellites again after factory reset)");
+        // TEMP: отключено для диагностики перезагрузок
+        // uint8_t rndKey[32];
+        // esp_fill_random(rndKey, sizeof(rndKey));
+        // for (size_t i = 0; i < 16; ++i) {
+        //     static const char hex[] = "0123456789abcdef";
+        //     g_cfg.espnowPmk[2 * i]     = hex[rndKey[i] >> 4];
+        //     g_cfg.espnowPmk[2 * i + 1] = hex[rndKey[i] & 0x0F];
+        //     g_cfg.espnowLmk[2 * i]     = hex[rndKey[16 + i] >> 4];
+        //     g_cfg.espnowLmk[2 * i + 1] = hex[rndKey[16 + i] & 0x0F];
+        // }
+        // g_cfg.espnowPmk[32] = '\0';
+        // g_cfg.espnowLmk[32] = '\0';
+        // ConfigStorage::save(g_cfg);
+        // Logger::info("master", "ESP-NOW PMK/LMK regenerated from HW RNG (pair satellites again after factory reset)");
     }
 
     // C-3: явная защита от запуска с дефолтными ключами из репозитория
-    // (например, если конфиг был сохранён до этого исправления).
-    if (strcmp(g_cfg.espnowPmk, AUDIO_ESPNOW_PMK) == 0 ||
-        strcmp(g_cfg.espnowLmk, AUDIO_ESPNOW_LMK) == 0) {
-        Logger::warn("master", "ESP-NOW keys are DEFAULT (repo-visible) — anyone can decrypt! Re-pair/regenerate via factory reset");
-        g_logs.addf(LogCat::Wifi, 0, "ESP-NOW default keys in use (security risk)");
-    }
+    // TEMP: отключено для диагностики перезагрузок
+    // if (strcmp(g_cfg.espnowPmk, AUDIO_ESPNOW_PMK) == 0 ||
+    //     strcmp(g_cfg.espnowLmk, AUDIO_ESPNOW_LMK) == 0) {
+    //     Logger::warn("master", "ESP-NOW keys are DEFAULT (repo-visible) — anyone can decrypt! Re-pair/regenerate via factory reset");
+    //     g_logs.addf(LogCat::Wifi, 0, "ESP-NOW default keys in use (security risk)");
+    // }
 
-    printDiagnostics();
+    // TEMP: отключено для диагностики паники
+    // printDiagnostics();
 
     if (!initWifi()) {
         // REPO_AUDIT: ESP.restart() при недоступном Wi-Fi зацикливал мастера
@@ -986,99 +987,62 @@ void setup() {
 
     WiFi.setSleep(false); // отключить power save для аудиоузлов (ТЗ §16.3)
 
-    // ESP-NOW: heartbeat от сателлитов → статус online без аудио-потока.
-    if (initEspNow()) {
-        Logger::info("master", "ESP-NOW ready (satellite heartbeat RX)");
-        // A9: создать FreeRTOS-очередь для RX ESP-NOW.
-        g_espNowRxQueue = xQueueCreate(kEspNowRxPoolSize, sizeof(uint8_t));
-        if (!g_espNowRxQueue) {
-            Logger::error("master", "ESP-NOW rx queue create failed");
-        }
-    } else {
-        Logger::error("master", "ESP-NOW init failed");
-    }
-
-    // mDNS (F16): доступ по http://<hostname>.local (дефолт audio-master.local).
-    // В режиме настройки mDNS на AP не работает — Web UI доступен по IP.
-    if (!g_setupMode && MDNS.begin(g_cfg.hostname)) {
-        Logger::infof("master", "mDNS: http://%s.local", g_cfg.hostname);
-        MDNS.addService("http", "tcp", 80);
-    }
-
-    // NTP (ТЗ_Веб §7.5): синхронизация времени из STA-сети.
-    if (!g_setupMode && g_cfg.ntpEnabled && WiFi.status() == WL_CONNECTED) {
-        configTime(0, 0, g_cfg.ntpServer);
-        setenv("TZ", g_cfg.timezone, 1);
-        tzset();
-        Logger::infof("master", "NTP: %s (tz %s)", g_cfg.ntpServer, g_cfg.timezone);
-    }
-
-    // Проверка интернета (ТЗ_Веб §7): активна при STA-подключении.
-    g_internet.configure(g_cfg.netCheckUrl, g_cfg.netCheckIntervalSec,
-                         g_cfg.netCheckTimeoutMs, g_cfg.netCheckEnabled && !g_setupMode);
-    g_internet.start(httpInternetCheck, millis());
-    g_webServer.setInternetChecker(&g_internet);
-    g_webServer.setLogs(&g_logs);
-    // REPO_AUDIT: хуки DSP-мьютекса раньше не регистрировались — обработчики
-    // /api/volume|mute|crossover|delay работали без сериализации с loop().
-    g_webServer.setDspLockHooks(dspLockAcquire, dspLockRelease);
-    // Задача интернет-чека: блокирующий HTTP выполняется вне loop.
-    xTaskCreate(internetCheckTask, "netcheck", 4096, nullptr, 1, nullptr);
-    g_logs.addf(LogCat::Boot, 1, "master booted, mode %s", wifiModeToString(g_cfg.wifiMode));
-
-    // Web UI: в режиме настройки — на AP (http://192.168.4.1), иначе — по IP/mDNS.
-    g_webServer.begin();
-    if (g_setupMode) {
-        Logger::infof("master", "Wi-Fi setup: connect to AP '%s', open http://192.168.4.1",
-                      g_cfg.wifiApSsid);
-    } else {
-        Logger::infof("master", "Web UI: http://%s", WiFi.localIP().toString().c_str());
-    }
-
-    // Captive portal (B9): при активном AP перехватываем DNS (любой домен →
-    // softAPIP()), чтобы телефон автоматически открыл страницу настройки.
-    if (WiFi.getMode() & WIFI_AP) {
-        if (g_dns.start(53, "*", WiFi.softAPIP())) {
-            Logger::info("master", "DNS captive portal: * -> softAPIP");
-        } else {
-            Logger::error("master", "DNS start failed (port 53 busy?)");
-        }
-    }
-
-    // UDP-listener аудио от смартфона (Этап 2: приём PCM-пакетов).
-    if (g_udp.begin(g_cfg.udpAudioPort)) {
-        Logger::infof("master", "UDP audio listener on port %u", g_cfg.udpAudioPort);
-    } else {
-        Logger::error("master", "UDP begin failed");
-    }
-
-    // C3.1: UDP-транспорт TX на сателлиты (порт 4210, discovery/аудио).
-    if (g_cfg.transport == TransportMode::Udp) {
-        if (g_udpTx.begin()) {
-            Logger::infof("master", "UDP TX to satellites on port %u", UdpTransport::kDefaultPort);
-        } else {
-            Logger::error("master", "UDP TX begin failed");
-        }
-    }
-
-    // C3.1: установить указатель на транспорт для унифицированного вызова.
-    if (g_cfg.transport == TransportMode::EspNow) {
-        g_transport = &g_espnow;
-    } else {
-        g_transport = &g_udpTx;
-    }
-
-    // I2S-выход (C1.4): PCM5102A на пинах BCK/WS/DATA, сабвуфер — моно (L=R).
-    I2sOutputPins i2sPins = {(int)g_cfg.i2sBck, (int)g_cfg.i2sWs, (int)g_cfg.i2sDataOut};
-    if (g_i2sOut.init(i2sPins, g_cfg.sampleRate, /*mono=*/true)) {
-        g_i2sOn = true;
-        Logger::infof("audio", "I2S out: %u Hz, mono (L=R), pins %u/%u/%u",
-                      (unsigned)g_cfg.sampleRate, g_cfg.i2sBck, g_cfg.i2sWs, g_cfg.i2sDataOut);
-        Logger::info("audio", "I2S init OK");
-    } else {
-        Logger::error("audio", "I2S init failed");
-    }
-    Logger::info("master", "setup complete, entering loop");
+    // TEMP: отключено для диагностики паники — всё после initWifi
+    // if (initEspNow()) {
+    //     Logger::info("master", "ESP-NOW ready (satellite heartbeat RX)");
+    //     // A9: создать FreeRTOS-очередь для RX ESP-NOW.
+    //     g_espNowRxQueue = xQueueCreate(kEspNowRxPoolSize, sizeof(uint8_t));
+    //     if (!g_espNowRxQueue) {
+    //         Logger::error("master", "ESP-NOW rx queue create failed");
+    //     }
+    // } else {
+    //     Logger::error("master", "ESP-NOW init failed");
+    // }
+    //
+    // // mDNS
+    // if (!g_setupMode && MDNS.begin(g_cfg.hostname)) {
+    //     Logger::infof("master", "mDNS: http://%s.local", g_cfg.hostname);
+    //     MDNS.addService("http", "tcp", 80);
+    // }
+    //
+    // // NTP
+    // if (!g_setupMode && g_cfg.ntpEnabled && WiFi.status() == WL_CONNECTED) {
+    //     configTime(0, 0, g_cfg.ntpServer);
+    //     setenv("TZ", g_cfg.timezone, 1);
+    //     tzset();
+    //     Logger::infof("master", "NTP: %s (tz %s)", g_cfg.ntpServer, g_cfg.timezone);
+    // }
+    //
+    // // Интернет-чек
+    // g_internet.configure(...);
+    // g_internet.start(...);
+    // xTaskCreate(internetCheckTask, "netcheck", 4096, nullptr, 1, nullptr);
+    //
+    // // Web UI
+    // g_webServer.begin();
+    // ...
+    //
+    // // Captive portal
+    // if (WiFi.getMode() & WIFI_AP) { ... }
+    //
+    // // UDP listener
+    // if (g_udp.begin(g_cfg.udpAudioPort)) { ... }
+    //
+    // // UDP TX transport
+    // if (g_cfg.transport == TransportMode::Udp) { ... }
+    //
+    // // Указатель на транспорт
+    // if (g_cfg.transport == TransportMode::EspNow) {
+    //     g_transport = &g_espnow;
+    // } else {
+    //     g_transport = &g_udpTx;
+    // }
+    //
+    // // I2S
+    // I2sOutputPins i2sPins = ...;
+    // if (g_i2sOut.init(...)) { ... }
+    //
+    Logger::info("master", "setup complete, entering loop (diagnostic)");
 
     // F12: OLED дисплей — отключено (I2C нестабилен на этой плате).
     // if (g_display.begin()) {
@@ -1223,315 +1187,17 @@ static void appLoop() {
         Logger::info("master", "loop() started");
         loopLogged = true;
     }
-    // C5.5: замер занятости loop() (без учёта delay).
-    uint32_t t0 = micros();
-    // Приём UDP-аудио со смартфона (C2.1, §9): разбор пакета → UdpAudioReceiver
-    // (sequence/concealment) → DSP (volume → tone → limiter → LR4 crossover) →
-    // sub → DelayLine → JitterBuffer (PSRAM) → I2S. left/right (HPF) — Этап 3.
-    // REPO_AUDIT: несколько пакетов за тик — при burst'е после потери loop не
-    // отстаёт от сети (ограничение — чтобы не зациклиться на flood).
-    for (int pkt = 0; pkt < 8; pkt++) {
-    int packetSize = g_udp.parsePacket();
-    if (packetSize <= 0) break;
-    {
-        int n = g_udp.read(g_udpAudioBuffer, sizeof(g_udpAudioBuffer));
-        g_packetsRx++;
-        g_packetBytesRx += static_cast<uint32_t>(n);
-
-        UdpAudioHeader hdr;
-        const uint8_t* payload;
-        size_t payloadSize;
-        UdpAuthResult auth = parseUdpPacket(g_udpAudioBuffer, static_cast<size_t>(n),
-                                            reinterpret_cast<const uint8_t*>(AUDIO_UDP_AUTH_KEY),
-                                            strlen(AUDIO_UDP_AUTH_KEY),
-                                            hdr, payload, payloadSize);
-        if (auth == UdpAuthResult::Invalid) {
-            g_udpAuthFail++;
-            continue; // отбрасываем пакет с неверным HMAC
-        }
-        // V4: если ключ настроен, принимаем только аутентифицированные пакеты
-        // (0xA211 с верным HMAC). Неаутентифицированные (0xA210) отбрасываются.
-        if (auth == UdpAuthResult::Unauthenticated) {
-            if (AUDIO_UDP_AUTH_KEY[0] != '\0') {
-                g_udpAuthFail++;
-                continue; // ключ настроен — 0xA210 не принимаются
-            }
-            g_udpAuthUnauth++;
-            Logger::warnf("udp", "неаутентифицированный пакет (магия 0xA210), seq=%u", hdr.sequence);
-        } else {
-            g_udpAuthOk++;
-        }
-        size_t nSamples = payloadSize / sizeof(int16_t);
-            const int16_t* pcm = reinterpret_cast<const int16_t*>(payload);
-            size_t nMono = nSamples / 2;
-
-            // Сначала feed(): обновляет состояние потока, чтобы concealGain()
-            // ниже вернул актуальный множитель маскирования потерь.
-            StreamState st = g_audioRecv.feed(hdr.sequence, hdr.timestampSamples,
-                                              pcm, nSamples, millis());
-            if (st == StreamState::Active || st == StreamState::Conceal) {
-            // DSP: стерео → sub (моно-микс → LPF) + left/right (HPF) для TX.
-            // При потерях — плавное затухание (concealGain), затем задержка сабвуфера.
-                float gain = g_audioRecv.concealGain();
-                static int16_t s_mono[sizeof(g_udpAudioBuffer) / sizeof(int16_t)];
-                // REPO_AUDIT: мьютекс сериализует process()/DelayLine с
-                // веб-обработчиками; tryLock — аудио не блокируется, при
-                // занятом мьютексе пакет пропускается (следующий применит).
-                DspTryLock dspGuard(g_dspLock);
-                if (dspGuard) {
-                for (size_t i = 0, o = 0; i + 1 < nSamples; i += 2, o++) {
-                    PipelineOutput out = g_pipeline.process(pcm[i], pcm[i + 1]);
-                    float sub = out.sub * gain;
-                    if (sub > 1.0f) sub = 1.0f;
-                    else if (sub < -1.0f) sub = -1.0f;
-                    int16_t s = static_cast<int16_t>(sub * 32767.0f);
-                    if (g_delaySub) s = g_delaySub->process(s);
-                    s_mono[o] = s;
-
-                    // C3.1: left/right каналы (HPF) → батч → пакеты на сателлиты.
-                    float lf = out.left * gain;
-                    float rf = out.right * gain;
-                    if (lf > 1.0f) lf = 1.0f; else if (lf < -1.0f) lf = -1.0f;
-                    if (rf > 1.0f) rf = 1.0f; else if (rf < -1.0f) rf = -1.0f;
-                    g_txLeft[g_txCount] = static_cast<int16_t>(lf * 32767.0f);
-                    g_txRight[g_txCount] = static_cast<int16_t>(rf * 32767.0f);
-                    g_txCount++;
-                    g_txBatchLastMs = millis();
-                    if (g_txCount >= kBatchSamples) flushTxBatch();
-                    esp_task_wdt_reset(); // flushTxBatch может блокировать при отправке ESP-NOW
-                }
-                if (g_jitter) g_jitter->push(s_mono, nMono);
-                }
-            }
-            g_audioActive = (st != StreamState::Standby);
-        }
-    }
-    g_audioActive = (g_audioRecv.state() != StreamState::Standby);
-
-    // REPO_AUDIT: эскалация состояния потока по времени (Conceal→RampOut→
-    // Standby) раньше не происходила — tick() никто не вызывал, и при
-    // остановке источника g_audioActive оставался true навсегда.
-    g_audioRecv.tick(millis());
-    g_audioActive = (g_audioRecv.state() != StreamState::Standby);
-
-    // REPO_AUDIT: недобатч L/R залипал без отправки при паузе потока —
-    // сателлиты теряли до 2.4 мс звука и рассинхронизировались с субом.
-    // Стале-батч (>50 мс без пополнения) досылаем принудительно.
-    if (g_txCount > 0 && millis() - g_txBatchLastMs >= 50) flushTxBatch();
-    esp_task_wdt_reset(); // стале-батч может блокировать при отправке ESP-NOW
-
-    // Драйвер аудио-выхода: paced-вычитывание из jitter-буфера в I2S.
-    // Целевое число семплов — по прошедшему времени (задел на случай, если
-    // loop задержался; лимит сверху защищает от догоняющего взрыва после
-    // блокирующей операции Wi-Fi).
-    uint32_t nowMs = millis();
-    int32_t elapsed = static_cast<int32_t>(nowMs - g_audioOutLastMs);
-    if (elapsed < 0) elapsed = 0;
-    if (elapsed > 100) elapsed = 100; // не догоняем больше 100 мс за тик
-    g_audioOutLastMs = nowMs;
-    audioOutTick(static_cast<uint32_t>(elapsed) * g_cfg.sampleRate / 1000u);
-    esp_task_wdt_reset(); // I2S write может блокировать при задержке DMA
-    static bool audioLogged = false;
-    if (!audioLogged) {
-        Logger::info("master", "audioOutTick OK");
-        audioLogged = true;
-    }
-
-    // C3.1: обновление транспорта (UDP receive+discovery или ESP-NOW no-op).
-    g_transport->update();
-
-    // Тестовый тон (C1.4) — не блокирует loop.
-    toneTick();
-
-    // Статус сателлитов: online, пока приходит heartbeat (discovery-response).
-    uint32_t now = millis();
-    bool leftWas = g_leftOnline;
-    bool rightWas = g_rightOnline;
-    if (g_leftOnline && (now - g_leftLastSeenMs > kSatelliteTimeoutMs)) g_leftOnline = false;
-    if (g_rightOnline && (now - g_rightLastSeenMs > kSatelliteTimeoutMs)) g_rightOnline = false;
-    // N3: SSE — уведомляем Web UI об изменении статуса сателлита.
-    if (leftWas != g_leftOnline || rightWas != g_rightOnline) {
-        char buf[128];
-        snprintf(buf, sizeof(buf), "{\"left\":\"%s\",\"right\":\"%s\"}",
-                 g_leftOnline ? "online" : "offline",
-                 g_rightOnline ? "online" : "offline");
-        g_webServer.sseBroadcast("satellite", buf);
-    }
-
-    // Discovery-запрос сателлитам: пока кто-то offline — каждые 2 с, чтобы
-    // они перешли на unicast-heartbeat. Когда оба online, эфир не мусорим
-    // (heartbeat приходит и так); новый/перезагруженный сателлит сам пошлёт
-    // broadcast-heartbeat, по которому мастер восстановит статус.
-    if (now - g_lastDiscoveryMs >= kDiscoveryIntervalMs && (!g_leftOnline || !g_rightOnline)) {
-        g_lastDiscoveryMs = now;
-        sendDiscoveryRequest();
-    }
-
-    g_console.update();
-
-    // C4.x: энкодер + OLED-меню — отключено (OLED убран).
-    // handleEncoder();
-
-    // A9: drain очереди RX ESP-NOW (обработка из loop, не из коллбека).
-    if (g_espNowRxQueue) {
-        uint8_t idx;
-        while (xQueueReceive(g_espNowRxQueue, &idx, 0) == pdTRUE) {
-            const EspNowRxPacket& pkt = g_espNowRxPool[idx];
-            onEspNowPacketProcess(pkt.data, pkt.size, pkt.from);
-        }
-    }
-
-    // Web UI: обработка запросов и сохранение конфига по кнопке.
-    g_webServer.handleClient();
-    esp_task_wdt_reset(); // handleClient может блокировать при отсутствии клиентов
-    static bool webLogged = false;
-    if (!webLogged) {
-        Logger::info("master", "webServer.handleClient OK");
-        webLogged = true;
-    }
-    if (g_webServer.saveRequested()) {
-        ConfigStorage::save(g_cfg);
-        g_webServer.clearSaveRequested();
-        Logger::info("master", "config saved via Web UI");
-        g_logs.addf(LogCat::Config, 1, "config saved via Web UI");
-    }
-
-    // R-1: reboot/factory reset выполняются здесь (в loop), а не внутри
-    // обработчика роута — ответ клиенту уже отправлен, аудио не рвётся
-    // посреди HTTP-колбэка, и библиотечный класс не диктует ESP.restart().
-    if (g_webServer.factoryResetRequested()) {
-        g_webServer.clearFactoryResetRequested();
-        g_webServer.clearRebootRequested();
-        Logger::warn("master", "factory reset requested via Web UI");
-        ConfigStorage::erase();
-        WifiStore::clearAll();
-        delay(50);
-        ESP.restart();
-    }
-    if (g_webServer.rebootRequested()) {
-        g_webServer.clearRebootRequested();
-        Logger::info("master", "reboot requested via Web UI");
-        ConfigStorage::save(g_cfg); // сохранить несохранённые изменения перед рестартом
-        delay(50);
-        ESP.restart();
-    }
-    // H-3: OTA-рестарт тоже исполняется здесь, а не в upload-колбэке —
-    // ответ клиенту успевает уйти, браузер видит успех прошивки.
-    if (g_webServer.updateRebootRequested()) {
-        g_webServer.clearUpdateRebootRequested();
-        Logger::info("master", "OTA update applied, rebooting");
-        delay(200); // запас на доставку HTTP-ответа
-        ESP.restart();
-    }
-
-    // C6.2: авто-переподключение STA при обрыве в рантайме (ТЗ §16.3,
-    // ТЗ_Веб §21). Только для режимов STA/APSTA — ApDirect не подключается к upstream.
-    if (g_cfg.wifiMode == WifiMode::ApDirect || g_setupMode) {
-        // В режиме ApDirect не подключаемся к upstream сети.
-        g_wifiWasConnected = false;
-    } else {
-        wl_status_t st = WiFi.status();
-        if (st == WL_CONNECTED) {
-            g_wifiWasConnected = true;
-        } else if (g_wifiWasConnected && !g_reconnectPending) {
-            Logger::warn("wifi", "STA lost — auto reconnect");
-            g_logs.addf(LogCat::Wifi, 2, "STA lost — auto reconnect");
-            WiFi.setAutoReconnect(false);
-            esp_task_wdt_reset();
-            WiFi.disconnect(false, true);
-            esp_task_wdt_reset();
-            delay(200);
-            applyStaticIpFromProfile(); // C5.1
-            esp_task_wdt_reset();
-            WiFi.begin(g_cfg.wifiSsid, g_cfg.wifiPassword);
-            esp_task_wdt_reset();
-            g_reconnectPending = true;
-            g_reconnectAtMs = millis();
-        }
-    }
-
-    // Интернет-чек (ТЗ_Веб §7.4): выполняется в отдельной задаче, чтобы
-    // блокирующий HTTP (DNS + connect + read) не замораживал loop и Web UI.
-    static NetStatus lastLoggedNet = NetStatus::Disabled;
-    if (g_internet.status() != lastLoggedNet) {
-        lastLoggedNet = g_internet.status();
-        g_logs.addf(LogCat::Internet, 1, "internet check: %s (%lu ms)",
-                    g_internet.statusName(), (unsigned long)g_internet.latencyMs());
-    }
-
-    // Переподключение Wi-Fi по запросу Web UI (POST /api/wifi/connect).
-    // В режиме ApDirect не подключаемся к upstream сети.
-    if (g_webServer.reconnectRequested() && g_cfg.wifiMode != WifiMode::ApDirect) {
-        g_webServer.clearReconnectRequested();
-        Logger::infof("wifi", "reconnect requested via Web UI (ssid %s)", g_cfg.wifiSsid);
-        g_logs.addf(LogCat::Wifi, 1, "reconnect requested: %s", g_cfg.wifiSsid);
-        bool keepAp = g_cfg.wifiMode == WifiMode::ApSta || g_cfg.wifiMode == WifiMode::ApDirect;
-        if (keepAp && WiFi.getMode() == WIFI_AP) {
-            // AP уже поднят — перезапускаем только STA-часть, чтобы не терять
-            // канал ESP-NOW (связь с сателлитами живёт без аудио-пакетов).
-            WiFi.mode(WIFI_AP_STA);
-        } else if (!keepAp) {
-            WiFi.mode(WIFI_STA);
-        }
-        esp_task_wdt_reset();
-        WiFi.disconnect(false, true);
-        esp_task_wdt_reset();
-        delay(200);
-        WiFi.begin(g_cfg.wifiSsid, g_cfg.wifiPassword);
-        esp_task_wdt_reset();
-        g_reconnectPending = true;
-        g_reconnectAtMs = millis();
-    }
-
-    // Fallback: reconnect STA не удался за лимит — поднять setup AP, чтобы
-    // Web UI оставался доступным (и связь с сателлитами не потерялась).
-    if (g_reconnectPending) {
-        wl_status_t st = WiFi.status();
-        if (st == WL_CONNECTED) {
-            g_reconnectPending = false;
-            Logger::infof("wifi", "reconnect OK, IP: %s", WiFi.localIP().toString().c_str());
-        } else if (st == WL_NO_SSID_AVAIL || st == WL_CONNECT_FAILED ||
-                   st == WL_CONNECTION_LOST || (millis() - g_reconnectAtMs > kReconnectTimeoutMs)) {
-            g_reconnectPending = false;
-            WiFi.setAutoReconnect(false);
-            esp_task_wdt_reset();
-            WiFi.disconnect(false, true);
-            esp_task_wdt_reset();
-            if (g_cfg.wifiMode != WifiMode::ApDirect) {
-                Logger::warn("wifi", "reconnect failed — setup AP");
-                g_setupMode = true;
-                startSetupAp();
-            } else {
-                Logger::warn("wifi", "reconnect failed — AP remains, setup mode");
-                g_setupMode = true;
-            }
-        }
-    }
-
-    // Captive portal: обработать DNS-запросы телефона (no-op, если не запущен).
-    g_dns.processNextRequest();
-    esp_task_wdt_reset(); // DNS может блокировать при активном captive portal
-
-    // C5.5: занятость = время до delay; усреднение за 2 с → Web UI.
-    g_cpuBusyUs += (micros() - t0);
+    // TEMP: минимальный loop для диагностики паники
+    esp_task_wdt_reset();
     delay(10);
-    esp_task_wdt_reset(); // сброс перед следующей итерацией loop
-    g_cpuTotalUs += (micros() - t0);
-    uint32_t cpuNow = millis();
-    if (cpuNow - g_cpuLastReportMs >= 2000) {
-        g_cpuLastReportMs = cpuNow;
-        uint32_t total = g_cpuTotalUs;
-        g_cpuLoadPercent = total ? (uint32_t)((uint64_t)g_cpuBusyUs * 100 / total) : 0;
-        g_cpuBusyUs = 0;
-        g_cpuTotalUs = 0;
-        g_webServer.setCpuLoadPercent(g_cpuLoadPercent);
-    }
+    esp_task_wdt_reset();
 }
 
 // Обёртка Arduino: цикл вызывается в try/catch — исключение из стека
 // библиотек (std::bad_alloc, std::out_of_range в обработчиках Web UI) не
 // должно убивать задачу loop через std::terminate (REPO_AUDIT).
 void loop() {
+    esp_task_wdt_reset(); // сброс WDT на входе в loop
     try {
         appLoop();
     } catch (const std::exception& e) {
