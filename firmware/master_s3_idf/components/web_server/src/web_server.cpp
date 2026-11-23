@@ -498,17 +498,14 @@ esp_err_t WebServer::onPostWifi(httpd_req_t* req)
 
 esp_err_t WebServer::onSSE(httpd_req_t* req)
 {
-    // Упрощённая реализация SSE — отправляем заголовки и удерживаем соединение
+    // Упрощённая реализация SSE — отправляем событие и завершаем соединение
+    // Клиент может переподключиться для получения следующего события
     httpd_resp_set_type(req, "text/event-stream");
     httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
-    httpd_resp_set_hdr(req, "Connection", "keep-alive");
+    httpd_resp_set_hdr(req, "Connection", "close");
 
     const char* msg = "data: {\"type\":\"connected\"}\n\n";
-    httpd_resp_send(req, msg, strlen(msg));
-
-    // Удерживаем соединение 30 секунд
-    vTaskDelay(pdMS_TO_TICKS(30000));
-    return ESP_OK;
+    return httpd_resp_send(req, msg, strlen(msg));
 }
 
 esp_err_t WebServer::onGetRoot(httpd_req_t* req)

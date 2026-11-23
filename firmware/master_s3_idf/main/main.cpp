@@ -245,6 +245,10 @@ public:
     void onPcm(const int16_t* data, size_t nSamplesPerChannel) override
     {
         // Обрабатываем стерео PCM через DSP конвейер
+        // Накапливаем семплы в батч для эффективной записи в I2S DMA
+        static int16_t outBuf[128];
+        static size_t outIdx = 0;
+
         for (size_t i = 0; i < nSamplesPerChannel; i++) {
             int16_t l = data[i * 2];
             int16_t r = data[i * 2 + 1];
@@ -256,10 +260,15 @@ public:
             // DelayLine.process принимает int16_t и возвращает задержанный семпл
             subSample = g_delaySub.process(subSample);
 
-            // I2S вывод (моно сабвуфер)
-            if (g_i2sOn) {
-                int16_t outBuf[1] = { subSample };
-                g_i2sOut.write(outBuf, 1, 10);
+            // Накапливаем в батч
+            outBuf[outIdx++] = subSample;
+
+            // Пишем батч когда заполнен или конец входных данных
+            if (outIdx >= 128 || i == nSamplesPerChannel - 1) {
+                if (g_i2sOn && outIdx > 0) {
+                    g_i2sOut.write(outBuf, outIdx, 100);
+                }
+                outIdx = 0;
             }
         }
     }
@@ -313,6 +322,12 @@ static esp_err_t wifi_init_softap(void)
 static esp_err_t wifi_reconfigure(void)
 {
     ESP_LOGW(TAG, "Wi-Fi reconfiguration requested");
+
+    // Проверяем, был ли Wi-Fi инициализирован
+    if (!g_wifi_inited) {
+        ESP_LOGW(TAG, "Wi-Fi not initialized, skipping reconfigure");
+        return ESP_OK;
+    }
 
     // Останавливаем Wi-Fi
     esp_err_t ret = esp_wifi_stop();
@@ -492,12 +507,24 @@ extern "C" void app_main(void)
         loopCounter++;
 
         // Приём UDP аудио (неблокирующий, таймаут 10 мс)
-        g_udpAudio.receive(10, &g_udpHandler);
+        g_udpAudio.receive(1, &g_udpHandler);
 
-        // Каждые 5 секунд логируем статус
-        if (loopCounter % 100 == 0) {
+        // Каждые 5 секунд логируем статус и проверяем сателлиты
+        if (loopCounter % 500 == 0) {
             ESP_LOGI(TAG, "loop: heap=%" PRIu32 " bytes, counter=%" PRIu32,
                      esp_get_free_heap_size(), loopCounter);
+
+            // Проверяем таймаут сателлитов (5 секунд без heartbeat = оффлайн)
+            TickType_t now = xTaskGetTickCount();
+            uint32_t nowMs = now * portTICK_PERIOD_MS;
+            for (size_t i = 0; i < 2; i++) {
+                if (g_espnow.satellite(i).online &&
+                    nowMs - g_espnow.satellite(i).lastSeenMs > 5000) {
+                    ESP_LOGW(TAG, "satellite %zu offline (no heartbeat for %" PRIu32 " ms)",
+                             i, nowMs - g_espnow.satellite(i).lastSeenMs);
+                    // Не сбрасываем online здесь — пусть Web UI показывает последний известный статус
+                }
+            }
         }
 
         // Сброс watchdog

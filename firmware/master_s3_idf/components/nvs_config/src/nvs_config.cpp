@@ -3,6 +3,7 @@
 #include "esp_log.h"
 #include <string.h>
 #include <inttypes.h>
+#include "freertos/FreeRTOS.h"
 
 namespace audio21 {
 
@@ -143,6 +144,15 @@ esp_err_t NvsConfig::save(const NodeConfig& cfg)
     if (!m_initialized || m_handle == 0) {
         return ESP_ERR_INVALID_STATE;
     }
+
+    // Дебаунс: не сохранять чаще 1 раза в 5 секунд, чтобы не изнашивать flash
+    static TickType_t lastSaveTick = 0;
+    TickType_t now = xTaskGetTickCount();
+    if (now - lastSaveTick < pdMS_TO_TICKS(5000)) {
+        ESP_LOGD(TAG, "Save debounced, skipping");
+        return ESP_OK;
+    }
+    lastSaveTick = now;
 
     esp_err_t ret;
 

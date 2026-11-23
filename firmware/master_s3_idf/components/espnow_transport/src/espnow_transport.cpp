@@ -2,6 +2,7 @@
 #include "espnow_transport.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
+#include "freertos/FreeRTOS.h"
 #include <string.h>
 
 namespace audio21 {
@@ -180,10 +181,14 @@ void EspNowTransport::handleRecv(const uint8_t* srcMac, const uint8_t* data, siz
 
 void EspNowTransport::updateSatellite(const uint8_t* srcMac, int8_t rssi)
 {
+    TickType_t now = xTaskGetTickCount();
+    uint32_t nowMs = now * portTICK_PERIOD_MS;
+
     for (size_t i = 0; i < 2; i++) {
         if (memcmp(m_satellites[i].mac, srcMac, 6) == 0) {
             m_satellites[i].online = true;
             m_satellites[i].rssi = rssi;
+            m_satellites[i].lastSeenMs = nowMs;
             ESP_LOGI(TAG, "satellite %zu online (RSSI=%d)", i, rssi);
             return;
         }
@@ -194,6 +199,7 @@ void EspNowTransport::updateSatellite(const uint8_t* srcMac, int8_t rssi)
             memcpy(m_satellites[i].mac, srcMac, 6);
             m_satellites[i].online = true;
             m_satellites[i].rssi = rssi;
+            m_satellites[i].lastSeenMs = nowMs;
             ESP_LOGI(TAG, "new satellite %zu: %02x:%02x:%02x:%02x:%02x:%02x (RSSI=%d)", i,
                      srcMac[0], srcMac[1], srcMac[2], srcMac[3], srcMac[4], srcMac[5], rssi);
             return;
