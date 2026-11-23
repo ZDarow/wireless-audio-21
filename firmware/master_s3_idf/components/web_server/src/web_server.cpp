@@ -105,6 +105,22 @@ esp_err_t WebServer::init(uint16_t port)
     };
     httpd_register_uri_handler(m_server, &uriPostOta);
 
+    httpd_uri_t uriGetWifi = {
+        .uri = "/api/wifi",
+        .method = HTTP_GET,
+        .handler = onGetWifi,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(m_server, &uriGetWifi);
+
+    httpd_uri_t uriPostWifi = {
+        .uri = "/api/wifi",
+        .method = HTTP_POST,
+        .handler = onPostWifi,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(m_server, &uriPostWifi);
+
     httpd_uri_t uriSSE = {
         .uri = "/api/events",
         .method = HTTP_GET,
@@ -367,6 +383,68 @@ esp_err_t WebServer::onPostOta(httpd_req_t* req)
         ESP_LOGE(TAG, "OTA callback failed: %s", esp_err_to_name(ret));
     }
     return ESP_OK;
+}
+
+esp_err_t WebServer::onGetWifi(httpd_req_t* req)
+{
+    WebServer* self = static_cast<WebServer*>(req->user_ctx);
+    if (!self || !self->m_cb || !self->m_cb->getWifiConfig) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    char buf[512];
+    int len = self->m_cb->getWifiConfig(buf, sizeof(buf));
+    if (len < 0) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    return self->sendJson(req, buf);
+}
+
+esp_err_t WebServer::onPostWifi(httpd_req_t* req)
+{
+    WebServer* self = static_cast<WebServer*>(req->user_ctx);
+    if (!self || !self->m_cb || !self->m_cb->setWifiConfig) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    char buf[512];
+    esp_err_t ret = self->readBody(req, buf, sizeof(buf));
+    if (ret != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, NULL);
+        return ESP_FAIL;
+    }
+
+    cJSON* json = cJSON_Parse(buf);
+    if (!json) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, NULL);
+        return ESP_FAIL;
+    }
+
+    cJSON* modeItem = cJSON_GetObjectItemCaseSensitive(json, "mode");
+    cJSON* apSsidItem = cJSON_GetObjectItemCaseSensitive(json, "apSsid");
+    cJSON* apPwdItem = cJSON_GetObjectItemCaseSensitive(json, "apPassword");
+    cJSON* staSsidItem = cJSON_GetObjectItemCaseSensitive(json, "staSsid");
+    cJSON* staPwdItem = cJSON_GetObjectItemCaseSensitive(json, "staPassword");
+
+    const char* mode = modeItem && cJSON_IsString(modeItem) ? modeItem->valuestring : "ap";
+    const char* apSsid = apSsidItem && cJSON_IsString(apSsidItem) ? apSsidItem->valuestring : nullptr;
+    const char* apPwd = apPwdItem && cJSON_IsString(apPwdItem) ? apPwdItem->valuestring : nullptr;
+    const char* staSsid = staSsidItem && cJSON_IsString(staSsidItem) ? staSsidItem->valuestring : nullptr;
+    const char* staPwd = staPwdItem && cJSON_IsString(staPwdItem) ? staPwdItem->valuestring : nullptr;
+
+    cJSON_Delete(json);
+
+    ret = self->m_cb->setWifiConfig(mode, apSsid, apPwd, staSsid, staPwd);
+    if (ret != ESP_OK) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    return self->sendJson(req, "{\"ok\":true}");
 }
 
 esp_err_t WebServer::onSSE(httpd_req_t* req)

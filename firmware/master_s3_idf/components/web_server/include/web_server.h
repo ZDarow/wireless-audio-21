@@ -34,6 +34,16 @@ struct WebServerCallbacks {
 
     // OTA обновление по URL (принимает URL прошивки)
     esp_err_t (*otaUpdate)(const char* url);
+
+    // Получить текущую конфигурацию Wi-Fi (JSON в buf, размер bufSize)
+    int (*getWifiConfig)(char* buf, size_t bufSize);
+
+    // Установить конфигурацию Wi-Fi (mode: "ap"/"sta"/"apsta")
+    esp_err_t (*setWifiConfig)(const char* mode,
+                               const char* apSsid,
+                               const char* apPassword,
+                               const char* staSsid,
+                               const char* staPassword);
 };
 
 class WebServer {
@@ -67,6 +77,8 @@ private:
     static esp_err_t onPostReboot(httpd_req_t* req);
     static esp_err_t onPostFactoryReset(httpd_req_t* req);
     static esp_err_t onPostOta(httpd_req_t* req);
+    static esp_err_t onGetWifi(httpd_req_t* req);
+    static esp_err_t onPostWifi(httpd_req_t* req);
     static esp_err_t onSSE(httpd_req_t* req);
     static esp_err_t onGetRoot(httpd_req_t* req);
     static esp_err_t onNotFound(httpd_req_t* req);

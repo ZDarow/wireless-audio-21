@@ -76,7 +76,7 @@ static int getStatusCallback(char* buf, size_t bufSize)
     int len = snprintf(buf, bufSize,
         "{\"sampleRate\":%" PRIu32 ",\"volume\":%d,\"crossoverHz\":%d,"
         "\"i2sOn\":%s,\"jitterAvailable\":%" PRIu32 ",\"espNowSatellites\":2,"
-        "\"hostname\":\"%s\",\"wifiApSsid\":\"%s\"}",
+        "\"hostname\":\"%s\",\"wifiApSsid\":\"%s\",\"wifiMode\":\"ap\"}",
         kSampleRate, g_cfg.volume, g_cfg.crossoverHz,
         g_i2sOn ? "true" : "false", g_jitter.available(),
         g_cfg.hostname, g_cfg.wifiApSsid);
@@ -149,6 +149,52 @@ static esp_err_t otaUpdateCallback(const char* url)
     return ota_update_start(url);
 }
 
+static int getWifiConfigCallback(char* buf, size_t bufSize)
+{
+    int len = snprintf(buf, bufSize,
+        "{\"mode\":\"ap\",\"apSsid\":\"%s\",\"apPassword\":\"%s\","
+        "\"staSsid\":\"%s\",\"staPassword\":\"%s\"}",
+        g_cfg.wifiApSsid, g_cfg.wifiApPassword,
+        g_cfg.wifiSsid, g_cfg.wifiPassword);
+    return len;
+}
+
+static esp_err_t setWifiConfigCallback(const char* mode,
+                                       const char* apSsid,
+                                       const char* apPassword,
+                                       const char* staSsid,
+                                       const char* staPassword)
+{
+    ESP_LOGW(TAG, "Wi-Fi config requested: mode=%s", mode ? mode : "ap");
+
+    if (apSsid) {
+        strncpy(g_cfg.wifiApSsid, apSsid, sizeof(g_cfg.wifiApSsid) - 1);
+        g_cfg.wifiApSsid[sizeof(g_cfg.wifiApSsid) - 1] = '\0';
+    }
+    if (apPassword) {
+        strncpy(g_cfg.wifiApPassword, apPassword, sizeof(g_cfg.wifiApPassword) - 1);
+        g_cfg.wifiApPassword[sizeof(g_cfg.wifiApPassword) - 1] = '\0';
+    }
+    if (staSsid) {
+        strncpy(g_cfg.wifiSsid, staSsid, sizeof(g_cfg.wifiSsid) - 1);
+        g_cfg.wifiSsid[sizeof(g_cfg.wifiSsid) - 1] = '\0';
+    }
+    if (staPassword) {
+        strncpy(g_cfg.wifiPassword, staPassword, sizeof(g_cfg.wifiPassword) - 1);
+        g_cfg.wifiPassword[sizeof(g_cfg.wifiPassword) - 1] = '\0';
+    }
+
+    // Сохраняем в NVS
+    esp_err_t ret = g_nvsConfig.save(g_cfg);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to save Wi-Fi config to NVS: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "Wi-Fi config saved to NVS: apSsid=%s", g_cfg.wifiApSsid);
+    return ESP_OK;
+}
+
 static const WebServerCallbacks g_webCallbacks = {
     .getStatus = getStatusCallback,
     .setVolume = setVolumeCallback,
@@ -158,6 +204,8 @@ static const WebServerCallbacks g_webCallbacks = {
     .reboot = rebootCallback,
     .factoryReset = factoryResetCallback,
     .otaUpdate = otaUpdateCallback,
+    .getWifiConfig = getWifiConfigCallback,
+    .setWifiConfig = setWifiConfigCallback,
 };
 
 // Коллбек приёма UDP аудио
