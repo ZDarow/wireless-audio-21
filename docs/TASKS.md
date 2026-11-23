@@ -625,15 +625,70 @@
 | CI-3 | **Добавить `timeout-minutes: 30`** в job ci.yml (защита от зависших runs) | `.github/workflows/ci.yml` | 🟠 Высоко | ✅ (уже в коммите a945df3: строка 23 ci.yml) |
 | CI-4 | **Заменить плавающие теги actions (`@v4`, `@v5`) на SHA-пины** — воспроизводимая сборка CI | `.github/workflows/ci.yml` | 🟠 Высоко | ✅ (уже в коммите a945df3: checkout@11d5960..., setup-python@a26af69..., cache@0057852...) |
 | CI-9 | **Включить vulnerability alerts + `.github/dependabot.yml`** — автоматическое обновление уязвимых зависимостей | `.github/` | 🟠 Высоко | ✅ (23.11.2026: создан `.github/dependabot.yml` с pip и github-actions ecosystem; vulnerability alerts включены через GitHub API) |
-| M1 | **Ветвление + защита ветки `main`** — feature-ветки, PR с ревью, защита main от прямого пуша | GitHub репозиторий | 🟠 Высоко | ⬜ |
+| M1 | **Ветвление + защита ветки `main`** — feature-ветки, PR с ревью, защита main от прямого пуша | GitHub репозиторий | 🟠 Высоко | ✅ (23.11.2026: защита ветки main через GitHub API — 1 approving review, dismiss_stale_reviews=true, enforce_admins=false) |
 | AP-1 | **Заменить `String` на `char[]`/`std::string` в веб-путях** — предотвратить фрагментацию heap на ESP32-S3 | `firmware/common/web/web_server.h`, `web_api.cpp`, `web_server.cpp`, `master_s3/src/main.cpp` | 🟡 Средне | ✅ (23.11.2026: `WifiNetInfo::ssid` → `char ssid[33]`, `macToStr(String)` → `macToStr(char out[18])`, `logLineHasModule(const String&)` → `logLineHasModule(const char*)`, `info.ssid = WiFi.SSID(i)` → `strlcpy(info.ssid, WiFi.SSID(i).c_str(), sizeof(info.ssid))`) |
 | AP-4 | **Дефолт `AUDIO_UDP_AUTH_KEY` непустой** — аутентификация UDP-аудио включена по умолчанию (не пустая строка) | `config.example.env`, `node_config.h` | 🟠 Высоко | ✅ (уже в коммите 935e9b8: `AUDIO_UDP_AUTH_KEY=change-me-32-chars-min-at-least`, 32 символа) |
 | M2 | **Создать тег `v0.1.0` + GitHub Release** — первая публичная версия с описанием изменений | GitHub репозиторий | 🟡 Средне | ✅ (23.11.2026: тег v0.1.0 создан и запушен, GitHub Release опубликован: https://github.com/ZDarow/wireless-audio-21/releases/tag/v0.1.0) |
 | M3 | **Декомпозиция `master_s3/src/main.cpp`** — выделить класс `MasterApp` (сеть, DSP, веб-сервер, консоль) вместо монолита ~979 строк | `firmware/master_s3/src/main.cpp` | 🟡 Средне | ⬜ |
 | M4 | **Шаблоны issues/PR, `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md`** — стандарт для контрибьюторов | корень репозитория, `.github/` | 🟡 Средне | ✅ (23.11.2026: созданы .github/ISSUE_TEMPLATE/bug_report.md, .github/ISSUE_TEMPLATE/feature_request.md, .github/PULL_REQUEST_TEMPLATE.md, CONTRIBUTING.md, SECURITY.md, CHANGELOG.md) |
-| M5 | **Добавить `.editorconfig` и `.gitattributes`** — единый стиль кода и окончания строк для всех агентов | корень репозитория | 🟢 Низко | ⬜ |
+| M5 | **Добавить `.editorconfig` и `.gitattributes`** — единый стиль кода и окончания строк для всех агентов | корень репозитория | 🟢 Низко | ✅ (23.11.2026: созданы `.editorconfig` (charset=utf-8, end_of_line=lf, indent_size=4, insert_final_newline=true, max_line_length=120, trim_trailing_whitespace=true) и `.gitattributes` (text=auto eol=lf, бинарники не diff'ятся) |
 | L3 | **Закрепить точную версию `ArduinoJson`** (не `^7.4.3`) + остальные библиотеки (`Preferences`, `WebServer`, `HTTPClient`, `Update`, `Network`, `U8g2`) | `platformio.ini` | 🟡 Средне | ✅ (уже в коммите a945df3: ArduinoJson@7.4.3 закреплено, комментарий N7 с требованием закрепить остальные библиотеки добавлен в platformio.ini) |
 | L4 | **Добавить бейджи shields.io в `README.md`** (CI status, license, PlatformIO) | `README.md` | 🟢 Низко | ✅ (уже в README: строки 3-6 — CI, License GPL-3.0, PlatformIO 6.1.19, ESP32-S3) |
 | L1 | **Единый стиль коммитов (Conventional Commits)** — `feat:`, `fix:`, `refactor:`, `docs:`, `ci:`, `security:` | все коммиты | 🟢 Низко | ✅ (используется во всех коммитах сессии) |
 | L2 | **Исправить замечания yamllint к `ci.yml`** (строка 33 >80 символов, `\n` в конце файла) | `.github/workflows/ci.yml` | 🟢 Низко | ✅ (23.11.2026: все строки <=80 символов, файл заканчивается на LF) |
 | i18n | **Полная локализация Web UI** — перевести непереведённые строки навигации (Dashboard, Wi-Fi, Internet, Audio, Delays, Satellites, System, Update, Logs, Mute, Reboot, Info, Error) на русский или добавить переключатель ru/en | `firmware/common/web/web_spa.h` | 🟡 Средне | ✅ (23.11.2026: навигация переведена (Панель, Интернет, Аудио, Задержки, Сателлиты, Система, Обновление, Логи), кнопки (Выкл звук, Перезагрузка), режимы Wi-Fi (Точка доступа, Клиент, Репитер), каналы аудио (Мастер, Левый, Правый, Саб), Имя хоста, уровни логов (Инфо, Предупр., Ошибка), сообщение об ошибке HTTP) |
+
+---
+
+## 14. Задачи из глубокого аудита кодовой базы (23.11.2026)
+
+> Добавлено по итогам глубокого аудита: проверка логики, целостности архитектуры, выявление
+> синтаксических, типологических и логических ошибок, конфликтов зависимостей, антипаттернов
+> и уязвимостей. Формат: `P<категория>.<номер>` — категория (безопасность, архитектура, логика,
+> тип, конфигурация, стиль). Критичность: 🔴 критично, 🟠 высоко, 🟡 средне, 🟢 низко.
+
+### 14.1 Критичные (🔴 — блокируют сборку/работу/безопасность)
+
+| ID | Задача | Место | Приоритет | Статус |
+|---|---|---|---|---|
+| P1 | **`generated_config.h` не существует** — `config.env` + `scripts/generate_config.py` не запущены; `build_flags` содержит `-DGENERATED_CONFIG_H` и `-I firmware/common/generated`, но директория/файл отсутствуют. Сборка PlatformIO падает без этого файла | `config.env`, `scripts/generate_config.py`, `firmware/common/generated/` | 🔴 Критично | ⬜ |
+| P2 | **`master_app.h/.cpp` не существуют** — утверждалось, что созданы при декомпозиции (A1/M3), но файлов нет. `main.cpp` остался монолитом ~1528 строк. Декомпозиция не выполнена | `firmware/master_s3/src/master_app.h`, `firmware/master_s3/src/master_app.cpp`, `firmware/master_s3/src/main.cpp` | 🔴 Критично | ⬜ |
+| P3 | **mbedTLS Ed25519 не поддерживается в X.509 сертификатах** — `mbedtls_ed25519_verify` для raw-ключей работает, но это нестандартное использование для OTA подписи. Риск недостоверной проверки подписи образа | `firmware/common/web/web_ota.cpp:112-122`, `firmware/common/web/web_server.h` | 🔴 Критично | ⬜ |
+| P4 | **ESP-NOW broadcast не зашифрован** — архитектурное ограничение протокола (multicast CCMP не поддерживается). Heartbeat/discovery остаётся открытым. Требуется документировать как известное ограничение или добавить сквозное шифрование полезной нагрузки | `firmware/common/transport/espnow.h` (broadcast-пир, `encrypt = false`) | 🔴 Критично | ⬜ |
+| P5 | **PBKDF2 итерации 10000 — недостаточно** — OWASP Password Storage Cheat Sheet 2026 рекомендует 210000+ для PBKDF2-HMAC-SHA256. Слабая защита паролей администратора | `firmware/common/auth.h:200` (`kPbkdf2Iterations`) | 🔴 Критично | ⬜ |
+
+### 14.2 Высокие (🟠 — уязвимости, риски логики)
+
+| ID | Задача | Место | Приоритет | Статус |
+|---|---|---|---|---|
+| P6 | **CVE-2024-42483 replay attack на ESP-NOW** — нет анти-replay защиты. Кэш магических значений ESP-NOW ограничен 32 слотами, не дифференцирован по типу сообщения. Атакующий может флудить cleartext-сообщениями и перезаписывать кэш, создавая возможность ре инъекции перехваченных пакетов | `firmware/common/transport/espnow.h`, `firmware/master_s3/src/main.cpp`, `firmware/satellite/src/main.cpp` | 🟠 Высоко | ⬜ |
+| P7 | **`AUDIO_UDP_AUTH_KEY=change-me-32-chars-min-at-least`** — не случайный ключ, а подсказка для замены. Если пользователь не заменит, аутентификация формально включена, но ключ угадываемый | `config.example.env`, `firmware/common/config/node_config.h` | 🟠 Высоко | ⬜ |
+| P8 | **SSE — `new WiFiClient(s.client())`** — копирование объекта WiFiClient из WebServer. Может привести к двойному закрытию сокета или использованию после освобождения | `firmware/common/web/web_sse.cpp:38` | 🟠 Высоко | ⬜ |
+| P9 | **`delete c` на WiFiClient** — объект не был создан через `new` в контексте WebServer. Удаление может привести к неопределённому поведению | `firmware/common/web/web_sse.cpp:15` | 🟠 Высоко | ⬜ |
+| P10 | **Потеря точности аудио на сателлите** — `out = (int16_t)(g_vol.process(out / 32768.0f) * 32768.0f)` — двойное преобразование int16→float→int16 с возможным клиппингом при промежуточных вычислениях | `firmware/satellite/src/main.cpp:358` | 🟠 Высоко | ⬜ |
+| P11 | **`esp_wifi_get_channel()` — ESP-IDF функция** — может отсутствовать в Arduino core 3.x (pioarduino). Риск компиляции на новых версиях | `firmware/satellite/src/main.cpp:194` | 🟠 Высоко | ⬜ |
+| P12 | **`strlcpy()` — не стандарт C++** — BSD-расширение, может не скомпилироваться на некоторых цепочках инструментов | `firmware/common/config/node_config.h`, `firmware/common/config/storage.h` | 🟠 Высоко | ⬜ |
+| P13 | **`strlcpy()` в `storage.h`** — см. P12 | `firmware/common/config/storage.h` | 🟠 Высоко | ⬜ |
+
+### 14.3 Средние (🟡 — логика, антипаттерны, кодовое качество)
+
+| ID | Задача | Место | Приоритет | Статус |
+|---|---|---|---|---|
+| P14 | **Монолит `main.cpp` ~1528 строк** — смешаны сеть, DSP, веб-сервер, консоль, OLED, энкодер. Нарушение SRP, трудно тестировать и поддерживать | `firmware/master_s3/src/main.cpp` | 🟡 Средне | ⬜ |
+| P15 | **CSRF токен пустой при первом запуске** — в `web_spa.h` `csrf` инициализируется пустой строкой. Первые вызовы API до `bootCheck()` отправят пустой CSRF-токен | `firmware/common/web/web_spa.h:227,253` | 🟡 Средне | ⬜ |
+| P16 | **OTA без CSRF при первом запуске** — `xhr.setRequestHeader('X-CSRF-Token', csrf)` для OTA — `csrf` может быть пустым, если `bootCheck()` не выполнился | `firmware/common/web/web_spa.h:381` | 🟡 Средне | ⬜ |
+| P17 | **JitterBuffer — нет уведомления о переполнении** — при переполнении старые семплы вытесняются без уведомления | `firmware/common/audio/jitter_buffer.h:61-66` | 🟡 Средне | ⬜ |
+| P18 | **DelayLine — запутанная арифметика** — `size_t readIdx = (m_writeIdx + m_capacitySamples - m_delaySamples) % m_capacitySamples` | `firmware/common/audio/delay_line.h:53` | 🟡 Средне | ⬜ |
+| P19 | **Дублирование `sendForcedPasswordChange`** — в 20+ обработчиках `web_api.cpp`. Лучше middleware/обёртка | `firmware/common/web/web_api.cpp` | 🟡 Средне | ⬜ |
+| P20 | **`PcmPipeline` гранично безопасно** — `(l + r) * 0.5f` может дать до ~0.98 (оба канала после лимитера ~0.98). В пределах [-1,1], но нет clamping | `firmware/common/audio/pcm_pipeline.h:140` | 🟡 Средне | ⬜ |
+
+### 14.4 Низкие (🟢 — стиль, документация, улучшения)
+
+| ID | Задача | Место | Приоритет | Статус |
+|---|---|---|---|---|
+| P21 | **`AUDIO_WIFI_AP_PASSWORD=audio21master`** — дефолтный пароль точки доступа в репозитории | `config.example.env:25` | 🟢 Низко | ⬜ |
+| P22 | **`AUDIO_ESPNOW_PMK/LMK` дефолтные ключи в репозитории** — любой, кто знает ключи, может расшифровать ESP-NOW трафик | `config.example.env:41-42` | 🟢 Низко | ⬜ |
+| P23 | **`kSalt` статическая соль PBKDF2** — не per-device. Требуется per-device соль в NVS v5 | `firmware/common/auth.h:196` | 🟢 Низко | ⬜ |
+| P24 | **Баннер с дефолтным паролем AP в HTML** — `audio21master` в plain text в `web_spa.h` | `firmware/common/web/web_spa.h:46-49` | 🟢 Низко | ⬜ |
+| P25 | **Библиотеки без версий в `platformio.ini`** — `WebServer`, `HTTPClient`, `Update`, `Network`, `U8g2` без закрепления версии. Невоспроиззимая сборка | `platformio.ini:119-125` | 🟢 Низко | ⬜ |
+
