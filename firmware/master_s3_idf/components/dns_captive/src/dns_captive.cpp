@@ -142,7 +142,7 @@ esp_err_t dns_captive_start(uint32_t ip)
     s_running = true;
 
     ESP_LOGI(TAG, "Captive DNS server started on port 53, responding with IP %d.%d.%d.%d",
-             (int)((ip >> 24) & 0xFF), (int)((ip >> 16) & 0xFF), (int)((ip >> 8) & 0xFF), (int)(ip & 0xFF));
+             (int)(ip & 0xFF), (int)((ip >> 8) & 0xFF), (int)((ip >> 16) & 0xFF), (int)((ip >> 24) & 0xFF));
     return ESP_OK;
 }
 

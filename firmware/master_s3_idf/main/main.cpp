@@ -30,6 +30,9 @@
 // Этап 4: Captive DNS — все DNS-запросы отвечают softAP IP (192.168.4.1)
 #include "dns_captive.h"
 
+// mDNS через lwip — отложено (требует модификации lwip ядра)
+// #include "mdns_lwip.h"
+
 // Этап 5: OTA обновление
 #include "ota_update.h"
 
@@ -268,6 +271,8 @@ extern "C" void app_main(void)
             dns_captive_start(ip_info.ip.addr);
             ESP_LOGI(TAG, "Captive DNS started, responding with " IPSTR, IP2STR(&ip_info.ip));
         }
+    } else {
+        ESP_LOGE(TAG, "DNS: could not get AP netif handle");
     }
 
     // Инициализация ESP-NOW транспорта
