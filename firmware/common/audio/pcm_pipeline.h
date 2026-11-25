@@ -4,7 +4,10 @@
 //   - sub (LPF-моно для сабвуфера)
 #pragma once
 
-#include <Arduino.h>
+#ifndef PI
+#define PI 3.14159265358979323846
+#endif
+
 #include <stdint.h>
 #include <math.h>
 

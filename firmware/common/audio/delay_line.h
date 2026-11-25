@@ -2,7 +2,6 @@
 // Header-only. Задержка задаётся в миллисекундах и пересчитывается в сэмплы.
 #pragma once
 
-#include <Arduino.h>
 #include <stdint.h>
 #include <string.h>
 

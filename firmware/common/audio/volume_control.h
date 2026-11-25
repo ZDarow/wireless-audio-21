@@ -2,8 +2,8 @@
 // Header-only, работает с int16_t PCM.
 #pragma once
 
-#include <Arduino.h>
 #include <stdint.h>
+#include <math.h>
 
 namespace audio21 {
 

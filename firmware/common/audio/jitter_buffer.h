@@ -22,25 +22,33 @@ public:
 
     // capacity — ёмкость в сэмплах (моно-канал одного сателлита).
     // alloc — необязательный аллокатор (например, ps_malloc из PSRAM на
-    // ESP32-S3); если вернул nullptr, конструктор бросает std::bad_alloc.
+    // ESP32-S3); если передан nullptr, используется new int16_t[].
     explicit JitterBuffer(uint32_t capacity, AllocFn alloc = nullptr)
-        : m_capacity(capacity) {
+        : m_buffer(nullptr), m_capacity(capacity), m_useDelete(false),
+          m_targetLevel(capacity / 2), m_readIdx(0), m_writeIdx(0), m_count(0),
+          m_overflowCount(0), m_overflowFlag(false) {
         if (alloc) {
             m_buffer = alloc(m_capacity);
-            if (!m_buffer) throw std::bad_alloc();
-            m_useDelete = false; // память из внешнего пула — не delete[]
+            if (!m_buffer) {
+                m_useDelete = false;
+                m_buffer = nullptr;
+            } else {
+                m_useDelete = false; // память из внешнего пула — не delete[]
+            }
         } else {
             m_buffer = new int16_t[m_capacity];
             m_useDelete = true;
         }
-        clear();
+        // clear() вызовется только если буфер выделен успешно
+        if (m_buffer) {
+            clear();
+        }
         // Дефолт целевого уровня — 50% ёмкости (B13): ready() осмыслен сразу
         // после создания без явной конфигурации. Иначе m_targetLevel=0 →
         // ready() всегда true → щелчки/прерывания на старте потока.
-        m_targetLevel = m_capacity / 2;
     }
 
-    ~JitterBuffer() { if (m_useDelete) delete[] m_buffer; }
+    ~JitterBuffer() { if (m_useDelete && m_buffer) delete[] m_buffer; }
 
     bool allocated() const { return m_buffer != nullptr; }
 
