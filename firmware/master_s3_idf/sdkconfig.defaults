@@ -4,3 +4,10 @@
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
+# NAPT для APSTA режима репитера (ТЗ §6.1, F21)
+CONFIG_LWIP_IP_FORWARD=y
+CONFIG_LWIP_IPV4_NAPT=y
+
+# Увеличить стек задачи main для Wi-Fi сканирования (wifi_ap_record_t[] ~5 КБ)
+CONFIG_MAIN_TASK_STACK_SIZE=16384
