@@ -3,14 +3,14 @@
 // если он есть, иначе использует дефолты.
 #pragma once
 
-#include <Arduino.h>
+#include <cstdio>
+#include <cstring>
 #include <stdint.h>
-#include <string.h>
 
 // strlcpy — BSD-расширение, не стандарт C++. ESP-IDF (ESP32) предоставляет
 // его в libc, но на хосте (g++ для тестов) может отсутствовать. Shim для
 // переносимости (P12/P13).
-#if !defined(ESP32)
+#if !defined(ESP_PLATFORM)
 static inline size_t strlcpy(char* dst, const char* src, size_t size) {
     size_t i;
     for (i = 0; i + 1 < size && src[i] != '\0'; i++)
@@ -193,8 +193,13 @@ constexpr int kCrossoverDefaultHz = 90;
 constexpr int kVolumeMin = 0;
 constexpr int kVolumeMax = 100;
 
+// Версия схемы NVS (инкрементировать при изменении структуры NodeConfig).
+static constexpr uint32_t kConfigVersion = 1;
+
 // Текущая настройка узла (что хранится в NVS и отдаётся через API)
 struct NodeConfig {
+    uint32_t version = kConfigVersion;
+
     // --- Общие ---
     NodeRole role = NodeRole::Master;
     SatelliteSide side = SatelliteSide::Left;
@@ -202,8 +207,7 @@ struct NodeConfig {
     // --- Источник и транспорт ---
     AudioSource source = AudioSource::A2DP;
     TransportMode transport = TransportMode::EspNow;
-    WifiMode wifiMode = AUDIO_WIFI_MODE_APSTA ? WifiMode::ApSta
-                       : (AUDIO_WIFI_MODE_AP ? WifiMode::ApDirect : WifiMode::Sta);
+    WifiMode wifiMode = WifiMode::Sta;
 
     // --- PCM ---
     uint32_t sampleRate = AUDIO_SAMPLE_RATE;
@@ -223,12 +227,20 @@ struct NodeConfig {
     int delaySubMs = AUDIO_DELAY_SUB_MS;
 
     // --- Сеть ---
-    char wifiSsid[33] = AUDIO_WIFI_SSID;            // STA: домашняя сеть
-    char wifiPassword[65] = AUDIO_WIFI_PASSWORD;
+    char wifiSsid[33] = "Keenetic";            // STA: домашняя сеть
+    char wifiPassword[65] = "QaWs321#@!";
     char wifiApSsid[33] = AUDIO_WIFI_AP_SSID;       // AP мастера
     char wifiApPassword[65] = AUDIO_WIFI_AP_PASSWORD;
     char hostname[33] = AUDIO_HOSTNAME;
     uint16_t udpAudioPort = AUDIO_UDP_PORT;
+    char udpAuthKey[64] = AUDIO_UDP_AUTH_KEY;
+
+    // --- Статический IP для STA (C5.1) ---
+    bool wifiStaDhcp = true;                    // true = DHCP, false = статический IP
+    char wifiStaIp[16] = "192.168.1.100";       // статический IP
+    char wifiStaGateway[16] = "192.168.1.1";    // шлюз
+    char wifiStaNetmask[16] = "255.255.255.0";  // маска подсети
+    char wifiStaDns[16] = "192.168.1.1";        // DNS сервер
 
     // --- Проверка интернета (ТЗ_Веб §7) ---
     bool netCheckEnabled = AUDIO_NET_CHECK_ENABLED;
