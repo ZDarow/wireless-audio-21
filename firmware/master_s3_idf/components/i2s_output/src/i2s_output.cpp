@@ -25,18 +25,22 @@ esp_err_t I2sOutput::init(const I2sOutputPins& pins, uint32_t sampleRate, bool m
 
     // Конфигурация канала I2S
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
-    esp_err_t ret = i2s_new_channel(&chan_cfg, nullptr, &m_txHandle);
+    i2s_chan_handle_t rx_handle = nullptr;
+    esp_err_t ret = i2s_new_channel(&chan_cfg, &m_txHandle, &rx_handle);
+    if (rx_handle) {
+        i2s_del_channel(rx_handle); // RX не нужен, только TX
+    }
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "i2s_new_channel failed: %s", esp_err_to_name(ret));
         return ret;
     }
 
     // Конфигурация стандартного I2S
+    i2s_data_bit_width_t bitWidth = mono ? I2S_DATA_BIT_WIDTH_16BIT : I2S_DATA_BIT_WIDTH_32BIT;
+    i2s_slot_mode_t slotMode = mono ? I2S_SLOT_MODE_MONO : I2S_SLOT_MODE_STEREO;
     i2s_std_config_t std_cfg = {
         .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(sampleRate),
-        .slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(
-            mono ? I2S_DATA_BIT_WIDTH_16BIT : I2S_DATA_BIT_WIDTH_32BIT,
-            mono ? I2S_SLOT_MODE_MONO : I2S_SLOT_MODE_STEREO),
+        .slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(bitWidth, slotMode),
         .gpio_cfg = {
             .mclk = I2S_GPIO_UNUSED,    // PCM5102A не нуждается в MCLK
             .bclk = static_cast<gpio_num_t>(pins.bck),

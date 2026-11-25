@@ -1,4 +1,5 @@
 // nvs_config.h — хранение конфигурации в NVS (C API для ESP-IDF v5.3).
+// Использует единую структуру NodeConfig из firmware/common/config/node_config.h.
 #pragma once
 
 #include <stdint.h>
@@ -7,15 +8,14 @@
 #include "nvs.h"
 #include "esp_err.h"
 
-namespace audio21 {
+#include "../../../../common/config/node_config.h"
 
-// Версия схемы конфигурации NVS. Инкрементировать при изменении структуры.
-static constexpr uint32_t kConfigVersion = 1;
+namespace audio21 {
 
 // Имя NVS namespaces
 static constexpr char kConfigNamespace[] = "audio21_cfg";
 
-// Ключи конфигурации
+// Ключи конфигурации (совместимы с текущим NVS-форматом)
 static constexpr char kKeyVersion[] = "ver";
 static constexpr char kKeyVolume[] = "vol";
 static constexpr char kKeyCrossoverHz[] = "xover";
@@ -31,23 +31,9 @@ static constexpr char kKeyUdpAuthKey[] = "udpk";
 static constexpr char kKeyEspNowPmk[] = "pmk";
 static constexpr char kKeyEspNowLmk[] = "lmk";
 
-// Структура конфигурации (все поля должны быть фиксированного размера для NVS)
-struct NodeConfig {
-    uint32_t version = kConfigVersion;
-    int volume = 100;           // 0..100
-    int crossoverHz = 90;       // 40..500
-    char wifiSsid[32] = {0};
-    char wifiPassword[64] = {0};
-    char wifiApSsid[32] = "Audio21-Master";
-    char wifiApPassword[64] = "Audio21-2026";  // Минимум 8 символов — СМЕНИТЬ через Web UI
-    char hostname[32] = "audio-master";
-    uint8_t ntpEnabled = 1;
-    char ntpServer[64] = "pool.ntp.org";
-    char timezone[32] = "UTC-3";
-    char udpAuthKey[64] = "wA3!kL9#mP2@vR5&tY8";  // HMAC-SHA256 ключ для UDP аудио (V4) — СМЕНИТЬ через Web UI
-    char espnowPmk[33] = {0};   // ESP-NOW Pairwise Master Key (hex, 32 chars)
-    char espnowLmk[33] = {0};   // ESP-NOW Local Master Key (hex, 32 chars)
-};
+// Используем общую структуру NodeConfig из common/config/node_config.h.
+// kConfigVersion берётся из той же структуры (version = kConfigVersion).
+using NodeConfig = audio21::NodeConfig;
 
 class NvsConfig {
 public:

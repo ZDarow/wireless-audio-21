@@ -70,8 +70,8 @@ esp_err_t NvsConfig::load(NodeConfig& cfg)
     int32_t vol = 100;
     ret = nvs_get_i32(m_handle, kKeyVolume, &vol);
     if (ret == ESP_OK) {
-        cfg.volume = (int)vol;
-        if (cfg.volume < 0 || cfg.volume > 100) cfg.volume = 100;
+        cfg.masterVolume = (int)vol;
+        if (cfg.masterVolume < 0 || cfg.masterVolume > 100) cfg.masterVolume = 100;
     }
 
     int32_t xover = 90;
@@ -143,7 +143,7 @@ esp_err_t NvsConfig::load(NodeConfig& cfg)
         // Оставляем дефолтное значение из структуры NodeConfig
     }
 
-    ESP_LOGI(TAG, "Config loaded from NVS: volume=%d%%, crossover=%d Hz", cfg.volume, cfg.crossoverHz);
+    ESP_LOGI(TAG, "Config loaded from NVS: masterVolume=%d%%, crossover=%d Hz", cfg.masterVolume, cfg.crossoverHz);
     return ESP_OK;
 }
 
@@ -167,7 +167,7 @@ esp_err_t NvsConfig::save(const NodeConfig& cfg)
     ret = nvs_set_u32(m_handle, kKeyVersion, cfg.version);
     if (ret != ESP_OK) return ret;
 
-    ret = nvs_set_i32(m_handle, kKeyVolume, cfg.volume);
+    ret = nvs_set_i32(m_handle, kKeyVolume, cfg.masterVolume);
     if (ret != ESP_OK) return ret;
 
     ret = nvs_set_i32(m_handle, kKeyCrossoverHz, cfg.crossoverHz);
@@ -212,7 +212,7 @@ esp_err_t NvsConfig::save(const NodeConfig& cfg)
         return ret;
     }
 
-    ESP_LOGI(TAG, "Config saved to NVS: volume=%d%%, crossover=%d Hz", cfg.volume, cfg.crossoverHz);
+    ESP_LOGI(TAG, "Config saved to NVS: masterVolume=%d%%, crossover=%d Hz", cfg.masterVolume, cfg.crossoverHz);
     return ESP_OK;
 }
 
