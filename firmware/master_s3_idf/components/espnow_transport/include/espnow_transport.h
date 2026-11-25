@@ -103,6 +103,8 @@ private:
     bool m_initialized = false;
     bool m_encrypted = false;
     size_t m_peerCount = 0;
+    uint8_t m_addedPeers[10][6] = {};  // MAC пиров, уже добавленных через esp_now_add_peer
+    size_t m_addedPeerCount = 0;
 
     static void onDataSent(const uint8_t* mac, esp_now_send_status_t status);
     static void onDataRecv(const uint8_t* mac, const uint8_t* data, int len);

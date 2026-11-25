@@ -50,6 +50,9 @@ esp_err_t EspNowTransport::init(bool encrypt)
 
     m_encrypted = encrypt;
     m_initialized = true;
+    m_peerCount = 0;
+    m_addedPeerCount = 0;
+    memset(m_addedPeers, 0, sizeof(m_addedPeers));
 
     ESP_LOGI(TAG, "ESP-NOW initialized (encrypt=%d)", encrypt ? 1 : 0);
     return ESP_OK;
@@ -66,6 +69,8 @@ esp_err_t EspNowTransport::deinit()
     m_rxCb = nullptr;
     g_espnow_instance = nullptr;
     m_peerCount = 0;
+    m_addedPeerCount = 0;
+    memset(m_addedPeers, 0, sizeof(m_addedPeers));
 
 
     if (ret != ESP_OK) {
@@ -86,34 +91,46 @@ esp_err_t EspNowTransport::sendUnicast(const uint8_t* dstMac, const uint8_t* dat
         return ESP_ERR_INVALID_SIZE;
     }
 
-    // Проверяем лимит пиров (ESP-NOW обычно поддерживает до 20, с шифрованием до 10)
-    if (m_peerCount >= 10) {
-        // Удаляем пира первого сателлита, если он есть, чтобы освободить место
-        if (m_satellites[0].online) {
-            removePeer(m_satellites[0].mac);
-            m_satellites[0].online = false;
-        } else if (m_satellites[1].online) {
-            removePeer(m_satellites[1].mac);
-            m_satellites[1].online = false;
+    // Проверяем, не добавлен ли уже этот пир
+    bool peerExists = false;
+    for (size_t i = 0; i < m_addedPeerCount; i++) {
+        if (memcmp(m_addedPeers[i], dstMac, 6) == 0) {
+            peerExists = true;
+            break;
         }
     }
 
-    // Добавляем peer если ещё не добавлен
-    esp_now_peer_info_t peerInfo = {};
-    memcpy(peerInfo.peer_addr, dstMac, 6);
-    peerInfo.channel = 6; // тот же канал, что и AP
-    peerInfo.encrypt = m_encrypted;
-    peerInfo.ifidx = WIFI_IF_AP;
+    // Добавляем peer только если ещё не добавлен
+    if (!peerExists) {
+        // Проверяем лимит пиров (ESP-NOW обычно поддерживает до 20, с шифрованием до 10)
+        if (m_addedPeerCount >= 10) {
+            ESP_LOGE(TAG, "peer table full (%zu), cannot add new peer", m_addedPeerCount);
+            return ESP_ERR_NO_MEM;
+        }
 
-    esp_err_t ret = esp_now_add_peer(&peerInfo);
-    if (ret == ESP_OK) {
-        m_peerCount++;
-    } else if (ret != ESP_ERR_ESPNOW_EXIST) {
-        ESP_LOGE(TAG, "esp_now_add_peer failed: %s", esp_err_to_name(ret));
-        return ret;
+        esp_now_peer_info_t peerInfo = {};
+        memcpy(peerInfo.peer_addr, dstMac, 6);
+        peerInfo.channel = 6; // тот же канал, что и AP
+        peerInfo.encrypt = m_encrypted;
+        peerInfo.ifidx = WIFI_IF_AP;
+
+        esp_err_t ret = esp_now_add_peer(&peerInfo);
+        if (ret == ESP_OK) {
+            memcpy(m_addedPeers[m_addedPeerCount], dstMac, 6);
+            m_addedPeerCount++;
+            m_peerCount++;
+        } else if (ret == ESP_ERR_ESPNOW_EXIST) {
+            // Пир уже существует в таблице ESP-NOW, но не в нашем отслеживании
+            memcpy(m_addedPeers[m_addedPeerCount], dstMac, 6);
+            m_addedPeerCount++;
+            m_peerCount++;
+        } else {
+            ESP_LOGE(TAG, "esp_now_add_peer failed: %s", esp_err_to_name(ret));
+            return ret;
+        }
     }
 
-    ret = esp_now_send(dstMac, data, len);
+    esp_err_t ret = esp_now_send(dstMac, data, len);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "esp_now_send failed: %s", esp_err_to_name(ret));
         return ret;
@@ -157,13 +174,31 @@ esp_err_t EspNowTransport::removePeer(const uint8_t* dstMac)
 
     esp_err_t ret = esp_now_del_peer(dstMac);
     if (ret == ESP_OK) {
-        if (m_peerCount > 0) {
-            m_peerCount--;
+        // Удаляем из отслеживания
+        for (size_t i = 0; i < m_addedPeerCount; i++) {
+            if (memcmp(m_addedPeers[i], dstMac, 6) == 0) {
+                // Сдвигаем оставшиеся пиры влево
+                memmove(m_addedPeers + i, m_addedPeers + i + 1,
+                        (m_addedPeerCount - i - 1) * 6);
+                m_addedPeerCount--;
+                if (m_peerCount > 0) {
+                    m_peerCount--;
+                }
+                break;
+            }
         }
         ESP_LOGD(TAG, "Peer removed: %02x:%02x:%02x:%02x:%02x:%02x",
                  dstMac[0], dstMac[1], dstMac[2], dstMac[3], dstMac[4], dstMac[5]);
     } else if (ret == ESP_ERR_ESPNOW_NOT_FOUND) {
-        // Пир не был добавлен — не ошибка
+        // Пир не был добавлен — не ошибка, но чистим отслеживание
+        for (size_t i = 0; i < m_addedPeerCount; i++) {
+            if (memcmp(m_addedPeers[i], dstMac, 6) == 0) {
+                memmove(m_addedPeers + i, m_addedPeers + i + 1,
+                        (m_addedPeerCount - i - 1) * 6);
+                m_addedPeerCount--;
+                break;
+            }
+        }
         return ESP_OK;
     } else {
         ESP_LOGE(TAG, "esp_now_del_peer failed: %s", esp_err_to_name(ret));
