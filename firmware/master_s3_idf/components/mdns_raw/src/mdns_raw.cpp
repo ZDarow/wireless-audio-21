@@ -14,6 +14,7 @@
 #include "lwip/netif.h"
 #include "lwip/prot/ip.h"
 #include "lwip/igmp.h"
+#include "lwip/sockets.h"
 
 static const char *TAG = "mdns_raw";
 
@@ -354,7 +355,9 @@ esp_err_t mdns_raw_init(esp_netif_t* netif, const char* hostname)
     // Присоединяемся к multicast группе 224.0.0.251
     ip4_addr_t multicastAddr;
     multicastAddr.addr = PP_HTONL(LWIP_MAKEU32(224, 0, 0, 251));
-    err = igmp_joingroup(ip_2_ip4(&ip_addr_any), &multicastAddr);
+    ip4_addr_t anyAddr;
+    anyAddr.addr = PP_HTONL(LWIP_MAKEU32(0, 0, 0, 0));
+    err = igmp_joingroup(&anyAddr, &multicastAddr);
     if (err != ERR_OK) {
         ESP_LOGW(TAG, "igmp_joingroup failed: %d (may still work)", err);
     }

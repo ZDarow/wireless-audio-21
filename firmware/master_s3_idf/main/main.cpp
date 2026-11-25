@@ -1,15 +1,21 @@
 #include <stdio.h>
 #include <string.h>
 #include <inttypes.h>
+#include <memory>
+#include <atomic>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
+#include "esp_heap_caps.h"
+#include "esp_ota_ops.h"
+#include "cJSON.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "esp_netif.h"
-#include "esp_task_wdt.h"
+#include "driver/uart.h"
+#include "mbedtls/md.h"
 
 // DSP модули
 #include "pcm_pipeline.h"
@@ -21,7 +27,7 @@
 // Новые компоненты Этапа 3
 #include "driver/i2s_std.h"
 #include "espnow_transport.h"
-#include "../components/i2s_output/include/i2s_output.h"
+#include "i2s_output.h"
 #include "udp_audio.h"
 #include "web_server.h"
 
@@ -53,40 +59,87 @@ static constexpr uint32_t kJitterTargetMs = 30;
 static constexpr uint32_t kDelaySubMs = 40;
 static constexpr uint16_t kUdpAudioPort = 5004;
 
-// Глобальные объекты аудио конвейера
-static VolumeControl g_volume(1.0f);
-static ToneControl g_tone;
-static PeakLimiter g_limiter;
-static Crossover g_crossover;
-static DelayLine g_delaySub(kDelaySubMs, kSampleRate);
-static JitterBuffer g_jitter((kJitterTargetMs * kSampleRate) / 1000);
-static PcmPipeline g_pipeline;
+// PSRAM аллокатор для больших аудиобуферов (jitter buffer, delay lines).
+// Возвращает nullptr если PSRAM недоступен или аллокация не удалась.
+static int16_t* psramAllocSamples(size_t samples) {
+    size_t size = samples * sizeof(int16_t);
+    int16_t* buf = (int16_t*)heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (buf) {
+        ESP_LOGI(TAG, "PSRAM: allocated %zu bytes for %u samples", size, samples);
+    } else {
+        ESP_LOGW(TAG, "PSRAM: allocation failed for %u samples, using DRAM", samples);
+    }
+    return buf;
+}
 
-// Глобальные компоненты транспорта
-static EspNowTransport g_espnow;
-static I2sOutput g_i2sOut;
-static UdpAudio g_udpAudio;
-static WebServer g_webServer;
+// Глобальные объекты аудио конвейера (создаются в app_main() после инициализации кучи)
+static std::unique_ptr<DelayLine> g_delaySub;
+static std::unique_ptr<DelayLine> g_delayLeft;
+static std::unique_ptr<DelayLine> g_delayRight;
+static std::unique_ptr<JitterBuffer> g_jitter;
+static PcmPipeline g_pipeline; // без аллокации в куче — можно оставить глобальным
+
+// TX аудио на сателлиты (C3.1/C3.2): батч 117 семплов → пакет 234 байта.
+// TX аудио на сателлиты (C3.1/C3.2): батч 117 семплов → пакет 234 байта.
+static constexpr size_t kBatchSamples = 117;
+static int16_t g_txLeft[kBatchSamples];
+static int16_t g_txRight[kBatchSamples];
+static std::atomic<size_t> g_txCount{0};
+static uint32_t g_txPacketId = 0;
+static uint32_t g_txPackets = 0;
+
+// Глобальные компоненты транспорта (создаются в app_main())
+static std::unique_ptr<EspNowTransport> g_espnow;
+static std::unique_ptr<I2sOutput> g_i2sOut;
+static std::unique_ptr<UdpAudio> g_udpAudio;
+static std::unique_ptr<WebServer> g_webServer;
 
 // Этап 4: NVS конфигурация
-static NvsConfig g_nvsConfig;
+static std::unique_ptr<NvsConfig> g_nvsConfig;
 static NodeConfig g_cfg;
 
 // Состояние
 static bool g_i2sOn = false;
 static int g_volumePercent = 100;
 static int g_crossoverHz = 90;
+static char g_staIpAddr[16] = "";
+static bool g_wifi_inited;
+static std::atomic<bool> g_wifi_reconfiguring{false};
+static bool g_nvsDirty = false;
+static uint32_t g_nvsLastChangeMs = 0;
+static constexpr uint32_t kNvsSaveDebounceMs = 500;
+static uint32_t g_sta_connect_start_ms = 0;
+static bool g_sta_connecting = false;
+static constexpr uint32_t kStaConnectTimeoutMs = 30000;
+
+// Статус сателлитов (heartbeat через ESP-NOW)
+static bool g_leftOnline = false;
+static bool g_rightOnline = false;
+static uint32_t g_lastLeftSeenMs = 0;
+static uint32_t g_lastRightSeenMs = 0;
+static std::atomic<uint32_t> g_heartbeatsRx{0};
+static std::atomic<uint32_t> g_heartbeatsTx{0};
+static uint32_t g_lastDiscoveryMs = 0;
+static constexpr uint32_t kSatelliteTimeoutMs = 6000;
+static constexpr uint32_t kDiscoveryIntervalMs = 3000;
 
 // Реализация WebServerCallbacks
 static int getStatusCallback(char* buf, size_t bufSize)
 {
     int len = snprintf(buf, bufSize,
-        "{\"sampleRate\":%" PRIu32 ",\"volume\":%d,\"crossoverHz\":%d,"
+        "{\"sampleRate\":%" PRIu32 ",\"volume\":%d,\"crossoverHz\":%d,\"mute\":%s,"
         "\"i2sOn\":%s,\"jitterAvailable\":%" PRIu32 ",\"espNowSatellites\":2,"
-        "\"hostname\":\"%s\",\"wifiApSsid\":\"%s\",\"wifiMode\":\"ap\"}",
-        kSampleRate, g_cfg.volume, g_cfg.crossoverHz,
-        g_i2sOn ? "true" : "false", g_jitter.available(),
-        g_cfg.hostname, g_cfg.wifiApSsid);
+        "\"satLeft\":\"%s\",\"satRight\":\"%s\",\"heartbeatsRx\":%" PRIu32 ","
+        "\"hostname\":\"%s\",\"wifiApSsid\":\"%s\",\"wifiMode\":\"%s\","
+        "\"ipAddress\":\"%s\"}",
+        kSampleRate, g_cfg.masterVolume, g_cfg.crossoverHz, g_cfg.mute ? "true" : "false",
+        g_i2sOn ? "true" : "false", g_jitter ? g_jitter->available() : 0,
+        g_leftOnline ? "online" : "offline",
+        g_rightOnline ? "online" : "offline",
+        g_heartbeatsRx.load(),
+        g_cfg.hostname, g_cfg.wifiApSsid,
+        g_wifi_inited ? (g_staIpAddr[0] ? "sta" : "ap") : "ap",
+        g_staIpAddr);
     return len;
 }
 
@@ -94,18 +147,465 @@ static esp_err_t setVolumeCallback(int volume)
 {
     if (volume < 0) volume = 0;
     if (volume > 100) volume = 100;
-    g_cfg.volume = volume;
+    g_cfg.masterVolume = volume;
     g_volumePercent = volume;
-    g_volume.setVolume(volume);
+    g_pipeline.setVolume(volume);
     // Сохраняем в NVS
-    g_nvsConfig.save(g_cfg);
+    g_nvsDirty = true; g_nvsLastChangeMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
     ESP_LOGI(TAG, "volume set to %d%% (saved to NVS)", volume);
     return ESP_OK;
 }
 
 static int getVolumeCallback(void)
 {
-    return g_cfg.volume;
+    return g_cfg.masterVolume;
+}
+
+static esp_err_t setMuteCallback(bool mute)
+{
+    g_cfg.mute = mute;
+    g_pipeline.setMute(mute);
+    g_nvsDirty = true; g_nvsLastChangeMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+    ESP_LOGI(TAG, "mute set to %s (saved to NVS)", mute ? "on" : "off");
+    return ESP_OK;
+}
+
+static bool getMuteCallback(void)
+{
+    return g_cfg.mute;
+}
+
+static esp_err_t wifi_reconfigure(void);
+
+static esp_err_t setDelayCallback(const char* channel, int delayMs)
+{
+    if (delayMs < 0) delayMs = 0;
+    if (delayMs > 200) delayMs = 200;
+    if (strcmp(channel, "left") == 0) {
+        g_cfg.delayLeftMs = delayMs;
+        g_delayLeft->setDelayMs((uint32_t)delayMs);
+    } else if (strcmp(channel, "right") == 0) {
+        g_cfg.delayRightMs = delayMs;
+        g_delayRight->setDelayMs((uint32_t)delayMs);
+    } else if (strcmp(channel, "sub") == 0) {
+        g_cfg.delaySubMs = delayMs;
+        g_delaySub->setDelayMs((uint32_t)delayMs);
+    } else {
+        return ESP_ERR_INVALID_ARG;
+    }
+    g_nvsDirty = true; g_nvsLastChangeMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+    ESP_LOGI(TAG, "delay %s set to %d ms (saved to NVS)", channel, delayMs);
+    return ESP_OK;
+}
+
+static int getDelayCallback(const char* channel)
+{
+    if (strcmp(channel, "left") == 0) return g_cfg.delayLeftMs;
+    if (strcmp(channel, "right") == 0) return g_cfg.delayRightMs;
+    if (strcmp(channel, "sub") == 0) return g_cfg.delaySubMs;
+    return 0;
+}
+
+static int wifiScanCallback(char* buf, size_t bufSize)
+{
+    // Сканирование Wi-Fi — блокирующее, возвращает JSON со списком сетей.
+    // Вызывается из контекста HTTP обработчика, поэтому используем короткое сканирование.
+    uint16_t ap_count = 0;
+    esp_err_t ret = esp_wifi_scan_get_ap_num(&ap_count);
+    if (ret != ESP_OK || ap_count == 0) {
+        int len = snprintf(buf, bufSize, "{\"networks\":[]}");
+        return len;
+    }
+    wifi_ap_record_t ap_list[8];
+    uint16_t count = ap_count > 8 ? 8 : ap_count;
+    ret = esp_wifi_scan_get_ap_records(&count, ap_list);
+    if (ret != ESP_OK) {
+        int len = snprintf(buf, bufSize, "{\"networks\":[]}");
+        return len;
+    }
+    int len = snprintf(buf, bufSize, "{\"networks\":[");
+    for (uint16_t i = 0; i < count; i++) {
+        const char *auth_str;
+        switch (ap_list[i].authmode) {
+            case WIFI_AUTH_OPEN:          auth_str = "OPEN"; break;
+            case WIFI_AUTH_WEP:           auth_str = "WEP"; break;
+            case WIFI_AUTH_WPA_PSK:       auth_str = "WPA-PSK"; break;
+            case WIFI_AUTH_WPA2_PSK:      auth_str = "WPA2-PSK"; break;
+            case WIFI_AUTH_WPA_WPA2_PSK:  auth_str = "WPA/WPA2-PSK"; break;
+            case WIFI_AUTH_WPA3_PSK:      auth_str = "WPA3-PSK"; break;
+            case WIFI_AUTH_WPA2_WPA3_PSK: auth_str = "WPA2/WPA3-PSK"; break;
+            default:                      auth_str = "UNKNOWN"; break;
+        }
+        int item_len = snprintf(buf + len, bufSize - len,
+            "%s{\"ssid\":\"%s\",\"rssi\":%d,\"channel\":%d,\"security\":\"%s\"}",
+            i > 0 ? "," : "",
+            ap_list[i].ssid, ap_list[i].rssi, ap_list[i].primary, auth_str);
+        len += item_len;
+        if (len >= (int)bufSize) break;
+    }
+    snprintf(buf + len, bufSize - len, "]}");
+    return strlen(buf);
+}
+
+static esp_err_t wifiSetModeCallback(const char* mode)
+{
+    if (strcmp(mode, "ap") == 0) {
+        g_cfg.wifiMode = WifiMode::ApDirect;
+    } else if (strcmp(mode, "sta") == 0) {
+        g_cfg.wifiMode = WifiMode::Sta;
+    } else if (strcmp(mode, "apsta") == 0) {
+        g_cfg.wifiMode = WifiMode::ApSta;
+    } else {
+        return ESP_ERR_INVALID_ARG;
+    }
+    g_nvsDirty = true; g_nvsLastChangeMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+    ESP_LOGI(TAG, "wifi mode set to %s (saved to NVS, reboot to apply)", mode);
+    // Переконфигурируем Wi-Fi без перезагрузки
+    return wifi_reconfigure();
+}
+
+static esp_err_t wifiSetApPasswordCallback(const char* password)
+{
+    if (!password || strlen(password) < 8 || strlen(password) >= sizeof(g_cfg.wifiApPassword)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    strcpy(g_cfg.wifiApPassword, password);
+    g_nvsDirty = true; g_nvsLastChangeMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+    ESP_LOGI(TAG, "AP password changed (saved to NVS, reboot to apply)");
+    return ESP_OK;
+}
+
+static esp_err_t setHostnameCallback(const char* hostname)
+{
+    if (!hostname || strlen(hostname) == 0 || strlen(hostname) >= sizeof(g_cfg.hostname)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    strcpy(g_cfg.hostname, hostname);
+    g_nvsDirty = true; g_nvsLastChangeMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+    ESP_LOGI(TAG, "hostname set to %s (saved to NVS)", hostname);
+    return ESP_OK;
+}
+
+static int netInternetStatusCallback(char* buf, size_t bufSize)
+{
+    // Проверяем интернет-соединение через STA интерфейс
+    esp_netif_t* sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    bool connected = false;
+    bool hasIp = false;
+    if (sta) {
+        esp_netif_ip_info_t ip_info;
+        if (esp_netif_get_ip_info(sta, &ip_info) == ESP_OK && ip_info.ip.addr != 0) {
+            connected = true;
+            hasIp = true;
+        }
+    }
+    int len = snprintf(buf, bufSize,
+        "{\"connected\":%s,\"hasIp\":%s,\"interface\":\"%s\"}",
+        connected ? "true" : "false",
+        hasIp ? "true" : "false",
+        connected ? "sta" : "none");
+    return len;
+}
+
+static esp_err_t netInternetCheckCallback(void)
+{
+    // Простая проверка: есть ли STA соединение с IP-адресом
+    esp_netif_t* sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (!sta) return ESP_FAIL;
+    esp_netif_ip_info_t ip_info;
+    if (esp_netif_get_ip_info(sta, &ip_info) != ESP_OK || ip_info.ip.addr == 0) {
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
+static int configExportCallback(char* buf, size_t bufSize)
+{
+    // Экспортируем конфигурацию как JSON
+    int len = snprintf(buf, bufSize,
+        "{\"version\":%" PRIu32 ",\"masterVolume\":%d,\"crossoverHz\":%d,\"mute\":%s,"
+        "\"leftVolume\":%d,\"rightVolume\":%d,\"subVolume\":%d,"
+        "\"delayLeftMs\":%d,\"delayRightMs\":%d,\"delaySubMs\":%d,"
+        "\"wifiMode\":%d,\"wifiApSsid\":\"%s\",\"wifiApPassword\":\"%s\","
+        "\"wifiSsid\":\"%s\",\"wifiPassword\":\"%s\","
+        "\"hostname\":\"%s\",\"udpAuthKey\":\"%s\","
+        "\"leftSatMac\":\"%02X:%02X:%02X:%02X:%02X:%02X\","
+        "\"rightSatMac\":\"%02X:%02X:%02X:%02X:%02X:%02X\"}",
+        g_cfg.version,
+        g_cfg.masterVolume, g_cfg.crossoverHz, g_cfg.mute ? "true" : "false",
+        g_cfg.leftVolume, g_cfg.rightVolume, g_cfg.subVolume,
+        g_cfg.delayLeftMs, g_cfg.delayRightMs, g_cfg.delaySubMs,
+        (int)g_cfg.wifiMode,
+        g_cfg.wifiApSsid, g_cfg.wifiApPassword,
+        g_cfg.wifiSsid, g_cfg.wifiPassword,
+        g_cfg.hostname, g_cfg.udpAuthKey,
+        g_cfg.leftSatMac.bytes[0], g_cfg.leftSatMac.bytes[1], g_cfg.leftSatMac.bytes[2],
+        g_cfg.leftSatMac.bytes[3], g_cfg.leftSatMac.bytes[4], g_cfg.leftSatMac.bytes[5],
+        g_cfg.rightSatMac.bytes[0], g_cfg.rightSatMac.bytes[1], g_cfg.rightSatMac.bytes[2],
+        g_cfg.rightSatMac.bytes[3], g_cfg.rightSatMac.bytes[4], g_cfg.rightSatMac.bytes[5]);
+    return len;
+}
+
+static esp_err_t configImportCallback(const char* json)
+{
+    // Простой импорт: пароль JSON и применим поля
+    cJSON* j = cJSON_Parse(json);
+    if (!j) return ESP_ERR_INVALID_ARG;
+    cJSON* vol = cJSON_GetObjectItemCaseSensitive(j, "masterVolume");
+    if (vol && cJSON_IsNumber(vol)) {
+        g_cfg.masterVolume = vol->valueint;
+        g_pipeline.setVolume(g_cfg.masterVolume);
+    }
+    cJSON* xover = cJSON_GetObjectItemCaseSensitive(j, "crossoverHz");
+    if (xover && cJSON_IsNumber(xover)) {
+        g_cfg.crossoverHz = xover->valueint;
+        g_pipeline.setCrossoverHz(g_cfg.crossoverHz);
+    }
+    cJSON* mute = cJSON_GetObjectItemCaseSensitive(j, "mute");
+    if (mute && cJSON_IsBool(mute)) {
+        g_cfg.mute = cJSON_IsTrue(mute);
+        g_pipeline.setMute(g_cfg.mute);
+    }
+    cJSON* lv = cJSON_GetObjectItemCaseSensitive(j, "leftVolume");
+    if (lv && cJSON_IsNumber(lv)) g_cfg.leftVolume = lv->valueint;
+    cJSON* rv = cJSON_GetObjectItemCaseSensitive(j, "rightVolume");
+    if (rv && cJSON_IsNumber(rv)) g_cfg.rightVolume = rv->valueint;
+    cJSON* sv = cJSON_GetObjectItemCaseSensitive(j, "subVolume");
+    if (sv && cJSON_IsNumber(sv)) g_cfg.subVolume = sv->valueint;
+    cJSON_Delete(j);
+    g_nvsDirty = true; g_nvsLastChangeMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+    ESP_LOGI(TAG, "Config imported and saved to NVS");
+    return ESP_OK;
+}
+
+static int logsGetCallback(char* buf, size_t bufSize)
+{
+    // Простой лог-буфер: возвращаем системную информацию
+    int len = snprintf(buf, bufSize,
+        "{\"logs\":["
+        "{\"t\":\"system\",\"m\":\"Wireless Audio 2.1 Master started\"},"
+        "{\"t\":\"audio\",\"m\":\"DSP pipeline initialized\"},"
+        "{\"t\":\"wifi\",\"m\":\"Wi-Fi %s mode active\"}"
+        "]}",
+        g_wifi_inited ? (g_staIpAddr[0] ? "STA" : "AP") : "off");
+    return len;
+}
+
+static int diagnosticsGetCallback(char* buf, size_t bufSize)
+{
+    // Диагностика системы
+    uint32_t freeHeap = esp_get_free_heap_size();
+    uint32_t minHeap = esp_get_minimum_free_heap_size();
+    esp_netif_t* sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    bool staConnected = false;
+    if (sta) {
+        esp_netif_ip_info_t ip_info;
+        if (esp_netif_get_ip_info(sta, &ip_info) == ESP_OK && ip_info.ip.addr != 0) {
+            staConnected = true;
+        }
+    }
+    int len = snprintf(buf, bufSize,
+        "{\"freeHeap\":%" PRIu32 ",\"minHeap\":%" PRIu32 ",\"uptimeMs\":%" PRIu32 ","
+        "\"wifiConnected\":%s,\"satLeft\":\"%s\",\"satRight\":\"%s\","
+        "\"jitterAvailable\":%" PRIu32 ",\"heartbeatsRx\":%" PRIu32 "}",
+        freeHeap, minHeap, (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS),
+        staConnected ? "true" : "false",
+        g_leftOnline ? "online" : "offline",
+        g_rightOnline ? "online" : "offline",
+        g_jitter ? g_jitter->available() : 0,
+        g_heartbeatsRx.load());
+    return len;
+}
+
+// Агент: простая проверка живости (без CSRF)
+static int agentHealthCallback(char* buf, size_t bufSize)
+{
+    uint32_t freeHeap = esp_get_free_heap_size();
+    uint32_t minHeap = esp_get_minimum_free_heap_size();
+    esp_netif_t* sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    bool staConnected = false;
+    if (sta) {
+        esp_netif_ip_info_t ip_info;
+        if (esp_netif_get_ip_info(sta, &ip_info) == ESP_OK && ip_info.ip.addr != 0) {
+            staConnected = true;
+        }
+    }
+    esp_netif_t* ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    bool apActive = ap != nullptr;
+    int len = snprintf(buf, bufSize,
+        "{\"ok\":true,\"uptimeMs\":%" PRIu32 ",\"freeHeap\":%" PRIu32 ","
+        "\"minHeap\":%" PRIu32 ",\"wifiConnected\":%s,\"apActive\":%s,"
+        "\"satLeft\":\"%s\",\"satRight\":\"%s\"}",
+        (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS),
+        freeHeap, minHeap,
+        staConnected ? "true" : "false",
+        apActive ? "true" : "false",
+        g_leftOnline ? "online" : "offline",
+        g_rightOnline ? "online" : "offline");
+    return len;
+}
+
+// Агент: детальная диагностика (требует CSRF)
+static int agentDiagnosticsCallback(char* buf, size_t bufSize)
+{
+    uint32_t freeHeap = esp_get_free_heap_size();
+    uint32_t minHeap = esp_get_minimum_free_heap_size();
+    size_t freePsram = 0;
+    size_t totalPsram = 0;
+#if CONFIG_SPIRAM
+    freePsram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    totalPsram = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
+#endif
+    int len = snprintf(buf, bufSize,
+        "{\"uptimeMs\":%" PRIu32 ",\"freeHeap\":%" PRIu32 ",\"minHeap\":%" PRIu32 ","
+        "\"freePsram\":%" PRIu32 ",\"totalPsram\":%" PRIu32 ","
+        "\"satLeft\":\"%s\",\"satRight\":\"%s\","
+        "\"heartbeatsRx\":%" PRIu32 ",\"heartbeatsTx\":%" PRIu32 "}",
+        (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS),
+        freeHeap, minHeap,
+        (uint32_t)freePsram, (uint32_t)totalPsram,
+        g_leftOnline ? "online" : "offline",
+        g_rightOnline ? "online" : "offline",
+        g_heartbeatsRx.load(), g_heartbeatsTx.load());
+    return len;
+}
+
+// Агент: эхо-проверка связности (без CSRF)
+static int agentPingCallback(char* buf, size_t bufSize)
+{
+    int len = snprintf(buf, bufSize, "{\"pong\":true,\"uptimeMs\":%" PRIu32 "}",
+                       (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS));
+    return len;
+}
+
+// --- Авторизация (сессии + SHA-256 пароли) ---
+#include "mbedtls/md.h"
+
+static constexpr size_t kMaxSessions = 4;
+static constexpr uint32_t kSessionTtlMs = 30 * 60 * 1000; // 30 минут
+
+struct Session {
+    char token[65];
+    uint32_t createdMs;
+    bool active;
+};
+
+static Session g_sessions[kMaxSessions];
+static char g_adminUsername[32] = "admin";
+static uint8_t g_adminPasswordHash[32] = {0}; // SHA-256
+static bool g_adminSetupDone = false;
+
+static void sha256Hex(const char* input, char* outputHex)
+{
+    mbedtls_md_context_t ctx;
+    mbedtls_md_init(&ctx);
+    mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 0);
+    mbedtls_md_starts(&ctx);
+    mbedtls_md_update(&ctx, (const uint8_t*)input, strlen(input));
+    uint8_t hash[32];
+    mbedtls_md_finish(&ctx, hash);
+    mbedtls_md_free(&ctx);
+    for (int i = 0; i < 32; i++) {
+        sprintf(outputHex + i * 2, "%02x", hash[i]);
+    }
+    outputHex[64] = '\0';
+}
+
+static void cleanupExpiredSessions(uint32_t nowMs)
+{
+    for (size_t i = 0; i < kMaxSessions; i++) {
+        if (g_sessions[i].active && nowMs - g_sessions[i].createdMs > kSessionTtlMs) {
+            g_sessions[i].active = false;
+        }
+    }
+}
+
+static int loginCallback(const char* username, const char* password, char* tokenOut, size_t tokenOutSize)
+{
+    if (!g_adminSetupDone) {
+        // Админ не настроен — разрешаем вход с дефолтными учётными данными (предупреждение)
+        if (strcmp(username, "admin") == 0 && strcmp(password, "admin") == 0) {
+            // Генерируем токен
+            char hashInput[128];
+            snprintf(hashInput, sizeof(hashInput), "%s:%s:%" PRIu32, username, password,
+                     (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS));
+            char hashHex[65];
+            sha256Hex(hashInput, hashHex);
+            cleanupExpiredSessions((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS));
+            // Находим свободный слот
+            for (size_t i = 0; i < kMaxSessions; i++) {
+                if (!g_sessions[i].active) {
+                    strcpy(g_sessions[i].token, hashHex);
+                    g_sessions[i].createdMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+                    g_sessions[i].active = true;
+                    strncpy(tokenOut, hashHex, tokenOutSize - 1);
+                    tokenOut[tokenOutSize - 1] = '\0';
+                    return (int)strlen(tokenOut);
+                }
+            }
+        }
+        return -1;
+    }
+    // Проверяем пароль против сохранённого хеша (SHA-256 от пароля)
+    uint8_t inputHash[32];
+    mbedtls_md_context_t ctx;
+    mbedtls_md_init(&ctx);
+    mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 0);
+    mbedtls_md_starts(&ctx);
+    mbedtls_md_update(&ctx, (const uint8_t*)password, strlen(password));
+    mbedtls_md_finish(&ctx, inputHash);
+    mbedtls_md_free(&ctx);
+    if (memcmp(inputHash, g_adminPasswordHash, 32) != 0) {
+        return -1;
+    }
+    // Проверяем username
+    if (strcmp(username, g_adminUsername) != 0) {
+        return -1;
+    }
+    cleanupExpiredSessions((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS));
+    for (size_t i = 0; i < kMaxSessions; i++) {
+        if (!g_sessions[i].active) {
+            char hashInput2[128];
+            snprintf(hashInput2, sizeof(hashInput2), "%s:%s:%" PRIu32, username, password,
+                     (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS));
+            char hashHex2[65];
+            sha256Hex(hashInput2, hashHex2);
+            strcpy(g_sessions[i].token, hashHex2);
+            g_sessions[i].createdMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+            g_sessions[i].active = true;
+            strncpy(tokenOut, hashHex2, tokenOutSize - 1);
+            tokenOut[tokenOutSize - 1] = '\0';
+            return (int)strlen(tokenOut);
+        }
+    }
+    return -1;
+}
+
+static esp_err_t logoutCallback(const char* token)
+{
+    for (size_t i = 0; i < kMaxSessions; i++) {
+        if (g_sessions[i].active && strcmp(g_sessions[i].token, token) == 0) {
+            g_sessions[i].active = false;
+            return ESP_OK;
+        }
+    }
+    return ESP_FAIL;
+}
+
+static esp_err_t adminSetupCallback(const char* username, const char* passwordHash)
+{
+    strncpy(g_adminUsername, username, sizeof(g_adminUsername) - 1);
+    g_adminUsername[sizeof(g_adminUsername) - 1] = '\0';
+    // passwordHash уже является hex-строкой SHA-256 (64 символа)
+    // Преобразуем из hex в байты
+    for (int i = 0; i < 32; i++) {
+        unsigned int byte;
+        sscanf(passwordHash + i * 2, "%02x", &byte);
+        g_adminPasswordHash[i] = (uint8_t)byte;
+    }
+    g_adminSetupDone = true;
+    ESP_LOGI(TAG, "Admin setup done: user=%s", g_adminUsername);
+    return ESP_OK;
 }
 
 static esp_err_t setCrossoverHzCallback(int hz)
@@ -114,10 +614,9 @@ static esp_err_t setCrossoverHzCallback(int hz)
     if (hz > 500) hz = 500;
     g_cfg.crossoverHz = hz;
     g_crossoverHz = hz;
-    g_crossover.configure(CrossoverKind::LowPass, CrossoverType::LinkwitzRiley, 4,
-                          (float)hz, (float)kSampleRate);
+    g_pipeline.setCrossoverHz(hz);
     // Сохраняем в NVS
-    g_nvsConfig.save(g_cfg);
+    g_nvsDirty = true; g_nvsLastChangeMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
     ESP_LOGI(TAG, "crossover set to %d Hz (saved to NVS)", hz);
     return ESP_OK;
 }
@@ -137,15 +636,14 @@ static esp_err_t rebootCallback(void)
 static esp_err_t factoryResetCallback(void)
 {
     ESP_LOGW(TAG, "factory reset requested via Web UI");
-    esp_err_t ret = g_nvsConfig.erase();
+    esp_err_t ret = g_nvsConfig->erase();
     if (ret == ESP_OK) {
         // Загружаем дефолтные значения после сброса
         g_cfg = NodeConfig();
-        g_volumePercent = g_cfg.volume;
+        g_volumePercent = g_cfg.masterVolume;
         g_crossoverHz = g_cfg.crossoverHz;
-        g_volume.setVolume(g_cfg.volume);
-        g_crossover.configure(CrossoverKind::LowPass, CrossoverType::LinkwitzRiley, 4,
-                              (float)g_cfg.crossoverHz, (float)kSampleRate);
+        g_pipeline.setVolume(g_cfg.masterVolume);
+        g_pipeline.setCrossoverHz(g_cfg.crossoverHz);
     }
     return ret;
 }
@@ -156,13 +654,115 @@ static esp_err_t otaUpdateCallback(const char* url)
     return ota_update_start(url);
 }
 
+static esp_err_t otaUpdateFileCallback(const uint8_t* data, size_t size, const char* signatureHex)
+{
+    // Проверка подписи HMAC-SHA256, если публичный ключ настроен
+    if (g_cfg.otaPublicKey[0] != '\0') {
+        if (signatureHex == nullptr || strlen(signatureHex) != 64) {
+            ESP_LOGE(TAG, "OTA signature required but not provided or invalid length (expected 64 hex chars)");
+            return ESP_ERR_INVALID_ARG;
+        }
+
+        // Парсим HMAC ключ (hex, до 32 байта = 64 hex символов)
+        uint8_t hmacKey[32];
+        size_t keyLen = 0;
+        for (size_t i = 0; i < 32 && g_cfg.otaPublicKey[i * 2] != '\0'; i++) {
+            unsigned int byte;
+            if (sscanf(g_cfg.otaPublicKey + i * 2, "%02x", &byte) != 1) {
+                ESP_LOGE(TAG, "Invalid otaPublicKey hex at position %zu", i);
+                return ESP_ERR_INVALID_ARG;
+            }
+            hmacKey[i] = (uint8_t)byte;
+            keyLen++;
+        }
+
+        // Парсим подпись HMAC-SHA256 (hex, 32 байта = 64 hex символов)
+        uint8_t signature[32];
+        for (size_t i = 0; i < 32; i++) {
+            unsigned int byte;
+            if (sscanf(signatureHex + i * 2, "%02x", &byte) != 1) {
+                ESP_LOGE(TAG, "Invalid signature hex at position %zu", i);
+                return ESP_ERR_INVALID_ARG;
+            }
+            signature[i] = (uint8_t)byte;
+        }
+
+        // Проверка подписи через mbedTLS HMAC-SHA256
+        unsigned char computed[32];
+        mbedtls_md_context_t ctx;
+        mbedtls_md_init(&ctx);
+        mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 1);
+        mbedtls_md_hmac_starts(&ctx, hmacKey, keyLen);
+        mbedtls_md_hmac_update(&ctx, data, size);
+        mbedtls_md_hmac_finish(&ctx, computed);
+        mbedtls_md_free(&ctx);
+
+        // Постоянное время сравнения
+        int diff = 0;
+        for (size_t i = 0; i < 32; i++) {
+            diff |= computed[i] ^ signature[i];
+        }
+
+        if (diff != 0) {
+            ESP_LOGE(TAG, "OTA signature verification failed");
+            return ESP_ERR_INVALID_ARG;
+        }
+
+        ESP_LOGI(TAG, "OTA signature verified successfully");
+    }
+
+    const esp_partition_t* ota_partition = esp_ota_get_next_update_partition(nullptr);
+    if (!ota_partition) {
+        ESP_LOGE(TAG, "No OTA partition found");
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    esp_ota_handle_t ota_handle;
+    esp_err_t ret = esp_ota_begin(ota_partition, OTA_SIZE_UNKNOWN, &ota_handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_begin failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = esp_ota_write(ota_handle, data, size);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_write failed: %s", esp_err_to_name(ret));
+        esp_ota_abort(ota_handle);
+        return ret;
+    }
+
+    ret = esp_ota_end(ota_handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_end failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = esp_ota_set_boot_partition(ota_partition);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_set_boot_partition failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "OTA update from file succeeded, partition=%s, size=%zu",
+             ota_partition->label, size);
+    return ESP_OK;
+}
+
 static int getWifiConfigCallback(char* buf, size_t bufSize)
 {
+    const char* modeStr = "ap";
+    if (g_cfg.wifiMode == WifiMode::Sta) modeStr = "sta";
+    else if (g_cfg.wifiMode == WifiMode::ApSta) modeStr = "apsta";
     int len = snprintf(buf, bufSize,
-        "{\"mode\":\"ap\",\"apSsid\":\"%s\",\"apPassword\":\"%s\","
-        "\"staSsid\":\"%s\",\"staPassword\":\"%s\"}",
-        g_cfg.wifiApSsid, g_cfg.wifiApPassword,
-        g_cfg.wifiSsid, g_cfg.wifiPassword);
+        "{\"mode\":\"%s\",\"apSsid\":\"%s\",\"apPassword\":\"%s\","
+        "\"staSsid\":\"%s\",\"staPassword\":\"%s\","
+        "\"staDhcp\":\"%s\",\"staIp\":\"%s\",\"staGateway\":\"%s\","
+        "\"staNetmask\":\"%s\",\"staDns\":\"%s\"}",
+        modeStr, g_cfg.wifiApSsid, g_cfg.wifiApPassword,
+        g_cfg.wifiSsid, g_cfg.wifiPassword,
+        g_cfg.wifiStaDhcp ? "true" : "false",
+        g_cfg.wifiStaIp, g_cfg.wifiStaGateway,
+        g_cfg.wifiStaNetmask, g_cfg.wifiStaDns);
     return len;
 }
 
@@ -185,7 +785,12 @@ static esp_err_t setWifiConfigCallback(const char* mode,
                                        const char* apSsid,
                                        const char* apPassword,
                                        const char* staSsid,
-                                       const char* staPassword)
+                                       const char* staPassword,
+                                       const char* staDhcp,
+                                       const char* staIp,
+                                       const char* staGateway,
+                                       const char* staNetmask,
+                                       const char* staDns)
 {
     ESP_LOGW(TAG, "Wi-Fi config requested: mode=%s", mode ? mode : "ap");
 
@@ -205,22 +810,38 @@ static esp_err_t setWifiConfigCallback(const char* mode,
         strncpy(g_cfg.wifiPassword, staPassword, sizeof(g_cfg.wifiPassword) - 1);
         g_cfg.wifiPassword[sizeof(g_cfg.wifiPassword) - 1] = '\0';
     }
-
-    // Сохраняем в NVS
-    esp_err_t ret = g_nvsConfig.save(g_cfg);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to save Wi-Fi config to NVS: %s", esp_err_to_name(ret));
-        return ret;
+    if (staDhcp) {
+        g_cfg.wifiStaDhcp = (strcmp(staDhcp, "true") == 0);
+    }
+    if (staIp) {
+        strncpy(g_cfg.wifiStaIp, staIp, sizeof(g_cfg.wifiStaIp) - 1);
+        g_cfg.wifiStaIp[sizeof(g_cfg.wifiStaIp) - 1] = '\0';
+    }
+    if (staGateway) {
+        strncpy(g_cfg.wifiStaGateway, staGateway, sizeof(g_cfg.wifiStaGateway) - 1);
+        g_cfg.wifiStaGateway[sizeof(g_cfg.wifiStaGateway) - 1] = '\0';
+    }
+    if (staNetmask) {
+        strncpy(g_cfg.wifiStaNetmask, staNetmask, sizeof(g_cfg.wifiStaNetmask) - 1);
+        g_cfg.wifiStaNetmask[sizeof(g_cfg.wifiStaNetmask) - 1] = '\0';
+    }
+    if (staDns) {
+        strncpy(g_cfg.wifiStaDns, staDns, sizeof(g_cfg.wifiStaDns) - 1);
+        g_cfg.wifiStaDns[sizeof(g_cfg.wifiStaDns) - 1] = '\0';
     }
 
+    // Сохраняем в NVS (с дебаунсом — реальная запись в основном цикле)
+    g_nvsDirty = true; g_nvsLastChangeMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+
     // Применяем без перезагрузки
-    ret = wifi_reconfigure();
+    esp_err_t ret = wifi_reconfigure();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to reconfigure Wi-Fi: %s", esp_err_to_name(ret));
         return ret;
     }
 
-    ESP_LOGI(TAG, "Wi-Fi config saved and applied: apSsid=%s", g_cfg.wifiApSsid);
+    ESP_LOGI(TAG, "Wi-Fi config saved and applied: apSsid=%s, staDhcp=%d, staIp=%s",
+             g_cfg.wifiApSsid, g_cfg.wifiStaDhcp, g_cfg.wifiStaIp);
     return ESP_OK;
 }
 
@@ -230,45 +851,66 @@ static const WebServerCallbacks g_webCallbacks = {
     .getVolume = getVolumeCallback,
     .setCrossoverHz = setCrossoverHzCallback,
     .getCrossoverHz = getCrossoverHzCallback,
+    .setMute = setMuteCallback,
+    .getMute = getMuteCallback,
+    .setDelay = setDelayCallback,
+    .getDelay = getDelayCallback,
+    .wifiScan = wifiScanCallback,
+    .wifiSetMode = wifiSetModeCallback,
+    .wifiSetApPassword = wifiSetApPasswordCallback,
+    .setHostname = setHostnameCallback,
+    .netInternetStatus = netInternetStatusCallback,
+    .netInternetCheck = netInternetCheckCallback,
+    .configExport = configExportCallback,
+    .configImport = configImportCallback,
+    .logsGet = logsGetCallback,
+    .diagnosticsGet = diagnosticsGetCallback,
+    .agentHealth = agentHealthCallback,
+    .agentDiagnostics = agentDiagnosticsCallback,
+    .agentPing = agentPingCallback,
     .reboot = rebootCallback,
     .factoryReset = factoryResetCallback,
     .otaUpdate = otaUpdateCallback,
+    .otaUpdateFile = otaUpdateFileCallback,
     .getWifiConfig = getWifiConfigCallback,
     .setWifiConfig = setWifiConfigCallback,
     .getCsrfToken = getCsrfTokenCallback,
     .validateCsrfToken = validateCsrfTokenCallback,
+    .login = loginCallback,
+    .logout = logoutCallback,
+    .adminSetup = adminSetupCallback,
 };
+
+// Предварительное объявление (вызывается из onPcm до определения flushTxBatch).
+static void flushTxBatch();
 
 // Коллбек приёма UDP аудио
 class UdpAudioHandler : public UdpAudioRxCallback {
 public:
     void onPcm(const int16_t* data, size_t nSamplesPerChannel) override
     {
-        // Обрабатываем стерео PCM через DSP конвейер
-        // Накапливаем семплы в батч для эффективной записи в I2S DMA
-        static int16_t outBuf[128];
-        static size_t outIdx = 0;
-
+        // Обрабатываем стерео PCM через DSP конвейер.
+        // out.sub → джиттер-буфер → I2S (сабвуфер).
+        // out.left / out.right → батчи для отправки на сателлиты (ESP-NOW).
         for (size_t i = 0; i < nSamplesPerChannel; i++) {
             int16_t l = data[i * 2];
             int16_t r = data[i * 2 + 1];
 
             PipelineOutput out = g_pipeline.process(l, r);
 
-            // Сабвуфер — моно, через DelayLine
+            // Сабвуфер — моно, в джиттер-буфер (выдача ровным потоком в audioOutTick).
             int16_t subSample = static_cast<int16_t>(out.sub * 32767.0f);
-            // DelayLine.process принимает int16_t и возвращает задержанный семпл
-            subSample = g_delaySub.process(subSample);
+            subSample = g_delaySub->process(subSample);
+            if (g_jitter) g_jitter->push(&subSample, 1);
 
-            // Накапливаем в батч
-            outBuf[outIdx++] = subSample;
-
-            // Пишем батч когда заполнен или конец входных данных
-            if (outIdx >= 128 || i == nSamplesPerChannel - 1) {
-                if (g_i2sOn && outIdx > 0) {
-                    g_i2sOut.write(outBuf, outIdx, 100);
-                }
-                outIdx = 0;
+            // TX на сателлиты: задержка каналов → накапливаем HPF-каналы L/R в батчи.
+            int16_t leftSample = static_cast<int16_t>(out.left * 32767.0f);
+            int16_t rightSample = static_cast<int16_t>(out.right * 32767.0f);
+            g_txLeft[g_txCount.load()] = g_delayLeft->process(leftSample);
+            g_txRight[g_txCount.load()] = g_delayRight->process(rightSample);
+            g_txCount.fetch_add(1);
+            if (g_txCount.load() >= kBatchSamples) {
+                flushTxBatch();
             }
         }
     }
@@ -276,56 +918,351 @@ public:
 
 static UdpAudioHandler g_udpHandler;
 
+// Коллбек приёма ESP-NOW на мастере — обрабатывает heartbeat (discovery-response)
+// от сателлитов и помечает их онлайн.
+class EspNowMasterRxCallback : public EspNowRxCallback {
+public:
+    void onPacket(const uint8_t* srcMac, const uint8_t* data, size_t len) override {
+        if (len < sizeof(AudioPacketHeader)) return;
+        AudioPacketHeader hdr;
+        memcpy(&hdr, data, sizeof(AudioPacketHeader));
+
+        if (hdr.magic != kMagicDiscovery) return;
+
+        uint32_t nowMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+        g_heartbeatsRx++;
+
+        // Проверяем MAC только если настроен (не все нули)
+        bool leftMacSet = memcmp(g_cfg.leftSatMac.bytes, "\0\0\0\0\0\0", 6) != 0;
+        bool rightMacSet = memcmp(g_cfg.rightSatMac.bytes, "\0\0\0\0\0\0", 6) != 0;
+        bool isLeft = leftMacSet && memcmp(srcMac, g_cfg.leftSatMac.bytes, 6) == 0;
+        bool isRight = rightMacSet && memcmp(srcMac, g_cfg.rightSatMac.bytes, 6) == 0;
+
+        if (isLeft) {
+            if (!g_leftOnline) {
+                g_leftOnline = true;
+                ESP_LOGI(TAG, "satellite left online");
+                char sse[128];
+                snprintf(sse, sizeof(sse), "{\"left\":\"online\",\"right\":\"%s\"}",
+                         g_rightOnline ? "online" : "offline");
+                g_webServer->sseBroadcast("satellite", sse);
+            }
+            g_lastLeftSeenMs = nowMs;
+        } else if (isRight) {
+            if (!g_rightOnline) {
+                g_rightOnline = true;
+                ESP_LOGI(TAG, "satellite right online");
+                char sse[128];
+                snprintf(sse, sizeof(sse), "{\"left\":\"%s\",\"right\":\"online\"}",
+                         g_leftOnline ? "online" : "offline");
+                g_webServer->sseBroadcast("satellite", sse);
+            }
+            g_lastRightSeenMs = nowMs;
+        }
+    }
+};
+
+static EspNowMasterRxCallback g_espnowMasterRxCb;
+
+// Отправить накопленный батч аудио на сателлиты (ESP-NOW unicast по MAC).
+// Формат пакета: AudioPacketHeader (16 байт, espnow_transport.h) + payload int16.
+static void flushTxBatch()
+{
+    size_t txCount = g_txCount.exchange(0);
+    if (txCount == 0) return;
+    uint8_t buf[16 + 234];
+    AudioPacketHeader hdr = {};
+    hdr.magic = kMagicAudioL;
+    hdr.sequence = g_txPacketId++;
+    hdr.timestampMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+    hdr.volumeL = (int16_t)g_cfg.masterVolume;
+    hdr.volumeR = (int16_t)g_cfg.masterVolume;
+    hdr.delaySubMs = (int16_t)g_cfg.delaySubMs;
+    size_t payloadBytes = txCount * sizeof(int16_t);
+    size_t n = sizeof(hdr) + payloadBytes;
+    memcpy(buf, &hdr, sizeof(hdr));
+    memcpy(buf + sizeof(hdr), g_txLeft, payloadBytes);
+
+    bool hasLeft = g_cfg.leftSatMac.bytes[0] || g_cfg.leftSatMac.bytes[1] ||
+                   g_cfg.leftSatMac.bytes[2] || g_cfg.leftSatMac.bytes[3] ||
+                   g_cfg.leftSatMac.bytes[4] || g_cfg.leftSatMac.bytes[5];
+    if (hasLeft) {
+        g_espnow->sendUnicast(g_cfg.leftSatMac.bytes, buf, n);
+    } else {
+        g_espnow->sendBroadcast(buf, n);
+    }
+
+    // Правый канал
+    hdr.magic = kMagicAudioR;
+    hdr.sequence = g_txPacketId++;
+    n = sizeof(hdr) + payloadBytes;
+    memcpy(buf, &hdr, sizeof(hdr));
+    memcpy(buf + sizeof(hdr), g_txRight, payloadBytes);
+
+    bool hasRight = g_cfg.rightSatMac.bytes[0] || g_cfg.rightSatMac.bytes[1] ||
+                    g_cfg.rightSatMac.bytes[2] || g_cfg.rightSatMac.bytes[3] ||
+                    g_cfg.rightSatMac.bytes[4] || g_cfg.rightSatMac.bytes[5];
+    if (hasRight) {
+        g_espnow->sendUnicast(g_cfg.rightSatMac.bytes, buf, n);
+    } else {
+        g_espnow->sendBroadcast(buf, n);
+    }
+    g_txPackets += 2;
+}
+
+// Драйвер аудио-вывода: вычитывает семплы из джиттер-буфера в I2S.
+// Вызывается из loop() с бюджетом семплов, привязанным к реальному времени.
+static void audioOutTick(uint32_t samplesBudget)
+{
+    if (!g_i2sOn) return;
+    int16_t buf[128];
+    while (samplesBudget > 0) {
+        size_t chunk = samplesBudget > 128 ? 128 : samplesBudget;
+        for (size_t i = 0; i < chunk; i++) {
+            int16_t s = 0;
+            if (g_jitter && g_jitter->pop(s)) {
+                s = g_delaySub->process(s);
+            }
+            buf[i] = s;
+        }
+        g_i2sOut->write(buf, chunk, 100);
+        samplesBudget -= chunk;
+    }
+}
+
 // Состояние Wi-Fi
-static bool g_wifi_inited = false;
 
 // Предварительное объявление
 static esp_err_t wifi_reconfigure(void);
 
-// Инициализация Wi-Fi AP (вызывается один раз при старте)
-static esp_err_t wifi_init_softap(void)
+// Сканирование Wi-Fi сетей — выводит список с параметрами безопасности.
+static void wifi_scan_and_log(void)
+{
+    uint16_t ap_count = 0;
+    esp_err_t ret = esp_wifi_scan_get_ap_num(&ap_count);
+    if (ret != ESP_OK || ap_count == 0) {
+        ESP_LOGI(TAG, "Wi-Fi scan: no APs found");
+        return;
+    }
+    wifi_ap_record_t ap_list[8];
+    uint16_t count = ap_count > 8 ? 8 : ap_count;
+    ret = esp_wifi_scan_get_ap_records(&count, ap_list);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Wi-Fi scan get_ap_records failed: %s", esp_err_to_name(ret));
+        return;
+    }
+    ESP_LOGI(TAG, "Wi-Fi scan found %u APs:", ap_count);
+    for (uint16_t i = 0; i < count; i++) {
+        const char *auth_str;
+        switch (ap_list[i].authmode) {
+            case WIFI_AUTH_OPEN:          auth_str = "OPEN"; break;
+            case WIFI_AUTH_WEP:           auth_str = "WEP"; break;
+            case WIFI_AUTH_WPA_PSK:       auth_str = "WPA-PSK"; break;
+            case WIFI_AUTH_WPA2_PSK:      auth_str = "WPA2-PSK"; break;
+            case WIFI_AUTH_WPA_WPA2_PSK:  auth_str = "WPA/WPA2-PSK"; break;
+            case WIFI_AUTH_WPA3_PSK:      auth_str = "WPA3-PSK"; break;
+            case WIFI_AUTH_WPA2_WPA3_PSK: auth_str = "WPA2/WPA3-PSK"; break;
+            default:                      auth_str = "UNKNOWN"; break;
+        }
+        ESP_LOGI(TAG, "  [%u] %-32s RSSI=%-4d ch=%-3d auth=%-16s",
+                 i, ap_list[i].ssid, ap_list[i].rssi, ap_list[i].primary, auth_str);
+    }
+}
+
+// Включить NAPT (сетевой адресный перевод) для APSTA режима репитера.
+static void enable_napt(void)
+{
+    esp_netif_t* ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    if (ap != nullptr) {
+        esp_err_t ret = esp_netif_napt_enable(ap);
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "NAPT enabled — AP clients routed to STA uplink");
+        } else {
+            ESP_LOGE(TAG, "NAPT enable failed: %s (need CONFIG_LWIP_IPV4_NAPT=y)",
+                     esp_err_to_name(ret));
+        }
+    } else {
+        ESP_LOGE(TAG, "NAPT: could not get AP netif handle");
+    }
+}
+
+// S-1: предупреждение если используется дефолтный пароль AP.
+static void log_default_password_warning(void)
+{
+    if (strcmp(g_cfg.wifiApPassword, "audio21master") == 0) {
+        ESP_LOGW(TAG, "AP password is DEFAULT ('audio21master') — change it via Web UI / config.env!");
+    } else {
+        ESP_LOGI(TAG, "AP password changed from default — OK");
+    }
+}
+
+// Инициализация Wi-Fi с поддержкой AP / STA / APSTA режимов.
+static esp_err_t wifi_init(void)
 {
     if (!g_wifi_inited) {
-        ESP_ERROR_CHECK(esp_netif_init());
+        esp_err_t netif_ret = esp_netif_init();
+        if (netif_ret != ESP_OK && netif_ret != ESP_ERR_INVALID_STATE) {
+            ESP_LOGE(TAG, "esp_netif_init failed: %s", esp_err_to_name(netif_ret));
+            return netif_ret;
+        }
         ESP_ERROR_CHECK(esp_event_loop_create_default());
-        esp_netif_create_default_wifi_ap();
-
         wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
         ESP_ERROR_CHECK(esp_wifi_init(&cfg));
         g_wifi_inited = true;
     }
 
-    wifi_config_t wifi_config = {
-        .ap = {
-            .ssid = {},
-            .password = {},
-            .ssid_len = (uint8_t)strlen(g_cfg.wifiApSsid),
-            .channel = 6,
-            .authmode = WIFI_AUTH_WPA_WPA2_PSK,
-            .ssid_hidden = 0,
-            .max_connection = 4,
-            .beacon_interval = 100,
-        },
-    };
-    memcpy(wifi_config.ap.ssid, g_cfg.wifiApSsid, strlen(g_cfg.wifiApSsid));
-    memcpy(wifi_config.ap.password, g_cfg.wifiApPassword, strlen(g_cfg.wifiApPassword));
+    // Обработчики событий Wi-Fi (общие для всех режимов).
+    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, [](void* arg, esp_event_base_t base, int32_t event_id, void* event_data) {
+        if (event_id == WIFI_EVENT_STA_START) {
+            ESP_LOGI("wifi_event", "Wi-Fi STA started");
+        } else if (event_id == WIFI_EVENT_STA_CONNECTED) {
+            wifi_event_sta_connected_t* conn = (wifi_event_sta_connected_t*)event_data;
+            ESP_LOGI("wifi_event", "Wi-Fi connected to SSID=%s, channel=%d",
+                     conn->ssid, conn->channel);
+        } else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
+            wifi_event_sta_disconnected_t* disc = (wifi_event_sta_disconnected_t*)event_data;
+            ESP_LOGW("wifi_event", "Wi-Fi disconnected from SSID=%s, reason=%d, reconnecting...",
+                     disc->ssid, disc->reason);
+            esp_wifi_connect();
+        } else if (event_id == WIFI_EVENT_AP_START) {
+            ESP_LOGI("wifi_event", "Wi-Fi AP started");
+        } else if (event_id == WIFI_EVENT_AP_STACONNECTED) {
+            wifi_event_ap_staconnected_t* conn = (wifi_event_ap_staconnected_t*)event_data;
+            ESP_LOGI("wifi_event", "Station %02X:%02X:%02X:%02X:%02X:%02X joined AP",
+                     conn->mac[0], conn->mac[1], conn->mac[2],
+                     conn->mac[3], conn->mac[4], conn->mac[5]);
+        } else if (event_id == WIFI_EVENT_AP_STADISCONNECTED) {
+            wifi_event_ap_stadisconnected_t* conn = (wifi_event_ap_stadisconnected_t*)event_data;
+            ESP_LOGI("wifi_event", "Station %02X:%02X:%02X:%02X:%02X:%02X left AP",
+                     conn->mac[0], conn->mac[1], conn->mac[2],
+                     conn->mac[3], conn->mac[4], conn->mac[5]);
+        }
+    }, nullptr));
 
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, [](void* arg, esp_event_base_t base, int32_t event_id, void* event_data) {
+        ip_event_got_ip_t* ip_event = (ip_event_got_ip_t*)event_data;
+        ESP_LOGI("wifi_event", "Got IPv4 address: " IPSTR, IP2STR(&ip_event->ip_info.ip));
+        snprintf(g_staIpAddr, sizeof(g_staIpAddr), IPSTR, IP2STR(&ip_event->ip_info.ip));
+        g_sta_connecting = false;
+    }, nullptr));
+
+    // Настраиваем режим в зависимости от конфига.
+    wifi_mode_t mode;
+    switch (g_cfg.wifiMode) {
+        case WifiMode::ApDirect:
+            mode = WIFI_MODE_AP;
+            break;
+        case WifiMode::Sta:
+            mode = WIFI_MODE_STA;
+            break;
+        case WifiMode::ApSta:
+        default:
+            mode = WIFI_MODE_APSTA;
+            break;
+    }
+
+    ESP_ERROR_CHECK(esp_wifi_set_mode(mode));
+
+    // --- AP настройка (для ApDirect и ApSta) ---
+    if (mode == WIFI_MODE_AP || mode == WIFI_MODE_APSTA) {
+        esp_netif_create_default_wifi_ap();
+        wifi_config_t ap_config = {};
+        strcpy((char*)ap_config.ap.ssid, g_cfg.wifiApSsid);
+        strcpy((char*)ap_config.ap.password, g_cfg.wifiApPassword);
+        ap_config.ap.ssid_len = (uint8_t)strlen(g_cfg.wifiApSsid);
+        ap_config.ap.channel = 6;
+        ap_config.ap.authmode = WIFI_AUTH_WPA_WPA2_PSK;
+        ap_config.ap.ssid_hidden = 0;
+        ap_config.ap.max_connection = 4;
+        ap_config.ap.beacon_interval = 100;
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
+        ESP_LOGI(TAG, "Wi-Fi AP '%s' configured", g_cfg.wifiApSsid);
+        log_default_password_warning();
+    }
+
+    // --- STA настройка (для Sta и ApSta) ---
+    if (mode == WIFI_MODE_STA || mode == WIFI_MODE_APSTA) {
+        esp_netif_create_default_wifi_sta();
+        wifi_config_t sta_config = {};
+        strcpy((char*)sta_config.sta.ssid, g_cfg.wifiSsid);
+        strcpy((char*)sta_config.sta.password, g_cfg.wifiPassword);
+        sta_config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+        sta_config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+        sta_config.sta.pmf_cfg.capable = false;
+        sta_config.sta.pmf_cfg.required = false;
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_config));
+        ESP_LOGI(TAG, "Wi-Fi STA connecting to SSID=%s", g_cfg.wifiSsid);
+
+        // Статический IP для STA (если DHCP отключён)
+        if (!g_cfg.wifiStaDhcp) {
+            esp_netif_t* sta_netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+            if (sta_netif) {
+                esp_netif_dhcps_stop(sta_netif);
+                esp_netif_ip_info_t ip_info = {};
+                ip_info.ip.addr = ipaddr_addr(g_cfg.wifiStaIp);
+                ip_info.gw.addr = ipaddr_addr(g_cfg.wifiStaGateway);
+                ip_info.netmask.addr = ipaddr_addr(g_cfg.wifiStaNetmask);
+                esp_netif_set_ip_info(sta_netif, &ip_info);
+                esp_netif_dns_info_t dns_info;
+                dns_info.ip.u_addr.ip4.addr = ipaddr_addr(g_cfg.wifiStaDns);
+                dns_info.ip.type = IPADDR_TYPE_V4;
+                esp_netif_set_dns_info(sta_netif, ESP_NETIF_DNS_MAIN, &dns_info);
+                ESP_LOGI(TAG, "Static IP configured: %s/%s gw=%s dns=%s",
+                         g_cfg.wifiStaIp, g_cfg.wifiStaNetmask,
+                         g_cfg.wifiStaGateway, g_cfg.wifiStaDns);
+            }
+        }
+    }
+
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    ESP_LOGI(TAG, "Wi-Fi AP initialized: SSID=%s, channel=6", g_cfg.wifiApSsid);
+    // Сканируем сети (неблокирующе) — результаты доступны через /api/wifi/scan.
+    if (mode == WIFI_MODE_STA || mode == WIFI_MODE_APSTA) {
+        wifi_scan_config_t scan_cfg = {};
+        scan_cfg.ssid = NULL;
+        scan_cfg.bssid = NULL;
+        scan_cfg.channel = 0;
+        scan_cfg.show_hidden = true;
+        esp_wifi_scan_start(&scan_cfg, /*blocking=*/false);
+    }
+
+    // Подключаемся к STA сети (если режим включает STA).
+    if (mode == WIFI_MODE_STA || mode == WIFI_MODE_APSTA) {
+        g_sta_connecting = true;
+        g_sta_connect_start_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+        ESP_ERROR_CHECK(esp_wifi_connect());
+    }
+
+    // NAPT для APSTA репитера.
+    if (mode == WIFI_MODE_APSTA) {
+        enable_napt();
+    }
+
+    // Запускаем captive DNS для AP интерфейса.
+    esp_netif_t *ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    if (ap_netif) {
+        esp_netif_ip_info_t ip_info;
+        if (esp_netif_get_ip_info(ap_netif, &ip_info) == ESP_OK) {
+            dns_captive_start(ip_info.ip.addr);
+            ESP_LOGI(TAG, "Captive DNS started, responding with " IPSTR, IP2STR(&ip_info.ip));
+        }
+    }
+
     return ESP_OK;
 }
 
-// Переконфигурация Wi-Fi без перезагрузки (применение новых SSID/пароля)
+// Переконфигурация Wi-Fi без перезагрузки (применение новых SSID/пароля/режима)
 static esp_err_t wifi_reconfigure(void)
 {
     ESP_LOGW(TAG, "Wi-Fi reconfiguration requested");
 
+    // Устанавливаем флаг переконфигурации — основной цикл не должен использовать сеть
+    g_wifi_reconfiguring.store(true);
+
     // Проверяем, был ли Wi-Fi инициализирован
     if (!g_wifi_inited) {
         ESP_LOGW(TAG, "Wi-Fi not initialized, skipping reconfigure");
+        g_wifi_reconfiguring.store(false);
         return ESP_OK;
     }
 
@@ -340,35 +1277,105 @@ static esp_err_t wifi_reconfigure(void)
     dns_captive_stop();
     mdns_raw_deinit();
 
-    // Применяем новую конфигурацию
-    wifi_config_t wifi_config = {
-        .ap = {
-            .ssid = {},
-            .password = {},
-            .ssid_len = (uint8_t)strlen(g_cfg.wifiApSsid),
-            .channel = 6,
-            .authmode = WIFI_AUTH_WPA_WPA2_PSK,
-            .ssid_hidden = 0,
-            .max_connection = 4,
-            .beacon_interval = 100,
-        },
-    };
-    memcpy(wifi_config.ap.ssid, g_cfg.wifiApSsid, strlen(g_cfg.wifiApSsid));
-    memcpy(wifi_config.ap.password, g_cfg.wifiApPassword, strlen(g_cfg.wifiApPassword));
+    // Сбрасываем флаги подключения
+    g_staIpAddr[0] = '\0';
+    g_sta_connecting = false;
+    g_leftOnline = false;
+    g_rightOnline = false;
 
-    ret = esp_wifi_set_config(WIFI_IF_AP, &wifi_config);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "esp_wifi_set_config failed: %s", esp_err_to_name(ret));
-        return ret;
+    // Настраиваем режим в зависимости от конфига.
+    wifi_mode_t mode;
+    switch (g_cfg.wifiMode) {
+        case WifiMode::ApDirect:
+            mode = WIFI_MODE_AP;
+            break;
+        case WifiMode::Sta:
+            mode = WIFI_MODE_STA;
+            break;
+        case WifiMode::ApSta:
+        default:
+            mode = WIFI_MODE_APSTA;
+            break;
     }
 
-    ret = esp_wifi_start();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "esp_wifi_start failed: %s", esp_err_to_name(ret));
-        return ret;
+    ESP_ERROR_CHECK(esp_wifi_set_mode(mode));
+
+    // --- AP настройка (для ApDirect и ApSta) ---
+    if (mode == WIFI_MODE_AP || mode == WIFI_MODE_APSTA) {
+        esp_netif_create_default_wifi_ap();
+        wifi_config_t ap_config = {};
+        strcpy((char*)ap_config.ap.ssid, g_cfg.wifiApSsid);
+        strcpy((char*)ap_config.ap.password, g_cfg.wifiApPassword);
+        ap_config.ap.ssid_len = (uint8_t)strlen(g_cfg.wifiApSsid);
+        ap_config.ap.channel = 6;
+        ap_config.ap.authmode = WIFI_AUTH_WPA_WPA2_PSK;
+        ap_config.ap.ssid_hidden = 0;
+        ap_config.ap.max_connection = 4;
+        ap_config.ap.beacon_interval = 100;
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
+        ESP_LOGI(TAG, "Wi-Fi AP '%s' configured", g_cfg.wifiApSsid);
+        log_default_password_warning();
     }
 
-    // Перезапускаем captive DNS с новым IP
+    // --- STA настройка (для Sta и ApSta) ---
+    if (mode == WIFI_MODE_STA || mode == WIFI_MODE_APSTA) {
+        esp_netif_create_default_wifi_sta();
+        wifi_config_t sta_config = {};
+        strcpy((char*)sta_config.sta.ssid, g_cfg.wifiSsid);
+        strcpy((char*)sta_config.sta.password, g_cfg.wifiPassword);
+        sta_config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+        sta_config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+        sta_config.sta.pmf_cfg.capable = false;
+        sta_config.sta.pmf_cfg.required = false;
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_config));
+        ESP_LOGI(TAG, "Wi-Fi STA connecting to SSID=%s", g_cfg.wifiSsid);
+
+        // Статический IP для STA (если DHCP отключён)
+        if (!g_cfg.wifiStaDhcp) {
+            esp_netif_t* sta_netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+            if (sta_netif) {
+                esp_netif_dhcps_stop(sta_netif);
+                esp_netif_ip_info_t ip_info = {};
+                ip_info.ip.addr = ipaddr_addr(g_cfg.wifiStaIp);
+                ip_info.gw.addr = ipaddr_addr(g_cfg.wifiStaGateway);
+                ip_info.netmask.addr = ipaddr_addr(g_cfg.wifiStaNetmask);
+                esp_netif_set_ip_info(sta_netif, &ip_info);
+                esp_netif_dns_info_t dns_info;
+                dns_info.ip.u_addr.ip4.addr = ipaddr_addr(g_cfg.wifiStaDns);
+                dns_info.ip.type = IPADDR_TYPE_V4;
+                esp_netif_set_dns_info(sta_netif, ESP_NETIF_DNS_MAIN, &dns_info);
+                ESP_LOGI(TAG, "Static IP configured: %s/%s gw=%s dns=%s",
+                         g_cfg.wifiStaIp, g_cfg.wifiStaNetmask,
+                         g_cfg.wifiStaGateway, g_cfg.wifiStaDns);
+            }
+        }
+    }
+
+    ESP_ERROR_CHECK(esp_wifi_start());
+
+    // Сканируем сети (неблокирующе) для Web UI.
+    if (mode == WIFI_MODE_STA || mode == WIFI_MODE_APSTA) {
+        wifi_scan_config_t scan_cfg = {};
+        scan_cfg.ssid = NULL;
+        scan_cfg.bssid = NULL;
+        scan_cfg.channel = 0;
+        scan_cfg.show_hidden = true;
+        esp_wifi_scan_start(&scan_cfg, /*blocking=*/false);
+    }
+
+    // Подключаемся к STA сети (если режим включает STA).
+    if (mode == WIFI_MODE_STA || mode == WIFI_MODE_APSTA) {
+        g_sta_connecting = true;
+        g_sta_connect_start_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+        ESP_ERROR_CHECK(esp_wifi_connect());
+    }
+
+    // NAPT для APSTA репитера.
+    if (mode == WIFI_MODE_APSTA) {
+        enable_napt();
+    }
+
+    // Запускаем captive DNS для AP интерфейса.
     esp_netif_t *ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
     if (ap_netif) {
         esp_netif_ip_info_t ip_info;
@@ -376,93 +1383,266 @@ static esp_err_t wifi_reconfigure(void)
             dns_captive_start(ip_info.ip.addr);
             ESP_LOGI(TAG, "Captive DNS restarted, responding with " IPSTR, IP2STR(&ip_info.ip));
         }
+    }
 
-        // Перезапускаем mDNS
-        ret = mdns_raw_init(ap_netif, g_cfg.hostname);
+    // Запускаем mDNS.
+    esp_netif_t *mdns_netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (!mdns_netif) {
+        mdns_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    }
+    if (mdns_netif) {
+        ret = mdns_raw_init(mdns_netif, g_cfg.hostname);
         if (ret == ESP_OK) {
             ret = mdns_raw_add_service("_http", "tcp", 80,
                                        "Wireless Audio 2.1 Master");
-            if (ret == ESP_OK) {
-                ESP_LOGI(TAG, "mDNS restarted: http://%s.local", g_cfg.hostname);
-            }
         }
     }
 
-    ESP_LOGI(TAG, "Wi-Fi reconfigured: SSID=%s", g_cfg.wifiApSsid);
+    ESP_LOGI(TAG, "Wi-Fi reconfigured: mode=%s, SSID=%s",
+             g_cfg.wifiMode == WifiMode::ApDirect ? "ap" :
+             g_cfg.wifiMode == WifiMode::Sta ? "sta" : "apsta",
+             g_cfg.wifiApSsid);
+    g_wifi_reconfiguring.store(false);
     return ESP_OK;
+}
+
+// ========================================================================
+// UART консоль (команды: status, wifi, setsat, net, erase, tone, mute,
+// pair, save, reboot)
+// ========================================================================
+static char g_consoleLine[64];
+static int g_consolePos = 0;
+
+static void consolePrint(const char* s) {
+    uart_write_bytes(UART_NUM_0, s, strlen(s));
+}
+
+static void consoleProcessLine(char* line) {
+    // Trim
+    char* end = line + strlen(line) - 1;
+    while (end >= line && (*end == '\n' || *end == '\r' || *end == ' ')) *end-- = '\0';
+    char* start = line;
+    while (*start == ' ') start++;
+    if (start[0] == '\0') return;
+
+    // Парсим команду и аргументы
+    char* cmd = start;
+    char* arg1 = nullptr;
+    char* arg2 = nullptr;
+    char* sp = strchr(start, ' ');
+    if (sp) { *sp = '\0'; arg1 = sp + 1; char* sp2 = strchr(arg1, ' '); if (sp2) { *sp2 = '\0'; arg2 = sp2 + 1; } }
+
+    if (strcmp(cmd, "status") == 0) {
+        char buf[256];
+        int len = getStatusCallback(buf, sizeof(buf));
+        consolePrint("status: ");
+        consolePrint(buf);
+        consolePrint("\n");
+    } else if (strcmp(cmd, "wifi") == 0) {
+        consolePrint("Wi-Fi mode: ");
+        consolePrint(g_wifi_inited ? (g_staIpAddr[0] ? "sta" : "ap") : "off");
+        consolePrint(", IP: ");
+        consolePrint(g_staIpAddr[0] ? g_staIpAddr : "—");
+        consolePrint(", AP SSID: ");
+        consolePrint(g_cfg.wifiApSsid);
+        consolePrint("\n");
+    } else if (strcmp(cmd, "setsat") == 0) {
+        if (!arg1 || !arg2) {
+            consolePrint("usage: setsat <left|right|sub> <delay_ms>\n");
+            return;
+        }
+        int ms = atoi(arg2);
+        if (setDelayCallback(arg1, ms) == ESP_OK) {
+            consolePrint("delay set\n");
+        } else {
+            consolePrint("error\n");
+        }
+    } else if (strcmp(cmd, "net") == 0) {
+        consolePrint("IP: ");
+        consolePrint(g_staIpAddr[0] ? g_staIpAddr : "—");
+        consolePrint(", satellites: L=");
+        consolePrint(g_leftOnline ? "online" : "offline");
+        consolePrint(", R=");
+        consolePrint(g_rightOnline ? "online" : "offline");
+        consolePrint("\n");
+    } else if (strcmp(cmd, "erase") == 0) {
+        esp_err_t ret = g_nvsConfig->erase();
+        consolePrint(ret == ESP_OK ? "NVS erased\n" : "erase failed\n");
+    } else if (strcmp(cmd, "tone") == 0) {
+        if (!arg1 || !arg2) {
+            consolePrint("usage: tone <bass_db> <treble_db>\n");
+            return;
+        }
+        float bass = atof(arg1);
+        float treble = atof(arg2);
+        g_pipeline.setTone(bass, treble);
+        consolePrint("tone set\n");
+    } else if (strcmp(cmd, "mute") == 0) {
+        if (!arg1) {
+            consolePrint(g_cfg.mute ? "mute: on\n" : "mute: off\n");
+            return;
+        }
+        bool mute = atoi(arg1) != 0;
+        setMuteCallback(mute);
+        consolePrint(mute ? "mute: on\n" : "mute: off\n");
+    } else if (strcmp(cmd, "pair") == 0) {
+        // Отправить discovery-запрос для поиска сателлитов
+        uint8_t buf[16];
+        AudioPacketHeader hdr = {};
+        hdr.magic = kMagicDiscovery;
+        hdr.sequence = 0;
+        hdr.timestampMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+        memcpy(buf, &hdr, sizeof(hdr));
+        g_espnow->sendBroadcast(buf, sizeof(AudioPacketHeader));
+        consolePrint("discovery sent\n");
+    } else if (strcmp(cmd, "save") == 0) {
+        g_nvsDirty = true; g_nvsLastChangeMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+        consolePrint("save queued (debounced)\n");
+    } else if (strcmp(cmd, "reboot") == 0) {
+        consolePrint("rebooting...\n");
+        vTaskDelay(pdMS_TO_TICKS(100));
+        esp_restart();
+    } else {
+        consolePrint("unknown command\n");
+    }
+}
+
+static void consoleTick(void) {
+    static std::atomic<bool> uart_installed{false};
+    if (!uart_installed.load()) {
+        uart_config_t uartCfg = {
+            .baud_rate = 115200,
+            .data_bits = UART_DATA_8_BITS,
+            .parity = UART_PARITY_DISABLE,
+            .stop_bits = UART_STOP_BITS_1,
+            .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+        };
+        uart_param_config(UART_NUM_0, &uartCfg);
+        uart_set_pin(UART_NUM_0, GPIO_NUM_1, GPIO_NUM_3, GPIO_NUM_NC, GPIO_NUM_NC);
+        uart_driver_install(UART_NUM_0, 256, 0, 0, nullptr, 0);
+        uart_write_bytes(UART_NUM_0, "\nWireless Audio 2.1 Console\n", 27);
+        uart_installed.store(true);
+    }
+
+    uint8_t c;
+    int len = uart_read_bytes(UART_NUM_0, &c, 1, 0);
+    if (len <= 0) return;
+
+    if (c == '\r' || c == '\n') {
+        g_consoleLine[g_consolePos] = '\0';
+        consoleProcessLine(g_consoleLine);
+        g_consolePos = 0;
+        consolePrint("> ");
+    } else if (c >= 32 && c < 127 && g_consolePos < (int)sizeof(g_consoleLine) - 1) {
+        g_consoleLine[g_consolePos++] = (char)c;
+        uart_write_bytes(UART_NUM_0, &c, 1);
+    } else if ((c == 0x7F || c == 0x08) && g_consolePos > 0) {
+        g_consolePos--;
+        uart_write_bytes(UART_NUM_0, "\b \b", 3);
+    }
 }
 
 extern "C" void app_main(void)
 {
-    // Инициализация NVS конфигурации (внутри вызывает nvs_flash_init())
-    esp_err_t ret = g_nvsConfig.init();
+    // Загрузка конфигурации из NVS
+    g_nvsConfig = std::make_unique<NvsConfig>();
+    esp_err_t ret = g_nvsConfig->init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "NVS config init failed: %s", esp_err_to_name(ret));
         return;
     }
 
-    // Загрузка конфигурации из NVS
-    ret = g_nvsConfig.load(g_cfg);
+    ret = g_nvsConfig->load(g_cfg);
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "Using default config (no saved config in NVS)");
         g_cfg = NodeConfig();
     }
-    g_volumePercent = g_cfg.volume;
+    g_volumePercent = g_cfg.masterVolume;
     g_crossoverHz = g_cfg.crossoverHz;
+
+    // Инициализация аудио-объектов (после инициализации кучи)
+    // Пытаемся выделить большие буферы в PSRAM, если доступна.
+    int16_t* jitterBufPsram = psramAllocSamples((kJitterTargetMs * kSampleRate) / 1000);
+    int16_t* delayLeftBufPsram = psramAllocSamples((kMaxDelayMs * kSampleRate) / 1000);
+    int16_t* delayRightBufPsram = psramAllocSamples((kMaxDelayMs * kSampleRate) / 1000);
+    int16_t* delaySubBufPsram = psramAllocSamples((kDelaySubMs * kSampleRate) / 1000);
+
+    g_delaySub = std::make_unique<DelayLine>(kDelaySubMs, kSampleRate, delaySubBufPsram);
+    g_delayLeft = std::make_unique<DelayLine>(kMaxDelayMs, kSampleRate, delayLeftBufPsram);
+    g_delayRight = std::make_unique<DelayLine>(kMaxDelayMs, kSampleRate, delayRightBufPsram);
+    g_jitter = std::make_unique<JitterBuffer>(
+        (kJitterTargetMs * kSampleRate) / 1000,
+        jitterBufPsram ? psramAllocSamples : nullptr);
+    if (!g_jitter || !g_jitter->allocated()) {
+        ESP_LOGE(TAG, "JitterBuffer allocation failed");
+        return;
+    }
 
     ESP_LOGI(TAG, "Wireless Audio 2.1 Master (ESP-IDF) starting...");
     ESP_LOGI(TAG, "Chip: ESP32-S3, FreeRTOS heap: %" PRIu32 " bytes", esp_get_free_heap_size());
-    ESP_LOGI(TAG, "Loaded config: volume=%d%%, crossover=%d Hz, hostname=%s",
-             g_cfg.volume, g_cfg.crossoverHz, g_cfg.hostname);
+    ESP_LOGI(TAG, "Loaded config: masterVolume=%d%%, crossover=%d Hz, hostname=%s",
+             g_cfg.masterVolume, g_cfg.crossoverHz, g_cfg.hostname);
 
     // Инициализация DSP конвейера
+    ESP_LOGI(TAG, "Configuring pipeline...");
     g_pipeline.configure((float)kSampleRate);
     g_pipeline.setCrossoverHz(g_cfg.crossoverHz);
-    g_pipeline.setVolume(g_cfg.volume);
-    g_jitter.setTargetMs(kJitterTargetMs, kSampleRate);
-    g_limiter.setThreshold(0.95f);
+    g_pipeline.setVolume(g_cfg.masterVolume);
+    g_pipeline.setMute(g_cfg.mute);
+    g_pipeline.setTone(0.0f, 0.0f);
+    g_pipeline.setChannelVolumes(g_cfg.leftVolume, g_cfg.rightVolume, g_cfg.subVolume);
+    g_pipeline.reset();
 
-    ESP_LOGI(TAG, "DSP pipeline initialized: sampleRate=%" PRIu32 " Hz, crossover=%d Hz, volume=%d%%",
-             kSampleRate, g_cfg.crossoverHz, g_cfg.volume);
+    ESP_LOGI(TAG, "DSP pipeline initialized: sampleRate=%" PRIu32 " Hz, crossover=%d Hz, masterVolume=%d%%, mute=%s",
+             kSampleRate, g_cfg.crossoverHz, g_cfg.masterVolume,
+             g_cfg.mute ? "on" : "off");
 
-    // Инициализация Wi-Fi AP
-    wifi_init_softap();
+    // Инициализация Wi-Fi (AP / STA / APSTA по конфигу)
+    ESP_LOGI(TAG, "Calling wifi_init()...");
+    wifi_init();
+    ESP_LOGI(TAG, "After wifi_init, g_wifi_inited=%d", g_wifi_inited ? 1 : 0);
 
-    // Этап 4: Captive DNS — все DNS-запросы отвечают softAP IP
-    esp_netif_t *ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
-    if (ap_netif) {
+    // Этап 4/5: mDNS — доступ по http://<hostname>.local (STA приоритет, иначе AP).
+    esp_netif_t *mdns_netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    const char* netif_name = "STA";
+    if (!mdns_netif) {
+        mdns_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+        netif_name = "AP";
+    }
+    if (mdns_netif) {
         esp_netif_ip_info_t ip_info;
-        if (esp_netif_get_ip_info(ap_netif, &ip_info) == ESP_OK) {
-            dns_captive_start(ip_info.ip.addr);
-            ESP_LOGI(TAG, "Captive DNS started, responding with " IPSTR, IP2STR(&ip_info.ip));
+        if (esp_netif_get_ip_info(mdns_netif, &ip_info) == ESP_OK) {
+            ESP_LOGI(TAG, "%s IP: " IPSTR, netif_name, IP2STR(&ip_info.ip));
         }
 
-        // Этап 5: mDNS — доступ по http://<hostname>.local
-        ret = mdns_raw_init(ap_netif, g_cfg.hostname);
+        ret = mdns_raw_init(mdns_netif, g_cfg.hostname);
         if (ret == ESP_OK) {
             ret = mdns_raw_add_service("_http", "tcp", 80,
                                        "Wireless Audio 2.1 Master");
             if (ret == ESP_OK) {
-                ESP_LOGI(TAG, "mDNS: http://%s.local", g_cfg.hostname);
+                ESP_LOGI(TAG, "mDNS: http://%s.local (%s)", g_cfg.hostname, netif_name);
             }
         } else {
             ESP_LOGE(TAG, "mDNS init failed: %s", esp_err_to_name(ret));
         }
     } else {
-        ESP_LOGE(TAG, "DNS/mDNS: could not get AP netif handle");
+        ESP_LOGE(TAG, "DNS/mDNS: could not get netif handle");
     }
 
     // Инициализация ESP-NOW транспорта
-    ret = g_espnow.init(false); // без шифрования пока
+    g_espnow = std::make_unique<EspNowTransport>();
+    ret = g_espnow->init(false); // без шифрования пока
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "ESP-NOW init failed: %s", esp_err_to_name(ret));
     } else {
-        ESP_LOGI(TAG, "ESP-NOW transport initialized");
+        g_espnow->setRxCallback(&g_espnowMasterRxCb);
+        ESP_LOGI(TAG, "ESP-NOW transport initialized with RX callback");
     }
 
-    // Инициализация I2S вывода
-    I2sOutputPins i2sPins = {4, 5, 6}; // BCK=4, WS=5, DATA=6
-    ret = g_i2sOut.init(i2sPins, kSampleRate, true);
+    // Инициализация I2S вывода (пины из конфигурации)
+    I2sOutputPins i2sPins = {(int)g_cfg.i2sBck, (int)g_cfg.i2sWs, (int)g_cfg.i2sDataOut};
+    g_i2sOut = std::make_unique<I2sOutput>();
+    ret = g_i2sOut->init(i2sPins, kSampleRate, true);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "I2S init failed: %s", esp_err_to_name(ret));
     } else {
@@ -471,60 +1651,125 @@ extern "C" void app_main(void)
     }
 
     // Инициализация UDP аудио приёма
-    ret = g_udpAudio.init(kUdpAudioPort, g_cfg.udpAuthKey[0] ? g_cfg.udpAuthKey : nullptr);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "UDP audio init failed: %s", esp_err_to_name(ret));
+    esp_err_t netif_ret = esp_netif_init();
+    if (netif_ret == ESP_OK || netif_ret == ESP_ERR_INVALID_STATE) {
+        g_udpAudio = std::make_unique<UdpAudio>();
+        ret = g_udpAudio->init(kUdpAudioPort, g_cfg.udpAuthKey[0] ? g_cfg.udpAuthKey : nullptr);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "UDP audio init failed: %s", esp_err_to_name(ret));
+        } else {
+            ESP_LOGI(TAG, "UDP audio listener on port %u", (unsigned int)kUdpAudioPort);
+        }
     } else {
-        ESP_LOGI(TAG, "UDP audio listener on port %u", (unsigned int)kUdpAudioPort);
+        ESP_LOGE(TAG, "LwIP not initialized, skipping UDP audio: %s", esp_err_to_name(netif_ret));
     }
 
     // Инициализация Web сервера
-    g_webServer.setCallbacks(&g_webCallbacks);
-    ret = g_webServer.init(80);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Web server init failed: %s", esp_err_to_name(ret));
+    g_webServer = std::make_unique<WebServer>();
+    g_webServer->setCallbacks(&g_webCallbacks);
+    if (netif_ret == ESP_OK || netif_ret == ESP_ERR_INVALID_STATE) {
+        ret = g_webServer->init(80);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Web server init failed: %s", esp_err_to_name(ret));
+        } else {
+            ESP_LOGI(TAG, "Web server started on port 80");
+        }
     } else {
-        ESP_LOGI(TAG, "Web server started on port 80");
+        ESP_LOGE(TAG, "LwIP not initialized, skipping Web server");
     }
 
     ESP_LOGI(TAG, "setup complete, entering main loop");
 
-    // Подписать текущую задачу (app_main) на watchdog
-    // TWDT уже инициализирован системой, используем только добавление задачи
-    esp_task_wdt_add(NULL);
-
     // Основной цикл
     uint32_t loopCounter = 0;
     TickType_t lastWakeTime = xTaskGetTickCount();
+    uint32_t audioOutLastMs = 0;
 
     while (1) {
         loopCounter++;
 
-        // Приём UDP аудио (неблокирующий, таймаут 10 мс)
-        g_udpAudio.receive(1, &g_udpHandler);
+        // Если Wi-Fi переконфигурируется — пропускаем сетевые операции
+        if (!g_wifi_reconfiguring.load()) {
+            // Приём UDP аудио (неблокирующий, таймаут 1 мс) — пишет в джиттер-буфер и TX батчи.
+            g_udpAudio->receive(1, &g_udpHandler);
 
-        // Каждые 5 секунд логируем статус и проверяем сателлиты
-        if (loopCounter % 500 == 0) {
-            ESP_LOGI(TAG, "loop: heap=%" PRIu32 " bytes, counter=%" PRIu32,
-                     esp_get_free_heap_size(), loopCounter);
-
-            // Проверяем таймаут сателлитов (5 секунд без heartbeat = оффлайн)
-            TickType_t now = xTaskGetTickCount();
-            uint32_t nowMs = now * portTICK_PERIOD_MS;
-            for (size_t i = 0; i < 2; i++) {
-                if (g_espnow.satellite(i).online &&
-                    nowMs - g_espnow.satellite(i).lastSeenMs > 5000) {
-                    ESP_LOGW(TAG, "satellite %zu offline (no heartbeat for %" PRIu32 " ms)",
-                             i, nowMs - g_espnow.satellite(i).lastSeenMs);
-                    // Не сбрасываем online здесь — пусть Web UI показывает последний известный статус
-                }
+            // Отправка накопленного TX батча на сателлиты (когда заполнен).
+            if (g_txCount.load() >= kBatchSamples) {
+                flushTxBatch();
             }
         }
 
-        // Сброс watchdog
-        esp_task_wdt_reset();
+        // Аудио-вывод: бюджет семплов привязан к реальному времени (как в Arduino-версии).
+        uint32_t nowMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+        uint32_t elapsed = nowMs - audioOutLastMs;
+        if (elapsed > 100) elapsed = 100; // лимит догона
+        audioOutLastMs = nowMs;
+        uint32_t samplesBudget = elapsed * kSampleRate / 1000u;
+        audioOutTick(samplesBudget);
+
+        // Каждые 5 секунд логируем статус и проверяем сателлиты
+        if (loopCounter % 500 == 0) {
+            ESP_LOGI(TAG, "loop: heap=%" PRIu32 " bytes, counter=%" PRIu32 ", tx_packets=%" PRIu32,
+                     esp_get_free_heap_size(), loopCounter, g_txPackets);
+
+            // Проверяем таймаут сателлитов (6 секунд без heartbeat = оффлайн)
+            uint32_t nowMs2 = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+            if (g_leftOnline && nowMs2 - g_lastLeftSeenMs > kSatelliteTimeoutMs) {
+                g_leftOnline = false;
+                ESP_LOGW(TAG, "satellite left offline (no heartbeat for %" PRIu32 " ms)",
+                         nowMs2 - g_lastLeftSeenMs);
+                char sse[128];
+                snprintf(sse, sizeof(sse), "{\"left\":\"offline\",\"right\":\"%s\"}",
+                         g_rightOnline ? "online" : "offline");
+                g_webServer->sseBroadcast("satellite", sse);
+            }
+            if (g_rightOnline && nowMs2 - g_lastRightSeenMs > kSatelliteTimeoutMs) {
+                g_rightOnline = false;
+                ESP_LOGW(TAG, "satellite right offline (no heartbeat for %" PRIu32 " ms)",
+                         nowMs2 - g_lastRightSeenMs);
+                char sse[128];
+                snprintf(sse, sizeof(sse), "{\"left\":\"%s\",\"right\":\"offline\"}",
+                         g_leftOnline ? "online" : "offline");
+                g_webServer->sseBroadcast("satellite", sse);
+            }
+        }
+
+        // Периодический discovery-запрос каждые 3 с (сателлиты отвечают heartbeat-ом).
+        if (nowMs - g_lastDiscoveryMs >= kDiscoveryIntervalMs) {
+            g_lastDiscoveryMs = nowMs;
+            uint8_t buf[16];
+            AudioPacketHeader hdr = {};
+            hdr.magic = kMagicDiscovery;
+            hdr.sequence = 0;
+            hdr.timestampMs = nowMs;
+            memcpy(buf, &hdr, sizeof(hdr));
+            g_espnow->sendBroadcast(buf, sizeof(AudioPacketHeader));
+            g_heartbeatsTx++;
+        }
+
+        // Fallback: если STA не подключился за kStaConnectTimeoutMs — переходим в AP режим,
+        // чтобы можно было настроить Wi-Fi через веб-интерфейс.
+        if (g_sta_connecting && g_staIpAddr[0] == '\0' &&
+            nowMs - g_sta_connect_start_ms > kStaConnectTimeoutMs) {
+            g_sta_connecting = false;
+            g_cfg.wifiMode = WifiMode::ApDirect;
+            g_nvsDirty = true; g_nvsLastChangeMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+            ESP_LOGW(TAG, "STA connect timeout — falling back to AP mode");
+            wifi_reconfigure();
+        }
 
         // Цикл примерно 10 мс (100 Гц)
+        // Отложенная запись в NVS (дебаунс 500 мс)
+        if (g_nvsDirty && nowMs - g_nvsLastChangeMs >= kNvsSaveDebounceMs) {
+            esp_err_t ret = g_nvsConfig->save(g_cfg);
+            if (ret == ESP_OK) {
+                g_nvsDirty = false;
+                ESP_LOGD(TAG, "NVS save (debounced)");
+            } else {
+                ESP_LOGE(TAG, "NVS save failed: %s", esp_err_to_name(ret));
+            }
+        }
+        consoleTick();
         vTaskDelayUntil(&lastWakeTime, pdMS_TO_TICKS(10));
     }
 }
