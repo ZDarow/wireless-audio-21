@@ -26,6 +26,12 @@ test/*.d
 
 # ESP-IDF build артефакты (не коммитится)
 firmware/master_s3_idf/build/
+firmware/satellite_s3_idf_left/build/
+firmware/satellite_s3_idf_right/build/
+
+# Сгенерированный sdkconfig (не коммитится, только sdkconfig.defaults)
+firmware/*/sdkconfig
+firmware/*/*/sdkconfig
 
 # Системное
 .DS_Store
