@@ -16,21 +16,19 @@
       -I../firmware/common/transport -I../firmware/common/util \
       -I../firmware/common/config audio_filter_test.cpp -o audio_filter_test_bin.exe -lm
   ```
-- **Сборка прошивки** (PlatformIO, целевые S3 env + legacy-стенд):
+- **Сборка прошивки** (ESP-IDF v5.3.1, три проекта — мастер + два сателлита):
   ```
-  pio run -c platformio.master.ini            # master_s3_wifi + satellite_s3_left/right (pioarduino, core 3.x)
-  pio run -e master_a2dp
-  pio run -e satellite_left
-  pio run -e satellite_right
+  source /home/mi/esp/esp-idf-v5.3.1/export.sh && idf.py build
+  # в каждую из: firmware/master_s3_idf, firmware/satellite_s3_idf_left,
+  # firmware/satellite_s3_idf_right
+  idf.py -p /dev/ttyACM0 flash   # после erase_flash при смене прошивки
   ```
   Legacy env (`master_a2dp`, `satellite_left/right`, espressif32@6.9.0 core
   2.0.17) — отладочный стенд (C0.2), в CI не собираются; оставлять рабочими.
-  `master_s3_wifi` собирается на pioarduino-платформе (Arduino core 3.3.11 /
-  IDF 5.5.5) с ИЗОЛИРОВАННЫМ core-каталогом (`.pio-core-master/` через
-  `platformio.master.ini`): его пакет `framework-arduinoespressif32` совпадает по
-  имени с фреймворком официальной платформы `espressif32@6.9.0` (core 2.0.17),
-  которой нужны сателлиты — в общем каталоге они перезаписывают друг друга.
-  Сборку мастера и сателлитов нельзя смешивать в одном core-каталоге.
+  `master_a2dp` собирается: `pio run -e master_a2dp`.
+  ESP32-S3 мастера и сателлитов перенесены на чистый IDF (см. раздел
+  «ESP-IDF миграция» ниже); `platformio.master.ini` и env `master_s3_wifi` /
+  `satellite_s3_left/right` удалены из platformio.ini.
   PlatformIO может быть не установлен на машине разработчика — проверять код на
   хосте через host-тесты, сборку оставлять CI.
 - **Генерация конфига**:
@@ -96,7 +94,7 @@
   T11–T13/T18/T20–T22, F18/F21 (репитер APSTA+NAPT — проверен на железе).
   Остаются: T1 (CI), B6/B7/B11/B12/B16 (legacy `master_a2dp`), B10 (IPv6 —
   осознанное ограничение), T15 (ITransport), T16 (перенос `web_server.h` в
-  `common/web`), T17 (`console.h`), T19 (сателлиты на core 3.x), F12/F14
+  `common/web`), T17 (`console.h`), F12/F14
   (OLED, синхронизация), C4.x, C5.7 (MAC-фильтр/проверка источника UDP-аудио),
   ручная проверка звука на железе (§18).
 - Открытые уязвимости (см. `docs/REPO_AUDIT.md`): закрыты V1 (ESP-NOW
@@ -108,21 +106,21 @@
 
 ## ESP-IDF миграция (`firmware/master_s3_idf/`)
 
-Параллельно ведётся миграция мастера с Arduino/PlatformIO на чистый ESP-IDF v5.3.1
+Параллельно ведётся миграция мастера и сателлитов с Arduino/PlatformIO на чистый ESP-IDF v5.3.1
 для устранения циклических перезагрузок `TG1WDT_SYS_RST` (watchdog).
 
-- **Проект**: `firmware/master_s3_idf/` (CMake + `idf.py`, отдельно от Arduino `firmware/master_s3/`)
+- **Проекты**: `firmware/master_s3_idf/` (мастер), `firmware/satellite_s3_idf_left/`, `firmware/satellite_s3_idf_right/` (CMake + `idf.py`)
 - **Платформа**: ESP-IDF v5.3.1, уже установлена на `/home/mi/esp/esp-idf-v5.3.1/`
-- **Сборка**: `source /home/mi/esp/esp-idf-v5.3.1/export.sh && idf.py build`
+- **Сборка**: `source /home/mi/esp/esp-idf-v5.3.1/export.sh && idf.py build` в каждом проекте
 - **Прошивка**: `idf.py -p /dev/ttyACM0 flash` (после `erase_flash` при смене прошивки)
-- **Ветка Git**: `feature/esp32-idf-migration` (запушена в origin)
+- **Ветка Git**: `feature/esp32-idf-migration` (запущена в origin)
 - **Статус**: устройство стабильно 24+ сек без WDT перезагрузок (vs циклические ребуты на Arduino core)
 
-### Компоненты ESP-IDF проекта
+### Компоненты ESP-IDF проекта (общие, в `firmware/master_s3_idf/components/`, подключаются через `EXTRA_COMPONENT_DIRS`)
 
 | Компонент | Назначение |
 |-----------|-----------|
-| `dsp_pipeline` | header-only DSP модули (pcm_pipeline, volume_control, crossover, delay_line, jitter_buffer, drift_correction, udp_audio_receiver, i2s_output) |
+| `dsp_pipeline` | обёртка над `firmware/common/audio/` (pcm_pipeline, volume_control, crossover, delay_line, jitter_buffer, drift_correction) |
 | `espnow_transport` | ESP-NOW unicast/broadcast (магия 0xA210/0xA211/0xA212), AudioPacketHeader 16 байт |
 | `udp_audio` | UDP порт 5004, PCM приём, HMAC-SHA256 аутентификация через mbedTLS |
 | `web_server` | HTTP REST API + SSE, cJSON, эндпоинты /api/*, /api/system/* |
@@ -132,12 +130,19 @@
 | `mdns_raw` | mDNS отвечатель на сыром UDP (порт 5353, multicast 224.0.0.251), доступ по `.local` |
 | `ota_update` | OTA через esp_https_ota, эндпоинт POST /api/system/ota |
 
-### Интеграция в main/main.cpp
+### Интеграция в main/main.cpp (мастер)
 
 - NVS конфиг загружается при старте (дефолты если не найден), сохраняется при изменении через Web UI
 - Wi-Fi AP (softAP), Captive DNS, ESP-NOW, I2S, UDP audio, Web server — все инициализируются в `app_main()`
 - Основной цикл 100 Гц с `vTaskDelayUntil()`, `esp_task_wdt_reset()` не требуется (стабильность без WDT)
 - mDNS через сырой UDP (порт 5353) — доступ по `http://audio-master.local`
+
+### Интеграция в main/main.cpp (сателлиты)
+
+- NVS конфиг загружается при старте, сторона (left/right) из макроса `AUDIO_SATELLITE_SIDE`
+- Wi-Fi STA на канале ESP-NOW, ESP-NOW RX (heartbeat + аудио пакеты мастера), JitterBuffer → DelayLine → VolumeControl → I2S
+- Heartbeat (discovery-response) мастере каждые 2 сек, UART-консоль (команды `status`, `delay <ms>`)
+- Основной цикл 100 Гц
 
 ### Этапы миграции (завершены)
 
@@ -148,4 +153,5 @@
 | Этап 3 | NVS конфигурация (компонент nvs_config) | ✅ |
 | Этап 4 | Captive DNS портал, OTA обновление, Wi-Fi API (/api/wifi) | ✅ |
 | Этап 5 | mDNS через сырой UDP (порт 5353), captive portal, Wi-Fi переконфигурация без перезагрузки | ✅ |
+| Этап 6 | Сателлиты на ESP-IDF (left + right, EXTRA_COMPONENT_DIRS) | ✅ |
 

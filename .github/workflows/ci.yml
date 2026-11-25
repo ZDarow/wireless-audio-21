@@ -28,27 +28,15 @@ jobs:
       #   actions/cache@v4    → 0057852bfaa89a56745cba8c7296529d2fc39830
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
+      - name: Set up ESP-IDF v5.3.1
+        uses: espressif/esp-idf-ci-action@v2
+        with:
+          idf-version: release/v5.3
+          path: ${{ runner.workspace }}/esp-idf
+
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
-
-      - name: Install PlatformIO
-        # T18: фиксируем версию — воспроизводимая сборка.
-        run: pipx install platformio==6.1.19
-
-      - name: Cache PlatformIO packages
-        # T18: кэшируем пакеты платформ/фреймворков и изолированный
-        # core-каталог мастера (pioarduino core 3.x) — ускорение повторных
-        # запусков.
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
-        with:
-          path: |
-            ~/.platformio/.cache
-            ~/.platformio/packages
-            ~/.platformio/platforms
-            .pio-core-master
-          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini',
-            'platformio.master.ini') }}
 
       - name: Generate config
         run: |
@@ -58,22 +46,26 @@ jobs:
       - name: Host tests (gcc, без железа)
         run: make -C test test
 
-      - name: Build master (ESP32-S3, Wi-Fi UDP, pioarduino core 3.x)
-        # master_s3_wifi собирается на pioarduino-платформе (NAPT в lwip),
-        # core которой изолирован в platformio.master.ini (core_dir),
-        # чтобы не конфликтовать с фреймворком сателлитов (core 2.0.17).
-        run: pio run -c platformio.master.ini
-
-      - name: Build satellites (ESP32-S3)
+      - name: Build master IDF
         run: |
-          pio run -e satellite_s3_left
-          pio run -e satellite_s3_right
+          cd firmware/master_s3_idf
+          idf.py build
+
+      - name: Build satellite left IDF
+        run: |
+          cd firmware/satellite_s3_idf_left
+          idf.py build
+
+      - name: Build satellite right IDF
+        run: |
+          cd firmware/satellite_s3_idf_right
+          idf.py build
 
       - name: Lint (clang-format check)
-          run: |
-            if command -v clang-format >/dev/null 2>&1; then
-              clang-format --dry-run --Werror \
-                firmware/**/*.cpp firmware/**/*.h test/*.cpp 2>&1 || true
-            else
-              echo "clang-format не установлен — пропускаем форматирование"
-            fi
+        run: |
+          if command -v clang-format >/dev/null 2>&1; then
+            clang-format --dry-run --Werror \
+              firmware/**/*.cpp firmware/**/*.h test/*.cpp 2>&1 || true
+          else
+            echo "clang-format не установлен — пропускаем форматирование"
+          fi

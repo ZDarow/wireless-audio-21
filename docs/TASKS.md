@@ -236,7 +236,7 @@
 | T16 | 🟠 | `web_server.h` лежит в `master/include`, используется `master_s3` — перенести в `firmware/common/web/`; разбить на web-core + опциональные audio-хендлеры; сгруппировать 9 параметров конструктора в `struct AudioContext` (ISP) | `firmware/common/web/web_server.h`, `platformio.ini` | ✅ (13.08.2026: файл перенесён; include-пути покрываются существующими `-I firmware/common/web` в build_flags; декомпозиция SPA/класса — отдельная задача A1. 14.09.2026: убраны stale `-I firmware/master/include` и `-I firmware/satellite/include` из `platformio.ini` — каталоги пусты) |
 | T17 | 🟡 | Serial-консоль дублируется в 3 main.cpp — выделить общий парсер команд в `firmware/common/console.h` | `firmware/*/src/main.cpp` | ✅ (12.09.2026: `common/console.h` создан, `MasterS3Console`/`LegacyMasterConsole`/`SatelliteConsole` наследуют `audio21::Console`; `#include "console.h"` → `#include "common/console.h"` во всех main.cpp; конфликт с Arduino `Console` библиотекой решен квалификацией `audio21::Console`) |
 | T18 | 🟡 | CI: зафиксировать версию PlatformIO (`pipx install platformio==6.1.19`), добавить кэширование `~/.platformio` и `.pio-core-master` | `.github/workflows/ci.yml` | ✅ (12.08.2026: версия зафиксирована, кэш пакетов + core-каталога) |
-| T19 | 🟡 | Миграция сателлитов на Arduino core 3.x (`driver/i2s_std.h`) → единый core-каталог, удаление `platformio.master.ini` (снимает конфликт фреймворков, legacy I2S в IDF 5.x deprecated) | `platformio.ini`, `platformio.master.ini`, `satellite/src/main.cpp` | ⬜ |
+| T19 | 🟢 | Миграция сателлитов на ESP-IDF (left + right, `EXTRA_COMPONENT_DIRS`, `platformio.master.ini` удалён) | `platformio.ini`, `platformio.master.ini`, `satellite_s3_idf_left/`, `satellite_s3_idf_right/` | ✅ |
 | T20 | 🟡 | Синхронизировать документацию: `architecture.md` §9 («старые env в истории» — неверно, они в файле), §10 (mDNS реализован — F16), структура §8 без `master_s3`; `flash_master.sh`/`README.md` ведут на `master_a2dp` вместо `master_s3_wifi` (`hardware.md`/`wiring.md` уже синхронизированы — B17) | `docs/`, `scripts/flash_master.sh`, `README.md` | ✅ (12.08.2026: architecture.md §9/§10, README (структура, env, REST, требования), flash-скрипты → S3 env) |
 | T21 | 🟡 | `test/Arduino.h` перекрывает системное имя — вынести заглушки в `test/stubs/` с явным `-I` | `test/` | ✅ (12.08.2026: `test/stubs/`, Makefile `-Istubs`) |
 | T22 | 🟢 | Убрать `WebServer`/`Preferences` из `lib_deps` (встроены в фреймворк, PIO их не тянет отдельно — запись избыточна) | `platformio.ini:37,66,116` | ⬜ (не применимо: на pioarduino core 3.x `Preferences`/`WebServer`/`HTTPClient`/`Update`/`Network` НЕ встроены в фреймворк — сборка падает без них; для espressif32@6.9.0 встроены, но запись безвредна) |
@@ -705,26 +705,31 @@
 | ID | Задача | Место | Статус |
 |----|--------|-------|--------|
 | E1 | Скелет проекта: CMakeLists.txt, main/CMakeLists.txt, main/main.cpp | `firmware/master_s3_idf/` | ✅ |
-| E2 | Компонент `dsp_pipeline`: header-only DSP модули (pcm_pipeline, volume_control, crossover, delay_line, jitter_buffer, drift_correction, udp_audio_receiver, i2s_output) + Arduino.h shim | `components/dsp_pipeline/` | ✅ |
+| E2 | Компонент `dsp_pipeline`: обёртка над `firmware/common/audio/` (duplicates удалены, Arduino.h shim удалён) | `components/dsp_pipeline/` | ✅ |
 | E3 | Компонент `espnow_transport`: ESP-NOW unicast/broadcast (0xA210/0xA211/0xA212), AudioPacketHeader 16 байт, peer registration | `components/espnow_transport/` | ✅ |
 | E4 | Компонент `udp_audio`: UDP порт 5004 PCM приём, HMAC-SHA256 через mbedTLS, UdpAudioHeader 40 байт | `components/udp_audio/` | ✅ |
 | E5 | Компонент `web_server`: HTTP REST API + SSE, cJSON, эндпоинты /api/*, /api/system/* | `components/web_server/` | ✅ |
 | E6 | Компонент `i2s_output`: esp_driver_i2s Master TX моно 16-bit для PCM5102A (BCK=4, WS=5, DATA=6) | `components/i2s_output/` | ✅ |
-| E7 | Компонент `nvs_config`: NVS хранение NodeConfig (C API nvs_flash/nvs.h), kConfigVersion=1, load/save/erase | `components/nvs_config/` | ✅ |
+| E7 | Компонент `nvs_config`: NVS хранение NodeConfig (C API nvs_flash/nvs.h), kConfigVersion=1, load/save/erase, единая структура с `common/config/node_config.h` | `components/nvs_config/` | ✅ |
 | E8 | Компонент `dns_captive`: UDP DNS сервер на порту 53, отвечает softAP IP на все запросы (captive portal) | `components/dns_captive/` | ✅ |
 | E9 | Компонент `ota_update`: OTA через esp_https_ota, endpoint POST /api/system/ota | `components/ota_update/` | ✅ |
 | E10 | partitions.csv с ota_0/ota_1 разделами для OTA | `partitions.csv` | ✅ |
-| E11 | main/main.cpp: интеграция всех компонентов, 100 Гц loop с vTaskDelayUntil, NVS load/save, Web UI callbacks (volume, crossover, reboot, factory_reset, otaUpdate, getWifiConfig, setWifiConfig) | `main/main.cpp` | ✅ |
+| E11 | main/main.cpp: интеграция всех компонентов, TX аудио на сателлиты (батч 117 сэмплов → ESP-NOW), джиттер-буфер в пути приёма, 100 Гц loop с vTaskDelayUntil, NVS load/save, Web UI callbacks | `main/main.cpp` | ✅ |
 | E12 | Web server: GET/POST /api/wifi — чтение/запись Wi-Fi конфига (mode, apSsid, apPassword, staSsid, staPassword), сохранение в NVS | `components/web_server/` + `main/main.cpp` | ✅ |
 | E13 | Сборка, прошивка, стабильность: 24+ сек uptime без TG1WDT_SYS_RST, heap стабилен ~255 КБ | ESP32-S3 /dev/ttyACM0 | ✅ |
 | E14 | mDNS через сырой UDP (порт 5353, multicast 224.0.0.251) — доступ по http://audio-master.local | `components/mdns_raw/` | ✅ |
 | E15 | Применение Wi-Fi настроек без перезагрузки (переключение AP/STA/APSTA в рантайме) | `main/main.cpp` | ✅ |
+| E16 | Сателлит левый на ESP-IDF (EXTRA_COMPONENT_DIRS → компоненты мастера, 8MB флеш, AUDIO_SATELLITE_SIDE=0): ESP-NOW RX → jitter → DelayLine → VolumeControl → I2S, heartbeat découverte, консоль `status`/`delay` | `firmware/satellite_s3_idf_left/` | ✅ |
+| E17 | Сателлит правый на ESP-IDF (AUDIO_SATELLITE_SIDE=1) | `firmware/satellite_s3_idf_right/` | ✅ |
+| E18 | Unified NodeConfig: `common/config/node_config.h` без `<Arduino.h>`, поля `version`/`udpAuthKey`, используется nvs_config и оба сателлита | `common/config/node_config.h` | ✅ |
+| E19 | PlatformIO: удалены env `master_s3_wifi`/`satellite_s3_left/right` и `platformio.master.ini`; `default_envs = master_a2dp` | `platformio.ini` | ✅ |
+| E20 | CI: `.github/workflows/ci.yml` вызывает `idf.py build` для трёх IDF-проектов вместо PlatformIO | `.github/workflows/ci.yml` | ✅ |
 
 ### 15.2 Отложено / не выполнено
 
 | ID | Задача | Место | Причина | Статус |
 |----|--------|-------|---------|--------|
-| E16 | Ручное тестирование звука на железе (§18 из ТЗ) | Железо | Требует подключения смартфона и измерений | ⬜ |
+| E21 | Ручное тестирование звука на железе (§18 из ТЗ) | Железо | Требует подключения смартфона и измерений | ⬜ |
 
 ### 15.3 Известные проблемы
 
