@@ -118,8 +118,8 @@ struct WebServerCallbacks {
     int (*login)(const char* username, const char* password, char* tokenOut, size_t tokenOutSize);
     // logout: инвалидирует сессию по токену
     esp_err_t (*logout)(const char* token);
-    // admin setup: первичная настройка админа (установить пароль хеш)
-    esp_err_t (*adminSetup)(const char* username, const char* passwordHash);
+    // admin setup: первичная настройка админа (установить пароль)
+    esp_err_t (*adminSetup)(const char* username, const char* password);
 };
 
 class WebServer {

@@ -1207,21 +1207,21 @@ esp_err_t WebServer::onPostAdminSetup(httpd_req_t* req)
         return ESP_FAIL;
     }
     char username[64] = {0};
-    char passwordHash[128] = {0};
+    char password[128] = {0};
     cJSON* u = cJSON_GetObjectItemCaseSensitive(j, "username");
-    cJSON* h = cJSON_GetObjectItemCaseSensitive(j, "passwordHash");
+    cJSON* p = cJSON_GetObjectItemCaseSensitive(j, "password");
     if (u && cJSON_IsString(u)) {
         strncpy(username, u->valuestring, sizeof(username) - 1);
     }
-    if (h && cJSON_IsString(h)) {
-        strncpy(passwordHash, h->valuestring, sizeof(passwordHash) - 1);
+    if (p && cJSON_IsString(p)) {
+        strncpy(password, p->valuestring, sizeof(password) - 1);
     }
     cJSON_Delete(j);
-    if (username[0] == '\0' || passwordHash[0] == '\0') {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing username or passwordHash");
+    if (username[0] == '\0' || password[0] == '\0') {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing username or password");
         return ESP_FAIL;
     }
-    ret = self->m_cb->adminSetup(username, passwordHash);
+    ret = self->m_cb->adminSetup(username, password);
     if (ret != ESP_OK) {
         httpd_resp_send_500(req);
         return ESP_FAIL;

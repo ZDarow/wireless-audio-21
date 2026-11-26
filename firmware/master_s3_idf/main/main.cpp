@@ -16,9 +16,11 @@
 #include "esp_netif.h"
 #include "driver/uart.h"
 #include "mbedtls/md.h"
+#include "mbedtls/pkcs5.h"
 
 // DSP модули
 #include "pcm_pipeline.h"
+#include "../../../common/web/auth.h"
 #include "delay_line.h"
 #include "jitter_buffer.h"
 #include "volume_control.h"
@@ -67,7 +69,13 @@ static int16_t* psramAllocSamples(size_t samples) {
     if (buf) {
         ESP_LOGI(TAG, "PSRAM: allocated %zu bytes for %u samples", size, samples);
     } else {
-        ESP_LOGW(TAG, "PSRAM: allocation failed for %u samples, using DRAM", samples);
+        ESP_LOGW(TAG, "PSRAM: allocation failed for %u samples, falling back to DRAM", samples);
+        buf = (int16_t*)malloc(size);
+        if (buf) {
+            ESP_LOGI(TAG, "DRAM: allocated %zu bytes for %u samples", size, samples);
+        } else {
+            ESP_LOGE(TAG, "DRAM: allocation failed for %u samples", samples);
+        }
     }
     return buf;
 }
@@ -513,7 +521,7 @@ struct Session {
 
 static Session g_sessions[kMaxSessions];
 static char g_adminUsername[32] = "admin";
-static uint8_t g_adminPasswordHash[32] = {0}; // SHA-256
+static char g_adminPasswordHash[65] = {0}; // PBKDF2 hash string or SHA-256 hex
 static bool g_adminSetupDone = false;
 
 static void sha256Hex(const char* input, char* outputHex)
@@ -546,20 +554,17 @@ static int loginCallback(const char* username, const char* password, char* token
     if (!g_adminSetupDone) {
         // Админ не настроен — разрешаем вход с дефолтными учётными данными (предупреждение)
         if (strcmp(username, "admin") == 0 && strcmp(password, "admin") == 0) {
-            // Генерируем токен
-            char hashInput[128];
-            snprintf(hashInput, sizeof(hashInput), "%s:%s:%" PRIu32, username, password,
-                     (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS));
-            char hashHex[65];
-            sha256Hex(hashInput, hashHex);
+            // Генерируем токен с esp_random()
+            char tokenBuf[65];
+            audio21::Auth::newSessionToken(tokenBuf);
             cleanupExpiredSessions((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS));
             // Находим свободный слот
             for (size_t i = 0; i < kMaxSessions; i++) {
                 if (!g_sessions[i].active) {
-                    strcpy(g_sessions[i].token, hashHex);
+                    strcpy(g_sessions[i].token, tokenBuf);
                     g_sessions[i].createdMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
                     g_sessions[i].active = true;
-                    strncpy(tokenOut, hashHex, tokenOutSize - 1);
+                    strncpy(tokenOut, tokenBuf, tokenOutSize - 1);
                     tokenOut[tokenOutSize - 1] = '\0';
                     return (int)strlen(tokenOut);
                 }
@@ -567,16 +572,8 @@ static int loginCallback(const char* username, const char* password, char* token
         }
         return -1;
     }
-    // Проверяем пароль против сохранённого хеша (SHA-256 от пароля)
-    uint8_t inputHash[32];
-    mbedtls_md_context_t ctx;
-    mbedtls_md_init(&ctx);
-    mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 0);
-    mbedtls_md_starts(&ctx);
-    mbedtls_md_update(&ctx, (const uint8_t*)password, strlen(password));
-    mbedtls_md_finish(&ctx, inputHash);
-    mbedtls_md_free(&ctx);
-    if (memcmp(inputHash, g_adminPasswordHash, 32) != 0) {
+    // Проверяем пароль через Auth::checkPassword (PBKDF2 + backward compat SHA-256)
+    if (!audio21::Auth::checkPassword(password, g_adminPasswordHash)) {
         return -1;
     }
     // Проверяем username
@@ -586,15 +583,12 @@ static int loginCallback(const char* username, const char* password, char* token
     cleanupExpiredSessions((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS));
     for (size_t i = 0; i < kMaxSessions; i++) {
         if (!g_sessions[i].active) {
-            char hashInput2[128];
-            snprintf(hashInput2, sizeof(hashInput2), "%s:%s:%" PRIu32, username, password,
-                     (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS));
-            char hashHex2[65];
-            sha256Hex(hashInput2, hashHex2);
-            strcpy(g_sessions[i].token, hashHex2);
+            char tokenBuf[65];
+            audio21::Auth::newSessionToken(tokenBuf);
+            strcpy(g_sessions[i].token, tokenBuf);
             g_sessions[i].createdMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
             g_sessions[i].active = true;
-            strncpy(tokenOut, hashHex2, tokenOutSize - 1);
+            strncpy(tokenOut, tokenBuf, tokenOutSize - 1);
             tokenOut[tokenOutSize - 1] = '\0';
             return (int)strlen(tokenOut);
         }
@@ -613,17 +607,12 @@ static esp_err_t logoutCallback(const char* token)
     return ESP_FAIL;
 }
 
-static esp_err_t adminSetupCallback(const char* username, const char* passwordHash)
+static esp_err_t adminSetupCallback(const char* username, const char* password)
 {
     strncpy(g_adminUsername, username, sizeof(g_adminUsername) - 1);
     g_adminUsername[sizeof(g_adminUsername) - 1] = '\0';
-    // passwordHash уже является hex-строкой SHA-256 (64 символа)
-    // Преобразуем из hex в байты
-    for (int i = 0; i < 32; i++) {
-        unsigned int byte;
-        sscanf(passwordHash + i * 2, "%02x", &byte);
-        g_adminPasswordHash[i] = (uint8_t)byte;
-    }
+    // Хешируем пароль через PBKDF2-HMAC-SHA256
+    audio21::Auth::hashPassword(password, g_adminPasswordHash);
     g_adminSetupDone = true;
     ESP_LOGI(TAG, "Admin setup done: user=%s", g_adminUsername);
     return ESP_OK;

@@ -1,3 +1,11 @@
+# HTTPD: увеличить лимит URI handlers (по умолчанию 8, зарегистрировано ~25)
+CONFIG_HTTPD_MAX_URI_HANDLERS=30
+
+# PSRAM: включить поддержку (ESP32-S3, OPI PSRAM 8 МБ)
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE=OPI
+CONFIG_SPIRAM_SPEED_80M=y
+
 # LWIP_MDNS_RESPONDER не является Kconfig опцией в v5.3.1
 # mDNS реализован через отдельный компонент mdns_raw
 
