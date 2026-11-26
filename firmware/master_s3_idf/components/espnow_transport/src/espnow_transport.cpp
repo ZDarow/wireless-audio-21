@@ -54,6 +54,17 @@ esp_err_t EspNowTransport::init(bool encrypt)
     m_addedPeerCount = 0;
     memset(m_addedPeers, 0, sizeof(m_addedPeers));
 
+    // Добавляем broadcast peer (FF:FF:FF:FF:FF:FF) для Discovery/heartbeat
+    esp_now_peer_info_t bcastPeer = {};
+    memset(bcastPeer.peer_addr, 0xFF, 6);
+    bcastPeer.channel = 0;  // текущий канал
+    bcastPeer.encrypt = false;
+    bcastPeer.ifidx = WIFI_IF_AP;
+    esp_err_t bret = esp_now_add_peer(&bcastPeer);
+    if (bret != ESP_OK && bret != ESP_ERR_ESPNOW_EXIST) {
+        ESP_LOGW(TAG, "broadcast peer add failed: %s", esp_err_to_name(bret));
+    }
+
     ESP_LOGI(TAG, "ESP-NOW initialized (encrypt=%d)", encrypt ? 1 : 0);
     return ESP_OK;
 }

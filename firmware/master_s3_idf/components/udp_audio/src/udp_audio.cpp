@@ -125,8 +125,8 @@ esp_err_t UdpAudio::receive(uint32_t timeoutMs, UdpAudioRxCallback* cb)
     // Проверка аутентификации
     bool authOk = false;
     if (hdr->magic == kMagicAuth) {
-        if (payloadLen < 32) {
-            ESP_LOGW(TAG, "auth packet too small: payload %zu bytes", payloadLen);
+        if (payloadLen == 0) {
+            ESP_LOGW(TAG, "auth packet has no payload: %zu bytes", payloadLen);
             m_authFailCount++;
             return ESP_ERR_INVALID_SIZE;
         }
@@ -151,9 +151,6 @@ esp_err_t UdpAudio::receive(uint32_t timeoutMs, UdpAudioRxCallback* cb)
             ESP_LOGW(TAG, "HMAC verification failed");
             return ESP_ERR_INVALID_STATE;
         }
-        // Payload после HMAC
-        payload = m_rxBuffer + sizeof(UdpAudioHeader) + 32;
-        payloadLen -= 32;
         m_authOkCount++;
     } else if (hdr->magic == kMagicUnauth) {
         if (m_authEnabled) {
