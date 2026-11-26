@@ -324,6 +324,29 @@ static esp_err_t wifiSetApPasswordCallback(const char* password)
     return ESP_OK;
 }
 
+static char g_adminSalt[33] = {0}; // per-device соль для PBKDF2
+
+// Генерация per-device соли из MAC-адреса (детерминированная, не требует NVS)
+static void initAdminSalt(void) {
+    if (g_adminSalt[0] != '\0') return; // уже инициализирована
+    uint8_t mac[6] = {0};
+    esp_wifi_get_mac(WIFI_IF_AP, mac);
+    // Если MAC нулевой (Wi-Fi не инициализирован), используем статическую соль
+    bool allZero = true;
+    for (int i = 0; i < 6; i++) if (mac[i] != 0) { allZero = false; break; }
+    if (allZero) {
+        strcpy(g_adminSalt, audio21::Auth::kSalt);
+        return;
+    }
+    // Hex-кодируем MAC как соль
+    static const char* hex = "0123456789abcdef";
+    for (int i = 0; i < 6; i++) {
+        g_adminSalt[i * 2] = hex[mac[i] >> 4];
+        g_adminSalt[i * 2 + 1] = hex[mac[i] & 0x0f];
+    }
+    g_adminSalt[12] = '\0';
+}
+
 static esp_err_t setHostnameCallback(const char* hostname)
 {
     if (!hostname || strlen(hostname) == 0 || strlen(hostname) >= sizeof(g_cfg.hostname)) {
@@ -614,7 +637,7 @@ static int loginCallback(const char* username, const char* password, char* token
         return -1;
     }
     // Проверяем пароль через Auth::checkPassword (PBKDF2 + backward compat SHA-256)
-    if (!audio21::Auth::checkPassword(password, g_adminPasswordHash)) {
+    if (!audio21::Auth::checkPassword(password, g_adminPasswordHash, g_adminSalt)) {
         return -1;
     }
     // Проверяем username
@@ -652,8 +675,8 @@ static esp_err_t adminSetupCallback(const char* username, const char* password)
 {
     strncpy(g_adminUsername, username, sizeof(g_adminUsername) - 1);
     g_adminUsername[sizeof(g_adminUsername) - 1] = '\0';
-    // Хешируем пароль через PBKDF2-HMAC-SHA256
-    audio21::Auth::hashPassword(password, g_adminPasswordHash);
+    // Хешируем пароль через PBKDF2-HMAC-SHA256 с per-device солью
+    audio21::Auth::hashPassword(password, g_adminPasswordHash, g_adminSalt);
     g_adminSetupDone = true;
     ESP_LOGI(TAG, "Admin setup done: user=%s", g_adminUsername);
     return ESP_OK;
@@ -1673,6 +1696,10 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "Calling wifi_init()...");
     wifi_init();
     ESP_LOGI(TAG, "After wifi_init, g_wifi_inited=%d", g_wifi_inited ? 1 : 0);
+
+    // Per-device соль для PBKDF2 (из MAC-адреса AP)
+    initAdminSalt();
+    ESP_LOGI(TAG, "Admin salt initialized: %s", g_adminSalt);
 
     // Этап 4/5: mDNS — доступ по http://<hostname>.local (STA приоритет, иначе AP).
     esp_netif_t *mdns_netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");

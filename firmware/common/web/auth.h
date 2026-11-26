@@ -204,10 +204,12 @@ public:
     // расширения поля — техдолг (T22, миграция NVS v5).
     static constexpr int kPbkdf2DkLen = 20;
 
-    // Вычислить хэш пароля: "pbkdf2$<итерации>$<hex(PBKDF2)>". out — 65 байт.
-    static void hashPassword(const char* password, char out[65]) {
+// Вычислить хэш пароля: "pbkdf2$<итерации>$<hex(PBKDF2)>". out — 65 байт.
+    // salt — соль для PBKDF2 (если NULL — используется kSalt).
+    static void hashPassword(const char* password, char out[65], const char* salt = nullptr) {
+        const char* s = salt ? salt : kSalt;
         uint8_t dk[kPbkdf2DkLen];
-        pbkdf2HmacSha256(password, kSalt, kPbkdf2Iterations, dk);
+        pbkdf2HmacSha256(password, s, kPbkdf2Iterations, dk);
         char hex[kPbkdf2DkLen * 2 + 1];
         hexEncodeN(dk, kPbkdf2DkLen, hex);
         snprintf(out, 65, "pbkdf2$%u$%s", (unsigned)kPbkdf2Iterations, hex);
@@ -216,7 +218,9 @@ public:
     // Проверить пароль против сохранённого хэша. Поддерживает оба формата:
     // pbkdf2$ (текущий) и 64-hex SHA-256 (v1, обратная совместимость —
     // сохраняется до первой смены пароля, после неё пишется pbkdf2$).
-    static bool checkPassword(const char* password, const char* savedHashHex) {
+    // salt — соль для PBKDF2 (если NULL — используется kSalt).
+    static bool checkPassword(const char* password, const char* savedHashHex, const char* salt = nullptr) {
+        const char* s = salt ? salt : kSalt;
         if (!savedHashHex || !savedHashHex[0]) return false;
         if (strncmp(savedHashHex, "pbkdf2$", 7) == 0) {
             uint32_t iter = 0;
@@ -230,19 +234,19 @@ public:
             const char* hex = p + 1;
             if (strlen(hex) != (size_t)kPbkdf2DkLen * 2) return false;
             uint8_t dk[kPbkdf2DkLen];
-            pbkdf2HmacSha256(password, kSalt, iter, dk);
+            pbkdf2HmacSha256(password, s, iter, dk);
             char computed[kPbkdf2DkLen * 2 + 1];
             hexEncodeN(dk, kPbkdf2DkLen, computed);
             return strcmp(computed, hex) == 0;
         }
-        // Старый формат v1: SHA-256(kSalt + password), 64 hex.
+        // Старый формат v1: SHA-256(salt + password), 64 hex.
         if (strlen(savedHashHex) != 64) return false;
         char hash[65];
         char input[128];
         int n = 0;
-        size_t slen = strlen(kSalt);
+        size_t slen = strlen(s);
         if (slen > sizeof(input) - 1) slen = sizeof(input) - 1;
-        memcpy(input, kSalt, slen);
+        memcpy(input, s, slen);
         n = (int)slen;
         size_t plen = strlen(password);
         if (plen > sizeof(input) - (size_t)n - 1) plen = sizeof(input) - (size_t)n - 1;
