@@ -1772,6 +1772,13 @@ extern "C" void app_main(void)
             ESP_LOGE(TAG, "Web server init failed: %s", esp_err_to_name(ret));
         } else {
             ESP_LOGI(TAG, "Web server started on port 80");
+            // HTTPS сервер на порту 443 (самоподписанный сертификат)
+            esp_err_t https_ret = g_webServer->initHttps(443);
+            if (https_ret != ESP_OK) {
+                ESP_LOGW(TAG, "HTTPS server not started: %s", esp_err_to_name(https_ret));
+            } else {
+                ESP_LOGI(TAG, "HTTPS server started on port 443");
+            }
         }
     } else {
         ESP_LOGE(TAG, "LwIP not initialized, skipping Web server");

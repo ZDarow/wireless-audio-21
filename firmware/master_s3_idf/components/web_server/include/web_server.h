@@ -6,6 +6,7 @@
 #include <vector>
 #include "freertos/FreeRTOS.h"
 #include "esp_http_server.h"
+#include "esp_https_server.h"
 #include "esp_err.h"
 
 namespace audio21 {
@@ -142,6 +143,9 @@ public:
     // Инициализация HTTP сервера на порту 80
     esp_err_t init(uint16_t port = 80);
 
+    // Инициализация HTTPS сервера на порту 443 (требует встроенных сертификатов)
+    esp_err_t initHttps(uint16_t port = 443);
+
     // Деинициализация
     esp_err_t deinit();
 
@@ -154,6 +158,7 @@ public:
 
 private:
     httpd_handle_t m_server = nullptr;
+    httpd_handle_t m_httpsServer = nullptr;
     const WebServerCallbacks* m_cb = nullptr;
     char m_csrfToken[33] = {0};
     std::vector<SseClient> m_sseClients; // Активные SSE соединения

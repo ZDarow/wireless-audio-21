@@ -377,6 +377,49 @@ esp_err_t WebServer::init(uint16_t port)
     return ESP_OK;
 }
 
+esp_err_t WebServer::initHttps(uint16_t port)
+{
+    if (m_httpsServer) {
+        ESP_LOGW(TAG, "HTTPS server already running");
+        return ESP_OK;
+    }
+
+    httpd_ssl_config_t conf = HTTPD_SSL_CONFIG_DEFAULT();
+    conf.port_secure = port;
+    conf.port_insecure = 0; // только HTTPS, без HTTP на этом сервере
+
+    extern const unsigned char servercert_pem_start[] asm("_binary_servercert_pem_start");
+    extern const unsigned char servercert_pem_end[]   asm("_binary_servercert_pem_end");
+    conf.servercert = servercert_pem_start;
+    conf.servercert_len = servercert_pem_end - servercert_pem_start;
+
+    extern const unsigned char prvtkey_pem_start[] asm("_binary_prvtkey_pem_start");
+    extern const unsigned char prvtkey_pem_end[]   asm("_binary_prvtkey_pem_end");
+    conf.prvtkey_pem = prvtkey_pem_start;
+    conf.prvtkey_len = prvtkey_pem_end - prvtkey_pem_start;
+
+    esp_err_t ret = httpd_ssl_start(&m_httpsServer, &conf);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "HTTPS server start failed: %s", esp_err_to_name(ret));
+        m_httpsServer = nullptr;
+        return ret;
+    }
+
+    // Регистрируем те же URI handlers на HTTPS сервере
+    // (копируем из HTTP сервера — те же функции)
+    // Примечание: httpd_register_uri_handler требует httpd_handle_t
+    // Для простоты регистрируем только основные
+    httpd_uri_t uriRoot = {
+        .uri = "/",
+        .method = HTTP_GET,
+        .handler = onGetRoot,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(m_httpsServer, &uriRoot);
+
+    ESP_LOGI(TAG, "HTTPS server started on port %u", port);
+    return ESP_OK;
+}
 esp_err_t WebServer::deinit()
 {
     if (m_server) {
