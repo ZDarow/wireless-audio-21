@@ -54,15 +54,24 @@ esp_err_t EspNowTransport::init(bool encrypt)
     m_addedPeerCount = 0;
     memset(m_addedPeers, 0, sizeof(m_addedPeers));
 
+    // Определяем интерфейс ESP-NOW в зависимости от режима Wi-Fi
+    wifi_mode_t wifi_mode;
+    esp_wifi_get_mode(&wifi_mode);
+    wifi_interface_t ifidx = (wifi_mode == WIFI_MODE_STA) ? WIFI_IF_STA : WIFI_IF_AP;
+
     // Добавляем broadcast peer (FF:FF:FF:FF:FF:FF) для Discovery/heartbeat
     esp_now_peer_info_t bcastPeer = {};
     memset(bcastPeer.peer_addr, 0xFF, 6);
     bcastPeer.channel = m_channel;  // текущий канал Wi-Fi
     bcastPeer.encrypt = false;
-    bcastPeer.ifidx = WIFI_IF_AP;
+    bcastPeer.ifidx = ifidx;
     esp_err_t bret = esp_now_add_peer(&bcastPeer);
     if (bret != ESP_OK && bret != ESP_ERR_ESPNOW_EXIST) {
         ESP_LOGW(TAG, "broadcast peer add failed: %s", esp_err_to_name(bret));
+    } else {
+        // Отслеживаем broadcast peer для обновления канала
+        memcpy(m_addedPeers[m_addedPeerCount], bcastPeer.peer_addr, 6);
+        m_addedPeerCount++;
     }
 
     ESP_LOGI(TAG, "ESP-NOW initialized (encrypt=%d)", encrypt ? 1 : 0);
@@ -123,7 +132,10 @@ esp_err_t EspNowTransport::sendUnicast(const uint8_t* dstMac, const uint8_t* dat
         memcpy(peerInfo.peer_addr, dstMac, 6);
         peerInfo.channel = m_channel; // тот же канал, что и Wi-Fi
         peerInfo.encrypt = m_encrypted;
-        peerInfo.ifidx = WIFI_IF_AP;
+        // Определяем интерфейс в зависимости от текущего режима Wi-Fi
+        wifi_mode_t wmode;
+        esp_wifi_get_mode(&wmode);
+        peerInfo.ifidx = (wmode == WIFI_MODE_STA) ? WIFI_IF_STA : WIFI_IF_AP;
 
         esp_err_t ret = esp_now_add_peer(&peerInfo);
         if (ret == ESP_OK) {
@@ -227,13 +239,17 @@ esp_err_t EspNowTransport::setChannel(uint8_t channel)
     ESP_LOGI(TAG, "ESP-NOW channel changed to %u", channel);
 
     // Обновляем канал у всех существующих пиров (удаляем и добавляем заново)
+    wifi_mode_t wmode;
+    esp_wifi_get_mode(&wmode);
+    wifi_interface_t ifidx = (wmode == WIFI_MODE_STA) ? WIFI_IF_STA : WIFI_IF_AP;
+
     for (size_t i = 0; i < m_addedPeerCount; i++) {
         esp_now_del_peer(m_addedPeers[i]);
         esp_now_peer_info_t peerInfo = {};
         memcpy(peerInfo.peer_addr, m_addedPeers[i], 6);
         peerInfo.channel = m_channel;
         peerInfo.encrypt = m_encrypted;
-        peerInfo.ifidx = WIFI_IF_AP;
+        peerInfo.ifidx = ifidx;
         esp_now_add_peer(&peerInfo);
     }
 
