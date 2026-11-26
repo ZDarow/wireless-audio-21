@@ -1238,8 +1238,7 @@ esp_err_t WebServer::onGetCaptivePortal(httpd_req_t* req)
     }
 
     // Отдаём HTML страницу captive портала для настройки Wi-Fi
-    const char* html = R"rawliteral(
-<!DOCTYPE html>
+    const char* html = R"rawliteral(<!DOCTYPE html>
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
@@ -1484,7 +1483,7 @@ scanNetworks();
 </html>
 )rawliteral";
 
-    httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
     return httpd_resp_send(req, html, strlen(html));
 }
@@ -1604,8 +1603,7 @@ esp_err_t WebServer::onSSE(httpd_req_t* req)
 
 esp_err_t WebServer::onGetRoot(httpd_req_t* req)
 {
-    const char* html = R"rawliteral(
-<!DOCTYPE html>
+    const char* html = R"rawliteral(<!DOCTYPE html>
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
@@ -1876,7 +1874,7 @@ setInterval(loadStatus, 3000);
 </body>
 </html>
 )rawliteral";
-    httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
     return httpd_resp_send(req, html, strlen(html));
 }
 
