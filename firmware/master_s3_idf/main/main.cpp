@@ -35,6 +35,7 @@
 
 // Этап 4: NVS конфигурация
 #include "console_handler.h"
+#include "nvs_manager.h"
 #include "wifi_manager.h"
 #include "nvs_config.h"
 
@@ -1716,20 +1717,7 @@ extern "C" void app_main(void)
 
         // Цикл примерно 10 мс (100 Гц)
         // Отложенная запись в NVS (дебаунс 500 мс, немедленная для критических изменений)
-        if (g_nvsDirty) {
-            uint32_t nowMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
-            bool shouldSave = g_nvsCritical || (nowMs - g_nvsLastChangeMs >= kNvsSaveDebounceMs);
-            if (shouldSave) {
-                esp_err_t ret = g_nvsConfig->save(g_cfg);
-                if (ret == ESP_OK) {
-                    g_nvsDirty = false;
-                    g_nvsCritical = false;
-                    ESP_LOGD(TAG, "NVS save (%s)", g_nvsCritical ? "immediate" : "debounced");
-                } else {
-                    ESP_LOGE(TAG, "NVS save failed: %s", esp_err_to_name(ret));
-                }
-            }
-        }
+        nvsSaveTick(nowMs);
         consoleTick();
         vTaskDelayUntil(&lastWakeTime, pdMS_TO_TICKS(10));
     }
