@@ -114,6 +114,7 @@ static char g_staIpAddr[16] = "";
 static bool g_wifi_inited;
 static std::atomic<bool> g_wifi_reconfiguring{false};
 static bool g_nvsDirty = false;
+static bool g_nvsCritical = false; // немедленное сохранение для критических изменений
 static uint32_t g_nvsLastChangeMs = 0;
 static constexpr uint32_t kNvsSaveDebounceMs = 500;
 static uint32_t g_sta_connect_start_ms = 0;
@@ -279,6 +280,7 @@ static esp_err_t wifiSetApPasswordCallback(const char* password)
     }
     strcpy(g_cfg.wifiApPassword, password);
     g_nvsDirty = true; g_nvsLastChangeMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+    g_nvsCritical = true;
     ESP_LOGI(TAG, "AP password changed (saved to NVS, reboot to apply)");
     return ESP_OK;
 }
@@ -842,6 +844,7 @@ static esp_err_t setWifiConfigCallback(const char* mode,
 
     // Сохраняем в NVS (с дебаунсом — реальная запись в основном цикле)
     g_nvsDirty = true; g_nvsLastChangeMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+    g_nvsCritical = true; // Wi-Fi конфиг — критическое изменение
 
     // Применяем без перезагрузки
     esp_err_t ret = wifi_reconfigure();
@@ -1495,6 +1498,22 @@ static void consoleProcessLine(char* line) {
         bool mute = atoi(arg1) != 0;
         setMuteCallback(mute);
         consolePrint(mute ? "mute: on\n" : "mute: off\n");
+    } else if (strcmp(cmd, "volume") == 0) {
+        if (!arg1) {
+            consolePrint("volume: ");
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%d\n", g_volumePercent);
+            consolePrint(buf);
+            return;
+        }
+        int vol = atoi(arg1);
+        if (setVolumeCallback(vol) == ESP_OK) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "volume: %d%%\n", g_volumePercent);
+            consolePrint(buf);
+        } else {
+            consolePrint("error\n");
+        }
     } else if (strcmp(cmd, "pair") == 0) {
         // Отправить discovery-запрос для поиска сателлитов
         uint8_t buf[16];
@@ -1769,14 +1788,19 @@ extern "C" void app_main(void)
         }
 
         // Цикл примерно 10 мс (100 Гц)
-        // Отложенная запись в NVS (дебаунс 500 мс)
-        if (g_nvsDirty && nowMs - g_nvsLastChangeMs >= kNvsSaveDebounceMs) {
-            esp_err_t ret = g_nvsConfig->save(g_cfg);
-            if (ret == ESP_OK) {
-                g_nvsDirty = false;
-                ESP_LOGD(TAG, "NVS save (debounced)");
-            } else {
-                ESP_LOGE(TAG, "NVS save failed: %s", esp_err_to_name(ret));
+        // Отложенная запись в NVS (дебаунс 500 мс, немедленная для критических изменений)
+        if (g_nvsDirty) {
+            uint32_t nowMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+            bool shouldSave = g_nvsCritical || (nowMs - g_nvsLastChangeMs >= kNvsSaveDebounceMs);
+            if (shouldSave) {
+                esp_err_t ret = g_nvsConfig->save(g_cfg);
+                if (ret == ESP_OK) {
+                    g_nvsDirty = false;
+                    g_nvsCritical = false;
+                    ESP_LOGD(TAG, "NVS save (%s)", g_nvsCritical ? "immediate" : "debounced");
+                } else {
+                    ESP_LOGE(TAG, "NVS save failed: %s", esp_err_to_name(ret));
+                }
             }
         }
         consoleTick();

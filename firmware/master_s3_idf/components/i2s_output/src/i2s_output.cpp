@@ -23,8 +23,10 @@ esp_err_t I2sOutput::init(const I2sOutputPins& pins, uint32_t sampleRate, bool m
 
     m_sampleRate = sampleRate;
 
-    // Конфигурация канала I2S
+    // Конфигурация канала I2S с увеличенными DMA буферами для стабильной работы при 48 кГц
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
+    chan_cfg.dma_desc_num = 8;   // 8 DMA дескрипторов
+    chan_cfg.dma_frame_num = 240; // 240 фреймов на дескриптор (5 мс при 48 кГц)
     i2s_chan_handle_t rx_handle = nullptr;
     esp_err_t ret = i2s_new_channel(&chan_cfg, &m_txHandle, &rx_handle);
     if (rx_handle) {
@@ -100,11 +102,22 @@ esp_err_t I2sOutput::write(const int16_t* data, size_t samples, uint32_t timeout
         return ESP_ERR_INVALID_STATE;
     }
 
-    size_t bytesWritten = 0;
-    esp_err_t ret = i2s_channel_write(m_txHandle, data, samples * sizeof(int16_t),
-                                      &bytesWritten, pdMS_TO_TICKS(timeoutMs));
+size_t bytesWritten = 0;
+    esp_err_t ret = ESP_OK;
+    // Повторная попытка при таймауте (underrun)
+    for (int retry = 0; retry < 2; retry++) {
+        ret = i2s_channel_write(m_txHandle, data, samples * sizeof(int16_t),
+                                &bytesWritten, pdMS_TO_TICKS(timeoutMs));
+        if (ret == ESP_OK) break;
+        if (ret == ESP_ERR_TIMEOUT) {
+            ESP_LOGW(TAG, "i2s_channel_write timeout (retry %d/2), possible underrun", retry + 1);
+        } else {
+            ESP_LOGE(TAG, "i2s_channel_write failed: %s", esp_err_to_name(ret));
+            return ret;
+        }
+    }
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "i2s_channel_write failed: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "i2s_channel_write failed after retries: %s", esp_err_to_name(ret));
         return ret;
     }
 
