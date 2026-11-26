@@ -36,7 +36,7 @@ extern bool g_rightOnline;
 extern uint32_t g_lastLeftSeenMs;
 extern uint32_t g_lastRightSeenMs;
 extern std::atomic<uint32_t> g_heartbeatsRx;
-extern std::atomic<uint32_t> g_heartbeatsTx;
+extern std::atomic<bool> g_wifi_reconfiguring;
 
 extern bool g_nvsDirty;
 extern bool g_nvsCritical;

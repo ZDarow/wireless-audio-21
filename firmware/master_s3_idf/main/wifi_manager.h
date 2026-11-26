@@ -11,5 +11,5 @@ esp_err_t setHostnameCallback(const char* hostname);
 int getWifiConfigCallback(char* buf, size_t bufSize);
 esp_err_t setWifiConfigCallback(const char* mode, const char* apSsid, const char* apPassword,
                                const char* staSsid, const char* staPassword,
-                               bool staDhcp, const char* staIp, const char* staGw,
+                               const char* staDhcp, const char* staIp, const char* staGw,
                                const char* staMask, const char* staDns);
