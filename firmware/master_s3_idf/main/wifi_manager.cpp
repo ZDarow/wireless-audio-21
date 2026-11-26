@@ -202,6 +202,10 @@ esp_err_t wifi_init(void)
             wifi_event_sta_connected_t* conn = (wifi_event_sta_connected_t*)event_data;
             ESP_LOGI("wifi_event", "Wi-Fi connected to SSID=%s, channel=%d",
                      conn->ssid, conn->channel);
+            g_wifi_channel = conn->channel;
+            if (g_espnow) {
+                g_espnow->setChannel(g_wifi_channel);
+            }
         } else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
             wifi_event_sta_disconnected_t* disc = (wifi_event_sta_disconnected_t*)event_data;
             ESP_LOGW("wifi_event", "Wi-Fi disconnected from SSID=%s, reason=%d, reconnecting...",
@@ -271,10 +275,10 @@ esp_err_t wifi_init(void)
         strcpy((char*)sta_config.sta.password, g_cfg.wifiPassword);
         sta_config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
         sta_config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
-        sta_config.sta.pmf_cfg.capable = true;
+        sta_config.sta.pmf_cfg.capable = false;
         sta_config.sta.pmf_cfg.required = false;
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_config));
-        ESP_LOGI(TAG, "Wi-Fi STA connecting to SSID=%s", g_cfg.wifiSsid);
+        ESP_LOGI(TAG, "Wi-Fi STA connecting to SSID=%s (PMF disabled)", g_cfg.wifiSsid);
 
         // Статический IP для STA (если DHCP отключён)
         if (!g_cfg.wifiStaDhcp) {
@@ -406,10 +410,10 @@ esp_err_t wifi_reconfigure(void)
         strcpy((char*)sta_config.sta.password, g_cfg.wifiPassword);
         sta_config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
         sta_config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
-        sta_config.sta.pmf_cfg.capable = true;
+        sta_config.sta.pmf_cfg.capable = false;
         sta_config.sta.pmf_cfg.required = false;
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_config));
-        ESP_LOGI(TAG, "Wi-Fi STA connecting to SSID=%s", g_cfg.wifiSsid);
+        ESP_LOGI(TAG, "Wi-Fi STA connecting to SSID=%s (PMF disabled)", g_cfg.wifiSsid);
 
         // Статический IP для STA (если DHCP отключён)
         if (!g_cfg.wifiStaDhcp) {

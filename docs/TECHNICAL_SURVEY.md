@@ -143,7 +143,7 @@
 | **ESP32-S3 USB Speaker (UAC2)** | king2552/esp32-speaker | USB Audio Class 2.0, TinyUSB, I2S DMA ring buffer, 48 кГц фиксировано |
 
 **Рекомендации по железу (PCM5102A):**
-- GPIO: BCK=4, WS=5, DATA=6 (уже исправлено в проекте, B17)
+- GPIO: BCK=5, WS=4, DATA=6 (уже исправлено в проекте, B17)
 - DMA: 16 deskriptоров × 512 фреймов (рекомендация lingflux.com)
 - 33–100Ω последовательные резисторы на BCK, WS, DIN
 - 10μF + 0.1μF конденсаторы питания PCM5102A

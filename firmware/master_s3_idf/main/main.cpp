@@ -115,6 +115,7 @@ bool g_i2sOn = false;
 int g_volumePercent = 100;
 int g_crossoverHz = 90;
 char g_staIpAddr[16] = "";
+uint8_t g_wifi_channel = 6;
 bool g_wifi_inited;
 std::atomic<bool> g_wifi_reconfiguring{false};
 bool g_nvsDirty = false;

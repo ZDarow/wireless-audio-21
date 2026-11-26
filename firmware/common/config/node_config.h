@@ -125,12 +125,12 @@ static inline size_t strlcpy(char* dst, const char* src, size_t size) {
 #define AUDIO_DELAY_SUB_MS 0
 #endif
 
-// ESP32-S3: GPIO22-25 невалидны (внутренний SPI-флеш) — дефолты 4/5/6.
+// ESP32-S3: GPIO22-25 невалидны (внутренний SPI-флеш) — дефолты 5/4/6.
 #ifndef AUDIO_I2S_BCK
-#define AUDIO_I2S_BCK 4
+#define AUDIO_I2S_BCK 5
 #endif
 #ifndef AUDIO_I2S_WS
-#define AUDIO_I2S_WS 5
+#define AUDIO_I2S_WS 4
 #endif
 #ifndef AUDIO_I2S_DATA_OUT
 #define AUDIO_I2S_DATA_OUT 6

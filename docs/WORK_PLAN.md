@@ -15,7 +15,7 @@
 | Архитектура | Header-only `firmware/common`, изоляция ролей через env, единый формат пакетов | — |
 | Транспорт | Wi-Fi UDP (смартфон→мастер), ESP-NOW/UDP (мастер→сателлиты) | V4: нет аутентификации источника UDP |
 | DSP | LR4 кроссовер, volume, limiter, tone, канальные громкости, delay lines | — |
-| I2S | Общая обёртка `i2s_output.h` (IDF 5.x + legacy), пины 4/5/6 | — |
+| I2S | Общая обёртка `i2s_output.h` (IDF 5.x + legacy), пины 5/4/6 | — |
 | Веб-UI | WebServer, REST API, SPA, auth (SHA-256, CSRF, rate limit), OTA, логи | V5: OTA без подписи; S-1: дефолтный пароль AP; монолит web_server.h |
 | Сателлиты | Jitter buffer, VolumeControl, fade-in/out | C3.4: дрейф-коррекция не интегрирована |
 | CI/CD | `.github/workflows/ci.yml` написан, 0 runs | N1: Actions не активированы; нет HIL |

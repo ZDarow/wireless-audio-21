@@ -331,7 +331,7 @@ docs/                       # PLAN, TASKS, architecture, hardware, wiring, REPO_
 | `espnow_transport` | ESP-NOW unicast/broadcast (0xA210/0xA211/0xA212), AudioPacketHeader 16 байт |
 | `udp_audio` | UDP порт 5004, PCM приём, HMAC-SHA256 через mbedTLS |
 | `web_server` | HTTP REST API + SSE, cJSON, эндпоинты /api/*, /api/system/* |
-| `i2s_output` | esp_driver_i2s Master TX моно 16-bit для PCM5102A (BCK=4, WS=5, DATA=6) |
+| `i2s_output` | esp_driver_i2s Master TX моно 16-bit для PCM5102A (BCK=5, WS=4, DATA=6) |
 | `nvs_config` | NVS хранение NodeConfig (C API nvs_flash/nvs.h), kConfigVersion=1 |
 | `dns_captive` | UDP DNS сервер на порту 53, captive portal (softAP IP на все запросы) |
 | `ota_update` | OTA через esp_https_ota, POST /api/system/ota |

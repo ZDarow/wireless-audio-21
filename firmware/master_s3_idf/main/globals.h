@@ -29,6 +29,7 @@ extern std::unique_ptr<JitterBuffer> g_jitter;
 
 extern bool g_wifi_inited;
 extern char g_staIpAddr[16];
+extern uint8_t g_wifi_channel;
 extern bool g_i2sOn;
 extern int g_crossoverHz;
 extern bool g_leftOnline;

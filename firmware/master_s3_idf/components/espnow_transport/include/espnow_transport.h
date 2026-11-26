@@ -88,6 +88,9 @@ public:
     // Удалить пир из таблицы ESP-NOW
     esp_err_t removePeer(const uint8_t* dstMac);
 
+    // Установить канал ESP-NOW (синхронизировать с текущим каналом Wi-Fi STA/AP)
+    esp_err_t setChannel(uint8_t channel);
+
     // Получить количество активных пиров
     size_t peerCount() const { return m_peerCount; }
 
@@ -102,6 +105,7 @@ private:
     SatelliteStatus m_satellites[2];
     bool m_initialized = false;
     bool m_encrypted = false;
+    uint8_t m_channel = 6;
     size_t m_peerCount = 0;
     uint8_t m_addedPeers[10][6] = {};  // MAC пиров, уже добавленных через esp_now_add_peer
     size_t m_addedPeerCount = 0;

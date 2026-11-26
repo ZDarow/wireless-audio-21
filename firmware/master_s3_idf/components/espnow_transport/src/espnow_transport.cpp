@@ -57,7 +57,7 @@ esp_err_t EspNowTransport::init(bool encrypt)
     // Добавляем broadcast peer (FF:FF:FF:FF:FF:FF) для Discovery/heartbeat
     esp_now_peer_info_t bcastPeer = {};
     memset(bcastPeer.peer_addr, 0xFF, 6);
-    bcastPeer.channel = 0;  // текущий канал
+    bcastPeer.channel = m_channel;  // текущий канал Wi-Fi
     bcastPeer.encrypt = false;
     bcastPeer.ifidx = WIFI_IF_AP;
     esp_err_t bret = esp_now_add_peer(&bcastPeer);
@@ -121,7 +121,7 @@ esp_err_t EspNowTransport::sendUnicast(const uint8_t* dstMac, const uint8_t* dat
 
         esp_now_peer_info_t peerInfo = {};
         memcpy(peerInfo.peer_addr, dstMac, 6);
-        peerInfo.channel = 6; // тот же канал, что и AP
+        peerInfo.channel = m_channel; // тот же канал, что и Wi-Fi
         peerInfo.encrypt = m_encrypted;
         peerInfo.ifidx = WIFI_IF_AP;
 
@@ -215,6 +215,28 @@ esp_err_t EspNowTransport::removePeer(const uint8_t* dstMac)
         ESP_LOGE(TAG, "esp_now_del_peer failed: %s", esp_err_to_name(ret));
         return ret;
     }
+    return ESP_OK;
+}
+
+esp_err_t EspNowTransport::setChannel(uint8_t channel)
+{
+    if (channel == m_channel) {
+        return ESP_OK;
+    }
+    m_channel = channel;
+    ESP_LOGI(TAG, "ESP-NOW channel changed to %u", channel);
+
+    // Обновляем канал у всех существующих пиров (удаляем и добавляем заново)
+    for (size_t i = 0; i < m_addedPeerCount; i++) {
+        esp_now_del_peer(m_addedPeers[i]);
+        esp_now_peer_info_t peerInfo = {};
+        memcpy(peerInfo.peer_addr, m_addedPeers[i], 6);
+        peerInfo.channel = m_channel;
+        peerInfo.encrypt = m_encrypted;
+        peerInfo.ifidx = WIFI_IF_AP;
+        esp_now_add_peer(&peerInfo);
+    }
+
     return ESP_OK;
 }
 

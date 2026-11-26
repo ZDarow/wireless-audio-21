@@ -85,7 +85,7 @@
 
 - Конфликт пипов (исправлен B17/B2): `AUDIO_I2S_DATA_OUT=22` и `AUDIO_OLED_SCL=22`
   были в `config.example.h` (удалено при реорганизации — единый источник —
-  `config.env` + `node_config.h`). Текущие валидные пины: I2S 4/5/6, OLED SCL 17.
+  `config.env` + `node_config.h`). Текущие валидные пины: I2S 5/4/6, OLED SCL 17.
 - CI (`.github/workflows/ci.yml`) требует активации GitHub Actions; для ручного
   запуска добавлен `workflow_dispatch` (см. TASKS.md T1).
 - Актуальный список задач/техдолга — `docs/TASKS.md`. На 12.08.2026 закрыты:
