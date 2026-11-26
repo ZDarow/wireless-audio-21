@@ -321,6 +321,14 @@ esp_err_t WebServer::init(uint16_t port)
     };
     httpd_register_uri_handler(m_server, &uriRoot);
 
+    httpd_uri_t uriFavicon = {
+        .uri = "/favicon.ico",
+        .method = HTTP_GET,
+        .handler = onGetFavicon,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(m_server, &uriFavicon);
+
     httpd_register_err_handler(m_server, HTTPD_404_NOT_FOUND, [](httpd_req_t* req, httpd_err_code_t err) {
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
         return ESP_OK;
@@ -1599,6 +1607,12 @@ esp_err_t WebServer::onSSE(httpd_req_t* req)
         }
     }
     return ret;
+}
+
+esp_err_t WebServer::onGetFavicon(httpd_req_t* req)
+{
+    httpd_resp_set_status(req, "204 No Content");
+    return httpd_resp_send(req, NULL, 0);
 }
 
 esp_err_t WebServer::onGetRoot(httpd_req_t* req)

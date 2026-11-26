@@ -160,6 +160,7 @@ private:
     static esp_err_t onPostWifi(httpd_req_t* req);
     static esp_err_t onGetCsrf(httpd_req_t* req);
     static esp_err_t onSSE(httpd_req_t* req);
+    static esp_err_t onGetFavicon(httpd_req_t* req);
     static esp_err_t onGetRoot(httpd_req_t* req);
     static esp_err_t onNotFound(httpd_req_t* req);
     static esp_err_t onPostMute(httpd_req_t* req);
