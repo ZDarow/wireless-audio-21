@@ -64,6 +64,8 @@ static EspNowTransport g_espnow;
 static bool g_masterOnline = false;
 static uint32_t g_lastRxMs = 0;
 static uint32_t g_packetsRx = 0;
+static uint16_t g_lastSequence = 0;  // anti-replay: последний принятый sequence
+static bool g_hasLastSequence = false;
 static uint32_t g_lastHeartbeatMs = 0;
 static uint32_t g_heartbeatsSent = 0;
 static MacAddr g_masterMac;
@@ -214,6 +216,18 @@ static void onPacketProcess(const uint8_t* srcMac, const uint8_t* data, size_t s
     // Аудио-пакет: только свой канал.
     uint8_t channel = (hdr.magic == kMagicAudioL) ? 0x01 : 0x02;
     if (channel != kMyChannel) return;
+
+    // Anti-replay (P6): отклоняем пакеты с sequence <= последнего принятого.
+    // Обработка wraparound: если разница > 32768, считаем что это новый цикл.
+    if (g_hasLastSequence) {
+        int16_t diff = (int16_t)(hdr.sequence - g_lastSequence);
+        if (diff <= 0) {
+            // Пакет устаревший или дубликат — отклоняем
+            return;
+        }
+    }
+    g_lastSequence = hdr.sequence;
+    g_hasLastSequence = true;
 
     g_masterOnline = true;
     g_lastRxMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
