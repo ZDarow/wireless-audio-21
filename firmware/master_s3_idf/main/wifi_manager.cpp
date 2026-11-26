@@ -271,7 +271,7 @@ esp_err_t wifi_init(void)
         strcpy((char*)sta_config.sta.password, g_cfg.wifiPassword);
         sta_config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
         sta_config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
-        sta_config.sta.pmf_cfg.capable = false;
+        sta_config.sta.pmf_cfg.capable = true;
         sta_config.sta.pmf_cfg.required = false;
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_config));
         ESP_LOGI(TAG, "Wi-Fi STA connecting to SSID=%s", g_cfg.wifiSsid);
@@ -406,7 +406,7 @@ esp_err_t wifi_reconfigure(void)
         strcpy((char*)sta_config.sta.password, g_cfg.wifiPassword);
         sta_config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
         sta_config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
-        sta_config.sta.pmf_cfg.capable = false;
+        sta_config.sta.pmf_cfg.capable = true;
         sta_config.sta.pmf_cfg.required = false;
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_config));
         ESP_LOGI(TAG, "Wi-Fi STA connecting to SSID=%s", g_cfg.wifiSsid);
