@@ -1850,6 +1850,8 @@ td { padding: 6px 8px; border-bottom: 1px solid #2a2a2a; }
 .status-item { background: #222; border-radius: 6px; padding: 12px; }
 .status-item .lbl { font-size: 12px; color: #888; }
 .status-item .val { font-size: 15px; color: #eee; font-weight: 600; }
+.val.dirty { color: #f90; animation: pulse 1s infinite; }
+@keyframes pulse { 0%,100% { opacity: .6; } 50% { opacity: 1; } }
 </style>
 </head>
 <body>
@@ -2059,12 +2061,16 @@ if (b.textContent.toLowerCase().includes(name === 'dashboard' ? 'панель' :
 document.getElementById('volSlider').addEventListener('input', async (e) => {
 const v = e.target.value;
 document.getElementById('volVal').textContent = v + '%';
+document.getElementById('volVal').classList.add('dirty');
 await api('/api/volume', { method: 'POST', body: { volume: parseInt(v) } });
+document.getElementById('volVal').classList.remove('dirty');
 });
 document.getElementById('xoverSlider').addEventListener('input', async (e) => {
 const hz = e.target.value;
 document.getElementById('xoverVal').textContent = hz + ' Гц';
+document.getElementById('xoverVal').classList.add('dirty');
 await api('/api/crossover', { method: 'POST', body: { crossoverHz: parseInt(hz) } });
+document.getElementById('xoverVal').classList.remove('dirty');
 });
 
 // Mute toggle
@@ -2079,12 +2085,18 @@ await api('/api/mute', { method: 'PUT', body: { mute: !isMuted } });
 document.getElementById('bassSlider').addEventListener('input', async (e) => {
 const v = e.target.value;
 document.getElementById('bassVal').textContent = v + ' dB';
+document.getElementById('bassVal').classList.add('dirty');
 await api('/api/tone', { method: 'PUT', body: { bass: parseFloat(v), treble: parseFloat(document.getElementById('trebleSlider').value) } });
+document.getElementById('bassVal').classList.remove('dirty');
+document.getElementById('trebleVal').classList.remove('dirty');
 });
 document.getElementById('trebleSlider').addEventListener('input', async (e) => {
 const v = e.target.value;
 document.getElementById('trebleVal').textContent = v + ' dB';
+document.getElementById('trebleVal').classList.add('dirty');
 await api('/api/tone', { method: 'PUT', body: { bass: parseFloat(document.getElementById('bassSlider').value), treble: parseFloat(v) } });
+document.getElementById('bassVal').classList.remove('dirty');
+document.getElementById('trebleVal').classList.remove('dirty');
 });
 
 // Channel volume sliders
@@ -2094,8 +2106,12 @@ const val = document.getElementById('vol' + ch + 'Val');
 slider.addEventListener('input', async (e) => {
 const v = e.target.value;
 val.textContent = v + '%';
+val.classList.add('dirty');
 const body = { left: parseInt(document.getElementById('volLeftSlider').value), right: parseInt(document.getElementById('volRightSlider').value), sub: parseInt(document.getElementById('volSubSlider').value) };
 await api('/api/channel-volumes', { method: 'PUT', body: body });
+document.getElementById('volLeftVal').classList.remove('dirty');
+document.getElementById('volRightVal').classList.remove('dirty');
+document.getElementById('volSubVal').classList.remove('dirty');
 });
 });
 
@@ -2107,7 +2123,11 @@ const val = document.getElementById('delay' + ch + 'Val');
 slider.addEventListener('input', async (e) => {
 const v = e.target.value;
 val.textContent = v + ' мс';
+val.classList.add('dirty');
 await api('/api/delay', { method: 'PUT', body: { channel: lower, delay_ms: parseInt(v) } });
+document.getElementById('delayLeftVal').classList.remove('dirty');
+document.getElementById('delayRightVal').classList.remove('dirty');
+document.getElementById('delaySubVal').classList.remove('dirty');
 });
 });
 
