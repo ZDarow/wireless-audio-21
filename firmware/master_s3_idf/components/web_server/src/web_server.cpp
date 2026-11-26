@@ -1818,7 +1818,6 @@ function showTab(name) {
 document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
 document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
 document.getElementById(name).classList.add('active');
-document.querySelector('nav button[data-p]').click && null;
 document.querySelectorAll('nav button').forEach(b => {
 if (b.textContent.toLowerCase().includes(name === 'dashboard' ? 'панель' : name === 'wifi' ? 'wi-fi' : 'система')) b.classList.add('active');
 });
