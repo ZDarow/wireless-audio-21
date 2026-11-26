@@ -742,3 +742,8 @@
 - **Критичные проблемы из аудита**: CSRF-защита веб-API, OTA без подписи, дефолтный пароль AP "1234567890" — описаны в `docs/AUDIT_REPORT_2026-11-23.md`, требуют исправления перед продакшеном.
 
 
+
+| E24 | Web Server: `CONFIG_HTTPD_MAX_URI_HANDLERS=30` в `sdkconfig.defaults` (по умолчанию 8, эндпоинтов ~25) | `sdkconfig.defaults` | ✅ |
+| E25 | PSRAM: `CONFIG_SPIRAM=y` в `sdkconfig.defaults` + `malloc()` fallback в `psramAllocSamples` | `sdkconfig.defaults`, `main/main.cpp:64-73` | ✅ |
+| E26 | Логин: PBKDF2-HMAC-SHA256 с солью (через `audio21::Auth`) вместо plain SHA-256 | `main/main.cpp`, `common/web/auth.h` | ✅ |
+| E27 | Сессионные токены: `Auth::newSessionToken()` с `esp_fill_random()` | `main/main.cpp`, `common/web/auth.h` | ✅ |
