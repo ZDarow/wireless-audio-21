@@ -40,6 +40,18 @@ struct WebServerCallbacks {
     // Получить mute
     bool (*getMute)(void);
 
+    // Установить тембр (bass, treble в dB)
+    esp_err_t (*setTone)(float bass, float treble);
+
+    // Получить тембр
+    void (*getTone)(float* bass, float* treble);
+
+    // Установить канальные громкости (0..100)
+    esp_err_t (*setChannelVolumes)(int left, int right, int sub);
+
+    // Получить канальные громкости
+    void (*getChannelVolumes)(int* left, int* right, int* sub);
+
     // Установить задержку канала (мс): channel="left"/"right"/"sub"
     esp_err_t (*setDelay)(const char* channel, int delayMs);
 
@@ -164,6 +176,10 @@ private:
     static esp_err_t onGetRoot(httpd_req_t* req);
     static esp_err_t onNotFound(httpd_req_t* req);
     static esp_err_t onPostMute(httpd_req_t* req);
+    static esp_err_t onPostTone(httpd_req_t* req);
+    static esp_err_t onGetTone(httpd_req_t* req);
+    static esp_err_t onPostChannelVolumes(httpd_req_t* req);
+    static esp_err_t onGetChannelVolumes(httpd_req_t* req);
     static esp_err_t onPutDelay(httpd_req_t* req);
     static esp_err_t onGetWifiScan(httpd_req_t* req);
     static esp_err_t onPutWifiMode(httpd_req_t* req);

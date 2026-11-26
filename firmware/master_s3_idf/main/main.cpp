@@ -184,6 +184,45 @@ static bool getMuteCallback(void)
     return g_cfg.mute;
 }
 
+static esp_err_t setToneCallback(float bass, float treble)
+{
+    g_pipeline.setTone(bass, treble);
+    g_nvsDirty = true; g_nvsLastChangeMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+    ESP_LOGI(TAG, "tone set: bass=%.1f dB, treble=%.1f dB", bass, treble);
+    return ESP_OK;
+}
+
+static void getToneCallback(float* bass, float* treble)
+{
+    // PcmPipeline не хранит bass/treble отдельно — возвращаем 0
+    if (bass) *bass = 0.0f;
+    if (treble) *treble = 0.0f;
+}
+
+static esp_err_t setChannelVolumesCallback(int left, int right, int sub)
+{
+    if (left < 0) left = 0;
+    if (left > 100) left = 100;
+    if (right < 0) right = 0;
+    if (right > 100) right = 100;
+    if (sub < 0) sub = 0;
+    if (sub > 100) sub = 100;
+    g_cfg.leftVolume = left;
+    g_cfg.rightVolume = right;
+    g_cfg.subVolume = sub;
+    g_pipeline.setChannelVolumes(left, right, sub);
+    g_nvsDirty = true; g_nvsLastChangeMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+    ESP_LOGI(TAG, "channel volumes set: L=%d R=%d Sub=%d", left, right, sub);
+    return ESP_OK;
+}
+
+static void getChannelVolumesCallback(int* left, int* right, int* sub)
+{
+    if (left) *left = g_cfg.leftVolume;
+    if (right) *right = g_cfg.rightVolume;
+    if (sub) *sub = g_cfg.subVolume;
+}
+
 static esp_err_t wifi_reconfigure(void);
 
 static esp_err_t setDelayCallback(const char* channel, int delayMs)
@@ -866,6 +905,10 @@ static const WebServerCallbacks g_webCallbacks = {
     .getCrossoverHz = getCrossoverHzCallback,
     .setMute = setMuteCallback,
     .getMute = getMuteCallback,
+    .setTone = setToneCallback,
+    .getTone = getToneCallback,
+    .setChannelVolumes = setChannelVolumesCallback,
+    .getChannelVolumes = getChannelVolumesCallback,
     .setDelay = setDelayCallback,
     .getDelay = getDelayCallback,
     .wifiScan = wifiScanCallback,

@@ -151,6 +151,38 @@ esp_err_t WebServer::init(uint16_t port)
     };
     httpd_register_uri_handler(m_server, &uriPutMute);
 
+    httpd_uri_t uriPutTone = {
+        .uri = "/api/tone",
+        .method = HTTP_PUT,
+        .handler = onPostTone,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(m_server, &uriPutTone);
+
+    httpd_uri_t uriGetTone = {
+        .uri = "/api/tone",
+        .method = HTTP_GET,
+        .handler = onGetTone,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(m_server, &uriGetTone);
+
+    httpd_uri_t uriPutChannelVolumes = {
+        .uri = "/api/channel-volumes",
+        .method = HTTP_PUT,
+        .handler = onPostChannelVolumes,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(m_server, &uriPutChannelVolumes);
+
+    httpd_uri_t uriGetChannelVolumes = {
+        .uri = "/api/channel-volumes",
+        .method = HTTP_GET,
+        .handler = onGetChannelVolumes,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(m_server, &uriGetChannelVolumes);
+
     httpd_uri_t uriPutDelay = {
         .uri = "/api/delay",
         .method = HTTP_PUT,
@@ -804,6 +836,116 @@ esp_err_t WebServer::onPostMute(httpd_req_t* req)
     return self->sendJson(req, "{\"ok\":true}");
 }
 
+esp_err_t WebServer::onPostTone(httpd_req_t* req)
+{
+    WebServer* self = static_cast<WebServer*>(req->user_ctx);
+    if (!self || !self->m_cb || !self->m_cb->setTone) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    if (!self->validateCsrfToken(req)) {
+        httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "CSRF token missing or invalid");
+        return ESP_FAIL;
+    }
+    char buf[64];
+    esp_err_t ret = self->readBody(req, buf, sizeof(buf));
+    if (ret != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, NULL);
+        return ESP_FAIL;
+    }
+    cJSON* json = cJSON_Parse(buf);
+    if (!json) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, NULL);
+        return ESP_FAIL;
+    }
+    cJSON* bassItem = cJSON_GetObjectItemCaseSensitive(json, "bass");
+    cJSON* trebleItem = cJSON_GetObjectItemCaseSensitive(json, "treble");
+    if (!bassItem || !cJSON_IsNumber(bassItem) || !trebleItem || !cJSON_IsNumber(trebleItem)) {
+        cJSON_Delete(json);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, NULL);
+        return ESP_FAIL;
+    }
+    float bass = (float)bassItem->valuedouble;
+    float treble = (float)trebleItem->valuedouble;
+    cJSON_Delete(json);
+    ret = self->m_cb->setTone(bass, treble);
+    if (ret != ESP_OK) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    return self->sendJson(req, "{\"ok\":true}");
+}
+
+esp_err_t WebServer::onGetTone(httpd_req_t* req)
+{
+    WebServer* self = static_cast<WebServer*>(req->user_ctx);
+    if (!self || !self->m_cb || !self->m_cb->getTone) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    float bass = 0, treble = 0;
+    self->m_cb->getTone(&bass, &treble);
+    char buf[64];
+    snprintf(buf, sizeof(buf), "{\"bass\":%.1f,\"treble\":%.1f}", bass, treble);
+    return self->sendJson(req, buf);
+}
+
+esp_err_t WebServer::onPostChannelVolumes(httpd_req_t* req)
+{
+    WebServer* self = static_cast<WebServer*>(req->user_ctx);
+    if (!self || !self->m_cb || !self->m_cb->setChannelVolumes) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    if (!self->validateCsrfToken(req)) {
+        httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "CSRF token missing or invalid");
+        return ESP_FAIL;
+    }
+    char buf[64];
+    esp_err_t ret = self->readBody(req, buf, sizeof(buf));
+    if (ret != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, NULL);
+        return ESP_FAIL;
+    }
+    cJSON* json = cJSON_Parse(buf);
+    if (!json) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, NULL);
+        return ESP_FAIL;
+    }
+    cJSON* leftItem = cJSON_GetObjectItemCaseSensitive(json, "left");
+    cJSON* rightItem = cJSON_GetObjectItemCaseSensitive(json, "right");
+    cJSON* subItem = cJSON_GetObjectItemCaseSensitive(json, "sub");
+    if (!leftItem || !cJSON_IsNumber(leftItem) || !rightItem || !cJSON_IsNumber(rightItem) ||
+        !subItem || !cJSON_IsNumber(subItem)) {
+        cJSON_Delete(json);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, NULL);
+        return ESP_FAIL;
+    }
+    int left = leftItem->valueint;
+    int right = rightItem->valueint;
+    int sub = subItem->valueint;
+    cJSON_Delete(json);
+    ret = self->m_cb->setChannelVolumes(left, right, sub);
+    if (ret != ESP_OK) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    return self->sendJson(req, "{\"ok\":true}");
+}
+
+esp_err_t WebServer::onGetChannelVolumes(httpd_req_t* req)
+{
+    WebServer* self = static_cast<WebServer*>(req->user_ctx);
+    if (!self || !self->m_cb || !self->m_cb->getChannelVolumes) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    int left = 100, right = 100, sub = 100;
+    self->m_cb->getChannelVolumes(&left, &right, &sub);
+    char buf[64];
+    snprintf(buf, sizeof(buf), "{\"left\":%d,\"right\":%d,\"sub\":%d}", left, right, sub);
+    return self->sendJson(req, buf);
+}
 esp_err_t WebServer::onPutDelay(httpd_req_t* req)
 {
     WebServer* self = static_cast<WebServer*>(req->user_ctx);
@@ -1687,9 +1829,53 @@ td { padding: 6px 8px; border-bottom: 1px solid #2a2a2a; }
 <span id="volVal" class="val">50%</span>
 </div>
 <div class="row">
+<label>Отключение звука (Mute)</label>
+<button id="muteBtn" onclick="toggleMute()">Выкл</button>
+</div>
+<div class="row">
 <label>Частота кроссовера</label>
 <input type="range" id="xoverSlider" min="40" max="500" value="90">
 <span id="xoverVal" class="val">90 Гц</span>
+</div>
+<div class="row">
+<label>Тембр: бас (dB)</label>
+<input type="range" id="bassSlider" min="-12" max="12" value="0">
+<span id="bassVal" class="val">0 dB</span>
+</div>
+<div class="row">
+<label>Тембр: высокие (dB)</label>
+<input type="range" id="trebleSlider" min="-12" max="12" value="0">
+<span id="trebleVal" class="val">0 dB</span>
+</div>
+<div class="row">
+<label>Громкость L</label>
+<input type="range" id="volLeftSlider" min="0" max="100" value="100">
+<span id="volLeftVal" class="val">100%</span>
+</div>
+<div class="row">
+<label>Громкость R</label>
+<input type="range" id="volRightSlider" min="0" max="100" value="100">
+<span id="volRightVal" class="val">100%</span>
+</div>
+<div class="row">
+<label>Громкость Sub</label>
+<input type="range" id="volSubSlider" min="0" max="100" value="100">
+<span id="volSubVal" class="val">100%</span>
+</div>
+<div class="row">
+<label>Задержка L (мс)</label>
+<input type="range" id="delayLeftSlider" min="0" max="200" value="0">
+<span id="delayLeftVal" class="val">0 мс</span>
+</div>
+<div class="row">
+<label>Задержка R (мс)</label>
+<input type="range" id="delayRightSlider" min="0" max="200" value="0">
+<span id="delayRightVal" class="val">0 мс</span>
+</div>
+<div class="row">
+<label>Задержка Sub (мс)</label>
+<input type="range" id="delaySubSlider" min="0" max="200" value="40">
+<span id="delaySubVal" class="val">40 мс</span>
 </div>
 <div class="row">
 <label>I2S выход</label>
@@ -1793,6 +1979,10 @@ document.getElementById('volVal').textContent = s.volume + '%';
 document.getElementById('volSlider').value = s.volume;
 document.getElementById('xoverVal').textContent = s.crossoverHz + ' Гц';
 document.getElementById('xoverSlider').value = s.crossoverHz;
+// Загрузка тембра
+try { const t = await api('/api/tone'); document.getElementById('bassSlider').value = t.bass; document.getElementById('bassVal').textContent = t.bass + ' dB'; document.getElementById('trebleSlider').value = t.treble; document.getElementById('trebleVal').textContent = t.treble + ' dB'; } catch {}
+// Загрузка канальных громкостей
+try { const cv = await api('/api/channel-volumes'); document.getElementById('volLeftSlider').value = cv.left; document.getElementById('volLeftVal').textContent = cv.left + '%'; document.getElementById('volRightSlider').value = cv.right; document.getElementById('volRightVal').textContent = cv.right + '%'; document.getElementById('volSubSlider').value = cv.sub; document.getElementById('volSubVal').textContent = cv.sub + '%'; } catch {}
 document.getElementById('i2sStatus').textContent = s.i2sOn ? 'вкл' : 'выкл';
 document.getElementById('jitterVal').textContent = s.jitterAvailable + ' семпл';
 document.getElementById('srVal').textContent = s.sampleRate + ' Гц';
@@ -1832,6 +2022,50 @@ document.getElementById('xoverSlider').addEventListener('input', async (e) => {
 const hz = e.target.value;
 document.getElementById('xoverVal').textContent = hz + ' Гц';
 await api('/api/crossover', { method: 'POST', body: { crossoverHz: parseInt(hz) } });
+});
+
+// Mute toggle
+async function toggleMute() {
+const btn = document.getElementById('muteBtn');
+const isMuted = btn.textContent === 'Вкл';
+btn.textContent = isMuted ? 'Выкл' : 'Вкл';
+await api('/api/mute', { method: 'PUT', body: { mute: !isMuted } });
+}
+
+// Tone sliders
+document.getElementById('bassSlider').addEventListener('input', async (e) => {
+const v = e.target.value;
+document.getElementById('bassVal').textContent = v + ' dB';
+await api('/api/tone', { method: 'PUT', body: { bass: parseFloat(v), treble: parseFloat(document.getElementById('trebleSlider').value) } });
+});
+document.getElementById('trebleSlider').addEventListener('input', async (e) => {
+const v = e.target.value;
+document.getElementById('trebleVal').textContent = v + ' dB';
+await api('/api/tone', { method: 'PUT', body: { bass: parseFloat(document.getElementById('bassSlider').value), treble: parseFloat(v) } });
+});
+
+// Channel volume sliders
+['Left','Right','Sub'].forEach(ch => {
+const slider = document.getElementById('vol' + ch + 'Slider');
+const val = document.getElementById('vol' + ch + 'Val');
+slider.addEventListener('input', async (e) => {
+const v = e.target.value;
+val.textContent = v + '%';
+const body = { left: parseInt(document.getElementById('volLeftSlider').value), right: parseInt(document.getElementById('volRightSlider').value), sub: parseInt(document.getElementById('volSubSlider').value) };
+await api('/api/channel-volumes', { method: 'PUT', body: body });
+});
+});
+
+// Delay sliders
+['Left','Right','Sub'].forEach(ch => {
+const lower = ch.toLowerCase();
+const slider = document.getElementById('delay' + ch + 'Slider');
+const val = document.getElementById('delay' + ch + 'Val');
+slider.addEventListener('input', async (e) => {
+const v = e.target.value;
+val.textContent = v + ' мс';
+await api('/api/delay', { method: 'PUT', body: { channel: lower, delay_ms: parseInt(v) } });
+});
 });
 
 async function saveWifi() {
