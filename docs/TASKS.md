@@ -723,7 +723,9 @@
 | E17 | Сателлит правый на ESP-IDF (AUDIO_SATELLITE_SIDE=1) | `firmware/satellite_s3_idf_right/` | ✅ |
 | E18 | Unified NodeConfig: `common/config/node_config.h` без `<Arduino.h>`, поля `version`/`udpAuthKey`, используется nvs_config и оба сателлита | `common/config/node_config.h` | ✅ |
 | E19 | PlatformIO: удалены env `master_s3_wifi`/`satellite_s3_left/right` и `platformio.master.ini`; `default_envs = master_a2dp` | `platformio.ini` | ✅ |
-| E20 | CI: `.github/workflows/ci.yml` вызывает `idf.py build` для трёх IDF-проектов вместо PlatformIO | `.github/workflows/ci.yml` | ✅ |
+| E21 | Captive портал HTML страница: `/captive` GET/POST, форма SSID/пароля, сканирование сетей, DHCP/static toggle, интеграция с `setWifiConfigCallback` | `components/web_server/src/web_server.cpp`, `main/main.cpp` | ✅ |
+| E22 | Agent endpoints: `GET /api/agent/health` (без CSRF), `GET /api/agent/ping`, `GET /api/agent/diagnostics` (с CSRF) — диагностика для агентов | `components/web_server/`, `main/main.cpp` | ✅ |
+| E23 | Детальный статус сателлитов в `/api/agent/diagnostics`: MAC, RSSI, lastSeenMs для обоих сателлитов | `main/main.cpp` | ✅ |
 
 ### 15.2 Отложено / не выполнено
 

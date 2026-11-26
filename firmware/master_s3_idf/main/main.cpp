@@ -456,16 +456,37 @@ static int agentDiagnosticsCallback(char* buf, size_t bufSize)
     freePsram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
     totalPsram = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
 #endif
+    // Детальный статус сателлитов (MAC, RSSI, время последнего heartbeat).
+    int8_t leftRssi = -128, rightRssi = -128;
+    uint32_t leftLastSeen = 0, rightLastSeen = 0;
+    if (g_espnow) {
+        const auto& satL = g_espnow->satellite(0);
+        const auto& satR = g_espnow->satellite(1);
+        leftRssi = satL.rssi;
+        rightRssi = satR.rssi;
+        leftLastSeen = g_leftOnline ? g_lastLeftSeenMs : 0;
+        rightLastSeen = g_rightOnline ? g_lastRightSeenMs : 0;
+    }
     int len = snprintf(buf, bufSize,
         "{\"uptimeMs\":%" PRIu32 ",\"freeHeap\":%" PRIu32 ",\"minHeap\":%" PRIu32 ","
         "\"freePsram\":%" PRIu32 ",\"totalPsram\":%" PRIu32 ","
         "\"satLeft\":\"%s\",\"satRight\":\"%s\","
+        "\"leftSatMac\":\"%02X:%02X:%02X:%02X:%02X:%02X\","
+        "\"rightSatMac\":\"%02X:%02X:%02X:%02X:%02X:%02X\","
+        "\"leftRssi\":%d,\"rightRssi\":%d,"
+        "\"leftLastSeenMs\":%" PRIu32 ",\"rightLastSeenMs\":%" PRIu32 ","
         "\"heartbeatsRx\":%" PRIu32 ",\"heartbeatsTx\":%" PRIu32 "}",
         (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS),
         freeHeap, minHeap,
         (uint32_t)freePsram, (uint32_t)totalPsram,
         g_leftOnline ? "online" : "offline",
         g_rightOnline ? "online" : "offline",
+        g_cfg.leftSatMac.bytes[0], g_cfg.leftSatMac.bytes[1], g_cfg.leftSatMac.bytes[2],
+        g_cfg.leftSatMac.bytes[3], g_cfg.leftSatMac.bytes[4], g_cfg.leftSatMac.bytes[5],
+        g_cfg.rightSatMac.bytes[0], g_cfg.rightSatMac.bytes[1], g_cfg.rightSatMac.bytes[2],
+        g_cfg.rightSatMac.bytes[3], g_cfg.rightSatMac.bytes[4], g_cfg.rightSatMac.bytes[5],
+        leftRssi, rightRssi,
+        leftLastSeen, rightLastSeen,
         g_heartbeatsRx.load(), g_heartbeatsTx.load());
     return len;
 }

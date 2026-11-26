@@ -288,6 +288,23 @@ esp_err_t WebServer::init(uint16_t port)
     };
     httpd_register_uri_handler(m_server, &uriPostAdminSetup);
 
+    // --- Captive портал (настройка Wi-Fi через softAP) ---
+    httpd_uri_t uriGetCaptivePortal = {
+        .uri = "/captive",
+        .method = HTTP_GET,
+        .handler = onGetCaptivePortal,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(m_server, &uriGetCaptivePortal);
+
+    httpd_uri_t uriPostCaptivePortal = {
+        .uri = "/captive",
+        .method = HTTP_POST,
+        .handler = onPostCaptivePortal,
+        .user_ctx = this
+    };
+    httpd_register_uri_handler(m_server, &uriPostCaptivePortal);
+
     httpd_uri_t uriSSE = {
         .uri = "/api/events",
         .method = HTTP_GET,
@@ -1209,6 +1226,337 @@ esp_err_t WebServer::onPostAdminSetup(httpd_req_t* req)
         httpd_resp_send_500(req);
         return ESP_FAIL;
     }
+    return self->sendJson(req, "{\"ok\":true}");
+}
+
+esp_err_t WebServer::onGetCaptivePortal(httpd_req_t* req)
+{
+    WebServer* self = static_cast<WebServer*>(req->user_ctx);
+    if (!self) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    // Отдаём HTML страницу captive портала для настройки Wi-Fi
+    const char* html = R"rawliteral(
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Настройка Wi-Fi — Wireless Audio 2.1</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: #0f0f0f; color: #eee; line-height: 1.5; display: flex; min-height: 100vh; }
+.container { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px; }
+.card { background: #1c1c1c; border: 1px solid #333; border-radius: 12px; padding: 32px 28px; max-width: 400px; width: 100%; box-shadow: 0 8px 32px rgba(0,0,0,.4); }
+.card h1 { font-size: 20px; margin-bottom: 8px; color: #fff; text-align: center; }
+.card p { font-size: 14px; color: #aaa; text-align: center; margin-bottom: 24px; }
+.form-group { margin-bottom: 16px; }
+.form-group label { display: block; font-size: 14px; color: #ccc; margin-bottom: 6px; }
+.form-group input { width: 100%; background: #222; border: 1px solid #444; border-radius: 6px; padding: 10px 12px; font-size: 14px; color: #eee; box-sizing: border-box; }
+.form-group input:focus { outline: none; border-color: #2a6; }
+.form-row { display: flex; gap: 12px; margin-bottom: 16px; }
+.form-row .form-group { flex: 1; margin-bottom: 0; }
+button { width: 100%; background: #2a6; color: #fff; border: none; border-radius: 6px; padding: 12px; font-size: 15px; cursor: pointer; margin-top: 8px; }
+button:hover { background: #3b8; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+button.secondary { background: #333; border: 1px solid #555; color: #ddd; margin-top: 12px; }
+button.secondary:hover { background: #444; }
+.network-list { margin-bottom: 16px; max-height: 200px; overflow-y: auto; border: 1px solid #333; border-radius: 6px; background: #222; }
+.network-item { padding: 10px 12px; border-bottom: 1px solid #333; cursor: pointer; font-size: 13px; color: #eee; }
+.network-item:last-child { border-bottom: none; }
+.network-item:hover { background: #2a2a2a; }
+.network-item.selected { background: #2a6; }
+.network-item .rssi { float: right; font-size: 11px; color: #88c; }
+.toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #2a6; color: #fff; padding: 10px 16px; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,.4); display: none; z-index: 200; }
+.toast.error { background: #a33; }
+.spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid rgba(255,255,255,.3); border-radius: 50%; border-top-color: #fff; animation: spin 1s linear infinite; margin-right: 8px; vertical-align: middle; }
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="card">
+    <h1>Wireless Audio 2.1</h1>
+    <p>Настройка точки доступа и Wi-Fi</p>
+
+    <div class="form-group">
+      <label>Имя сети (SSID)</label>
+      <input type="text" id="ssid" placeholder="Wi-Fi сеть">
+    </div>
+
+    <div class="form-group">
+      <label>Пароль</label>
+      <input type="password" id="password" placeholder="Пароль Wi-Fi">
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label>Режим</label>
+        <select id="mode" style="width:100%;background:#222;border:1px solid #444;border-radius:6px;padding:10px 12px;font-size:14px;color:#eee;">
+          <option value="ap">Точка доступа (AP)</option>
+          <option value="sta">Клиент (STA)</option>
+          <option value="apsta">Репитер (AP+STA)</option>
+        </select>
+      </div>
+    </div>
+
+    <div id="staticFields" style="display:none;">
+      <div class="form-group">
+        <label>Статический IP</label>
+        <input type="text" id="staIp" placeholder="192.168.1.100">
+      </div>
+      <div class="form-group">
+        <label>Шлюз</label>
+        <input type="text" id="staGateway" placeholder="192.168.1.1">
+      </div>
+      <div class="form-group">
+        <label>Маска</label>
+        <input type="text" id="staNetmask" placeholder="255.255.255.0">
+      </div>
+      <div class="form-group">
+        <label>DNS</label>
+        <input type="text" id="staDns" placeholder="192.168.1.1">
+      </div>
+    </div>
+
+    <div class="form-group" style="margin-top:8px;">
+      <label style="display:flex;align-items:center;gap:6px;">
+        <input type="checkbox" id="dhcp" checked style="margin:0;"> DHCP (автоматический IP)
+      </label>
+    </div>
+
+    <button id="saveBtn">Сохранить и подключиться</button>
+    <button class="secondary" id="scanBtn">Сканировать сети</button>
+
+    <div class="network-list" id="networkList"></div>
+    <div id="message" style="margin-top:12px;font-size:13px;text-align:center;color:#aaa;"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let networks = [];
+const ssidInput = document.getElementById('ssid');
+const passwordInput = document.getElementById('password');
+const modeSelect = document.getElementById('mode');
+const dhcpCheckbox = document.getElementById('dhcp');
+const staticFields = document.getElementById('staticFields');
+const saveBtn = document.getElementById('saveBtn');
+const scanBtn = document.getElementById('scanBtn');
+const networkList = document.getElementById('networkList');
+const messageDiv = document.getElementById('message');
+const toast = document.getElementById('toast');
+
+modeSelect.addEventListener('change', () => {
+  const isSta = modeSelect.value === 'sta' || modeSelect.value === 'apsta';
+  dhcpCheckbox.disabled = !isSta;
+  if (!isSta) {
+    dhcpCheckbox.checked = true;
+    staticFields.style.display = 'none';
+  } else {
+    staticFields.style.display = dhcpCheckbox.checked ? 'none' : 'block';
+  }
+});
+
+dhcpCheckbox.addEventListener('change', () => {
+  if (modeSelect.value === 'sta' || modeSelect.value === 'apsta') {
+    staticFields.style.display = dhcpCheckbox.checked ? 'none' : 'block';
+  }
+});
+
+function showToast(msg, isError) {
+  toast.textContent = msg;
+  toast.className = 'toast' + (isError ? ' error' : '');
+  toast.style.display = 'block';
+  setTimeout(() => { toast.style.display = 'none'; }, 3000);
+}
+
+function showMessage(msg) {
+  messageDiv.textContent = msg;
+}
+
+async function scanNetworks() {
+  scanBtn.disabled = true;
+  scanBtn.textContent = 'Сканирование...';
+  showMessage('Сканирование сетей...');
+  try {
+    const resp = await fetch('/api/wifi/scan');
+    if (resp.ok) {
+      const data = await resp.json();
+      networks = data.networks || [];
+      renderNetworks();
+      showMessage(`Найдено сетей: ${networks.length}`);
+    } else {
+      showToast('Ошибка сканирования', true);
+    }
+  } catch (e) {
+    showToast('Ошибка сети: ' + e.message, true);
+  } finally {
+    scanBtn.disabled = false;
+    scanBtn.textContent = 'Сканировать сети';
+  }
+}
+
+function renderNetworks() {
+  networkList.innerHTML = '';
+  networks.forEach((n, i) => {
+    const div = document.createElement('div');
+    div.className = 'network-item';
+    div.innerHTML = '<span>' + escapeHtml(n.ssid) + '</span><span class="rssi">' + n.rssi + ' дБм</span>';
+    div.onclick = () => {
+      document.querySelectorAll('.network-item').forEach(el => el.classList.remove('selected'));
+      div.classList.add('selected');
+      ssidInput.value = n.ssid;
+      passwordInput.focus();
+    };
+    networkList.appendChild(div);
+  });
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+saveBtn.addEventListener('click', async () => {
+  const ssid = ssidInput.value.trim();
+  const password = passwordInput.value.trim();
+  const mode = modeSelect.value;
+  const dhcp = dhcpCheckbox.checked;
+
+  if (!ssid) {
+    showToast('Введите SSID', true);
+    return;
+  }
+
+  saveBtn.disabled = true;
+  saveBtn.textContent = 'Сохранение...';
+  showToast('Подключение к сети...');
+
+  const body = {
+    mode: mode,
+    apSsid: 'Audio21-Master',
+    apPassword: 'audio21master',
+    staSsid: ssid,
+    staPassword: password,
+    staDhcp: dhcp ? 'true' : 'false'
+  };
+
+  if (!dhcp) {
+    body.staIp = document.getElementById('staIp').value.trim() || '192.168.1.100';
+    body.staGateway = document.getElementById('staGateway').value.trim() || '192.168.1.1';
+    body.staNetmask = document.getElementById('staNetmask').value.trim() || '255.255.255.0';
+    body.staDns = document.getElementById('staDns').value.trim() || '192.168.1.1';
+  }
+
+  try {
+    const resp = await fetch('/captive', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (resp.ok) {
+      showToast('Настройки сохранены! Перезагрузка...', false);
+      setTimeout(() => { window.location.reload(); }, 1500);
+    } else {
+      const err = await resp.text();
+      showToast('Ошибка: ' + err, true);
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Сохранить и подключиться';
+    }
+  } catch (e) {
+    showToast('Ошибка сети: ' + e.message, true);
+    saveBtn.disabled = false;
+    saveBtn.textContent = 'Сохранить и подключиться';
+  }
+});
+
+scanBtn.addEventListener('click', scanNetworks);
+
+// Автоматическое сканирование при загрузке
+scanNetworks();
+</script>
+</body>
+</html>
+)rawliteral";
+
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
+    return httpd_resp_send(req, html, strlen(html));
+}
+
+esp_err_t WebServer::onPostCaptivePortal(httpd_req_t* req)
+{
+    WebServer* self = static_cast<WebServer*>(req->user_ctx);
+    if (!self || !self->m_cb || !self->m_cb->setWifiConfig) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    char body[512];
+    esp_err_t ret = self->readBody(req, body, sizeof(body));
+    if (ret != ESP_OK || body[0] == '\0') {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body");
+        return ESP_FAIL;
+    }
+
+    cJSON* j = cJSON_Parse(body);
+    if (!j) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    char mode[16] = {0};
+    char apSsid[33] = {0};
+    char apPassword[65] = {0};
+    char staSsid[33] = {0};
+    char staPassword[65] = {0};
+    char staDhcp[8] = {0};
+    char staIp[16] = {0};
+    char staGateway[16] = {0};
+    char staNetmask[16] = {0};
+    char staDns[16] = {0};
+
+    cJSON* m = cJSON_GetObjectItemCaseSensitive(j, "mode");
+    cJSON* as = cJSON_GetObjectItemCaseSensitive(j, "apSsid");
+    cJSON* ap = cJSON_GetObjectItemCaseSensitive(j, "apPassword");
+    cJSON* ss = cJSON_GetObjectItemCaseSensitive(j, "staSsid");
+    cJSON* sp = cJSON_GetObjectItemCaseSensitive(j, "staPassword");
+    cJSON* dh = cJSON_GetObjectItemCaseSensitive(j, "staDhcp");
+    cJSON* ip = cJSON_GetObjectItemCaseSensitive(j, "staIp");
+    cJSON* gw = cJSON_GetObjectItemCaseSensitive(j, "staGateway");
+    cJSON* nm = cJSON_GetObjectItemCaseSensitive(j, "staNetmask");
+    cJSON* dn = cJSON_GetObjectItemCaseSensitive(j, "staDns");
+
+    if (m && cJSON_IsString(m)) strncpy(mode, m->valuestring, sizeof(mode) - 1);
+    if (as && cJSON_IsString(as)) strncpy(apSsid, as->valuestring, sizeof(apSsid) - 1);
+    if (ap && cJSON_IsString(ap)) strncpy(apPassword, ap->valuestring, sizeof(apPassword) - 1);
+    if (ss && cJSON_IsString(ss)) strncpy(staSsid, ss->valuestring, sizeof(staSsid) - 1);
+    if (sp && cJSON_IsString(sp)) strncpy(staPassword, sp->valuestring, sizeof(staPassword) - 1);
+    if (dh && cJSON_IsString(dh)) strncpy(staDhcp, dh->valuestring, sizeof(staDhcp) - 1);
+    if (ip && cJSON_IsString(ip)) strncpy(staIp, ip->valuestring, sizeof(staIp) - 1);
+    if (gw && cJSON_IsString(gw)) strncpy(staGateway, gw->valuestring, sizeof(staGateway) - 1);
+    if (nm && cJSON_IsString(nm)) strncpy(staNetmask, nm->valuestring, sizeof(staNetmask) - 1);
+    if (dn && cJSON_IsString(dn)) strncpy(staDns, dn->valuestring, sizeof(staDns) - 1);
+
+    cJSON_Delete(j);
+
+    if (mode[0] == '\0') {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing mode");
+        return ESP_FAIL;
+    }
+
+    ret = self->m_cb->setWifiConfig(mode, apSsid, apPassword, staSsid, staPassword,
+                                    staDhcp, staIp, staGateway, staNetmask, staDns);
+    if (ret != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to save Wi-Fi config");
+        return ESP_FAIL;
+    }
+
     return self->sendJson(req, "{\"ok\":true}");
 }
 

@@ -46,8 +46,6 @@ Smartphone ──Wi-Fi UDP PCM──► ┌────────────�
 ```
 wireless-audio-21/
 ├── platformio.ini              # env: master_a2dp, satellite_left/right (legacy core 2.0.17)
-├── platformio.master.ini       # master_s3_wifi + satellite_s3_left/right: изолированный core 3.x (pioarduino)
-├── config.example.env          # конфигурация → generated_config.h
 ├── firmware/
 │   ├── common/                 # header-only, общий код
 │   │   ├── config/   node_config.h, storage.h
@@ -59,9 +57,12 @@ wireless-audio-21/
 │   │   ├── ui/       display.h, encoder.h
 │   │   ├── web/      auth.h, internet_check.h, logs.h, wifi_store.h
 │   │   └── util/     logger.h, timing.h
-│   ├── master_s3/    src/main.cpp (целевой, S3)
-│   ├── master/       src/main.cpp, common/web/web_server.h (общий Web UI, legacy A2DP)
-│   └── satellite/    src/main.cpp
+│   ├── master_s3/    src/main.cpp (legacy S3, PlatformIO)
+│   ├── master_s3_idf/ src/main.cpp (целевой, ESP-IDF v5.3.1)
+│   ├── satellite_s3_idf_left/  src/main.cpp (сателлит левый, ESP-IDF)
+│   ├── satellite_s3_idf_right/ src/main.cpp (сателлит правый, ESP-IDF)
+│   ├── master/       src/main.cpp, common/web/web_server.h (legacy A2DP)
+│   └── satellite/    src/main.cpp (legacy)
 ├── scripts/                    # generate_config.py, flash_master.sh, flash_satellite.sh
 ├── test/                       # host-тесты (make test) + stubs/
 └── docs/                       # PLAN, TASKS, architecture, hardware, wiring, REPO_AUDIT

@@ -1,1 +1,1 @@
-idf_component_register(INCLUDE_DIRS "include" "../../../common/audio")
+idf_component_register(INCLUDE_DIRS "../../../common/audio")

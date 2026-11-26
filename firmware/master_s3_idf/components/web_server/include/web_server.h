@@ -180,6 +180,8 @@ private:
     static esp_err_t onPostLogin(httpd_req_t* req);
     static esp_err_t onPostLogout(httpd_req_t* req);
     static esp_err_t onPostAdminSetup(httpd_req_t* req);
+    static esp_err_t onGetCaptivePortal(httpd_req_t* req);
+    static esp_err_t onPostCaptivePortal(httpd_req_t* req);
 
     // Проверка CSRF токена из заголовка X-CSRF-Token
     bool validateCsrfToken(httpd_req_t* req);
