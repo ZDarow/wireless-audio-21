@@ -132,6 +132,11 @@ uint32_t g_lastLeftSeenMs = 0;
 uint32_t g_lastRightSeenMs = 0;
 std::atomic<uint32_t> g_heartbeatsRx{0};
 std::atomic<uint32_t> g_heartbeatsTx{0};
+// Анти-replay на мастере: последний принятый sequence от каждого сателлита
+static uint16_t g_lastLeftSeq = 0;
+static uint16_t g_lastRightSeq = 0;
+static bool g_hasLeftSeq = false;
+static bool g_hasRightSeq = false;
 uint32_t g_lastDiscoveryMs = 0;
 static constexpr uint32_t kSatelliteTimeoutMs = 6000;
 static constexpr uint32_t kDiscoveryIntervalMs = 3000;
@@ -714,14 +719,25 @@ public:
 
         if (hdr.magic != kMagicDiscovery) return;
 
-        uint32_t nowMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
-        g_heartbeatsRx++;
-
         // Проверяем MAC только если настроен (не все нули)
         bool leftMacSet = memcmp(g_cfg.leftSatMac.bytes, "\0\0\0\0\0\0", 6) != 0;
         bool rightMacSet = memcmp(g_cfg.rightSatMac.bytes, "\0\0\0\0\0\0", 6) != 0;
         bool isLeft = leftMacSet && memcmp(srcMac, g_cfg.leftSatMac.bytes, 6) == 0;
         bool isRight = rightMacSet && memcmp(srcMac, g_cfg.rightSatMac.bytes, 6) == 0;
+
+        // Анти-replay: отклоняем дубликаты/устаревшие пакеты
+        int16_t seqDiff = 0;
+        bool& hasSeq = isLeft ? g_hasLeftSeq : g_hasRightSeq;
+        uint16_t& lastSeq = isLeft ? g_lastLeftSeq : g_lastRightSeq;
+        if (hasSeq) {
+            seqDiff = (int16_t)(hdr.sequence - lastSeq);
+            if (seqDiff <= 0) return; // дубликат или устаревший пакет
+        }
+        lastSeq = hdr.sequence;
+        hasSeq = true;
+
+        uint32_t nowMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+        g_heartbeatsRx++;
 
         if (isLeft) {
             if (!g_leftOnline) {
