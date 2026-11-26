@@ -33,7 +33,7 @@ esp_err_t WebServer::init(uint16_t port)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = port;
-    config.max_uri_handlers = 48;
+    config.max_uri_handlers = 64;
     config.max_resp_headers = 16;
     config.backlog_conn = 5;
     config.lru_purge_enable = true;
