@@ -35,6 +35,7 @@
 
 // Этап 4: NVS конфигурация
 #include "console_handler.h"
+#include "wifi_manager.h"
 #include "nvs_config.h"
 
 // Этап 4: Captive DNS — все DNS-запросы отвечают softAP IP (192.168.4.1)
@@ -224,7 +225,7 @@ static void getChannelVolumesCallback(int* left, int* right, int* sub)
     if (sub) *sub = g_cfg.subVolume;
 }
 
-static esp_err_t wifi_reconfigure(void);
+esp_err_t wifi_reconfigure(void);
 
 esp_err_t setDelayCallback(const char* channel, int delayMs)
 {
@@ -296,7 +297,7 @@ int wifiScanCallback(char* buf, size_t bufSize)
     return strlen(buf);
 }
 
-static esp_err_t wifiSetModeCallback(const char* mode)
+esp_err_t wifiSetModeCallback(const char* mode)
 {
     if (strcmp(mode, "ap") == 0) {
         g_cfg.wifiMode = WifiMode::ApDirect;
@@ -313,7 +314,7 @@ static esp_err_t wifiSetModeCallback(const char* mode)
     return wifi_reconfigure();
 }
 
-static esp_err_t wifiSetApPasswordCallback(const char* password)
+esp_err_t wifiSetApPasswordCallback(const char* password)
 {
     if (!password || strlen(password) < 8 || strlen(password) >= sizeof(g_cfg.wifiApPassword)) {
         return ESP_ERR_INVALID_ARG;
@@ -348,7 +349,7 @@ static void initAdminSalt(void) {
     g_adminSalt[12] = '\0';
 }
 
-static esp_err_t setHostnameCallback(const char* hostname)
+esp_err_t setHostnameCallback(const char* hostname)
 {
     if (!hostname || strlen(hostname) == 0 || strlen(hostname) >= sizeof(g_cfg.hostname)) {
         return ESP_ERR_INVALID_ARG;
@@ -854,9 +855,9 @@ bool validateCsrfTokenCallback(const char* token)
 }
 
 // Предварительное объявление для переконфигурации Wi-Fi
-static esp_err_t wifi_reconfigure(void);
+esp_err_t wifi_reconfigure(void);
 
-static esp_err_t setWifiConfigCallback(const char* mode,
+esp_err_t setWifiConfigCallback(const char* mode,
                                        const char* apSsid,
                                        const char* apPassword,
                                        const char* staSsid,
@@ -1113,7 +1114,7 @@ static void audioOutTick(uint32_t samplesBudget)
 // Состояние Wi-Fi
 
 // Предварительное объявление
-static esp_err_t wifi_reconfigure(void);
+esp_err_t wifi_reconfigure(void);
 
 // Сканирование Wi-Fi сетей — выводит список с параметрами безопасности.
 static void wifi_scan_and_log(void)
@@ -1177,7 +1178,7 @@ static void log_default_password_warning(void)
 }
 
 // Инициализация Wi-Fi с поддержкой AP / STA / APSTA режимов.
-static esp_err_t wifi_init(void)
+esp_err_t wifi_init(void)
 {
     if (!g_wifi_inited) {
         esp_err_t netif_ret = esp_netif_init();
@@ -1332,7 +1333,7 @@ static esp_err_t wifi_init(void)
 }
 
 // Переконфигурация Wi-Fi без перезагрузки (применение новых SSID/пароля/режима)
-static esp_err_t wifi_reconfigure(void)
+esp_err_t wifi_reconfigure(void)
 {
     ESP_LOGW(TAG, "Wi-Fi reconfiguration requested");
 
