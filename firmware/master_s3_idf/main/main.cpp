@@ -34,6 +34,7 @@
 #include "web_server.h"
 
 // Этап 4: NVS конфигурация
+#include "console_handler.h"
 #include "nvs_config.h"
 
 // Этап 4: Captive DNS — все DNS-запросы отвечают softAP IP (192.168.4.1)
@@ -81,59 +82,59 @@ static int16_t* psramAllocSamples(size_t samples) {
 }
 
 // Глобальные объекты аудио конвейера (создаются в app_main() после инициализации кучи)
-static std::unique_ptr<DelayLine> g_delaySub;
-static std::unique_ptr<DelayLine> g_delayLeft;
-static std::unique_ptr<DelayLine> g_delayRight;
-static std::unique_ptr<JitterBuffer> g_jitter;
-static PcmPipeline g_pipeline; // без аллокации в куче — можно оставить глобальным
+std::unique_ptr<DelayLine> g_delaySub;
+std::unique_ptr<DelayLine> g_delayLeft;
+std::unique_ptr<DelayLine> g_delayRight;
+std::unique_ptr<JitterBuffer> g_jitter;
+PcmPipeline g_pipeline; // без аллокации в куче — можно оставить глобальным
 
 // TX аудио на сателлиты (C3.1/C3.2): батч 117 семплов → пакет 234 байта.
 // TX аудио на сателлиты (C3.1/C3.2): батч 117 семплов → пакет 234 байта.
 static constexpr size_t kBatchSamples = 117;
-static int16_t g_txLeft[kBatchSamples];
-static int16_t g_txRight[kBatchSamples];
-static std::atomic<size_t> g_txCount{0};
-static uint32_t g_txPacketId = 0;
-static uint32_t g_txPackets = 0;
+int16_t g_txLeft[kBatchSamples];
+int16_t g_txRight[kBatchSamples];
+std::atomic<size_t> g_txCount{0};
+uint32_t g_txPacketId = 0;
+uint32_t g_txPackets = 0;
 
 // Глобальные компоненты транспорта (создаются в app_main())
-static std::unique_ptr<EspNowTransport> g_espnow;
-static std::unique_ptr<I2sOutput> g_i2sOut;
-static std::unique_ptr<UdpAudio> g_udpAudio;
-static std::unique_ptr<WebServer> g_webServer;
+std::unique_ptr<EspNowTransport> g_espnow;
+std::unique_ptr<I2sOutput> g_i2sOut;
+std::unique_ptr<UdpAudio> g_udpAudio;
+std::unique_ptr<WebServer> g_webServer;
 
 // Этап 4: NVS конфигурация
-static std::unique_ptr<NvsConfig> g_nvsConfig;
-static NodeConfig g_cfg;
+std::unique_ptr<NvsConfig> g_nvsConfig;
+NodeConfig g_cfg;
 
 // Состояние
-static bool g_i2sOn = false;
-static int g_volumePercent = 100;
-static int g_crossoverHz = 90;
-static char g_staIpAddr[16] = "";
-static bool g_wifi_inited;
-static std::atomic<bool> g_wifi_reconfiguring{false};
-static bool g_nvsDirty = false;
-static bool g_nvsCritical = false; // немедленное сохранение для критических изменений
-static uint32_t g_nvsLastChangeMs = 0;
+bool g_i2sOn = false;
+int g_volumePercent = 100;
+int g_crossoverHz = 90;
+char g_staIpAddr[16] = "";
+bool g_wifi_inited;
+std::atomic<bool> g_wifi_reconfiguring{false};
+bool g_nvsDirty = false;
+bool g_nvsCritical = false; // немедленное сохранение для критических изменений
+uint32_t g_nvsLastChangeMs = 0;
 static constexpr uint32_t kNvsSaveDebounceMs = 500;
-static uint32_t g_sta_connect_start_ms = 0;
-static bool g_sta_connecting = false;
+uint32_t g_sta_connect_start_ms = 0;
+bool g_sta_connecting = false;
 static constexpr uint32_t kStaConnectTimeoutMs = 30000;
 
 // Статус сателлитов (heartbeat через ESP-NOW)
-static bool g_leftOnline = false;
-static bool g_rightOnline = false;
-static uint32_t g_lastLeftSeenMs = 0;
-static uint32_t g_lastRightSeenMs = 0;
-static std::atomic<uint32_t> g_heartbeatsRx{0};
-static std::atomic<uint32_t> g_heartbeatsTx{0};
-static uint32_t g_lastDiscoveryMs = 0;
+bool g_leftOnline = false;
+bool g_rightOnline = false;
+uint32_t g_lastLeftSeenMs = 0;
+uint32_t g_lastRightSeenMs = 0;
+std::atomic<uint32_t> g_heartbeatsRx{0};
+std::atomic<uint32_t> g_heartbeatsTx{0};
+uint32_t g_lastDiscoveryMs = 0;
 static constexpr uint32_t kSatelliteTimeoutMs = 6000;
 static constexpr uint32_t kDiscoveryIntervalMs = 3000;
 
 // Реализация WebServerCallbacks
-static int getStatusCallback(char* buf, size_t bufSize)
+int getStatusCallback(char* buf, size_t bufSize)
 {
     int len = snprintf(buf, bufSize,
         "{\"sampleRate\":%" PRIu32 ",\"volume\":%d,\"crossoverHz\":%d,\"mute\":%s,"
@@ -152,7 +153,7 @@ static int getStatusCallback(char* buf, size_t bufSize)
     return len;
 }
 
-static esp_err_t setVolumeCallback(int volume)
+esp_err_t setVolumeCallback(int volume)
 {
     if (volume < 0) volume = 0;
     if (volume > 100) volume = 100;
@@ -165,12 +166,12 @@ static esp_err_t setVolumeCallback(int volume)
     return ESP_OK;
 }
 
-static int getVolumeCallback(void)
+int getVolumeCallback(void)
 {
     return g_cfg.masterVolume;
 }
 
-static esp_err_t setMuteCallback(bool mute)
+esp_err_t setMuteCallback(bool mute)
 {
     g_cfg.mute = mute;
     g_pipeline.setMute(mute);
@@ -179,7 +180,7 @@ static esp_err_t setMuteCallback(bool mute)
     return ESP_OK;
 }
 
-static bool getMuteCallback(void)
+bool getMuteCallback(void)
 {
     return g_cfg.mute;
 }
@@ -225,7 +226,7 @@ static void getChannelVolumesCallback(int* left, int* right, int* sub)
 
 static esp_err_t wifi_reconfigure(void);
 
-static esp_err_t setDelayCallback(const char* channel, int delayMs)
+esp_err_t setDelayCallback(const char* channel, int delayMs)
 {
     if (delayMs < 0) delayMs = 0;
     if (delayMs > 200) delayMs = 200;
@@ -246,7 +247,7 @@ static esp_err_t setDelayCallback(const char* channel, int delayMs)
     return ESP_OK;
 }
 
-static int getDelayCallback(const char* channel)
+int getDelayCallback(const char* channel)
 {
     if (strcmp(channel, "left") == 0) return g_cfg.delayLeftMs;
     if (strcmp(channel, "right") == 0) return g_cfg.delayRightMs;
@@ -254,7 +255,7 @@ static int getDelayCallback(const char* channel)
     return 0;
 }
 
-static int wifiScanCallback(char* buf, size_t bufSize)
+int wifiScanCallback(char* buf, size_t bufSize)
 {
     // Сканирование Wi-Fi — блокирующее, возвращает JSON со списком сетей.
     // Вызывается из контекста HTTP обработчика, поэтому используем короткое сканирование.
@@ -324,7 +325,7 @@ static esp_err_t wifiSetApPasswordCallback(const char* password)
     return ESP_OK;
 }
 
-static char g_adminSalt[33] = {0}; // per-device соль для PBKDF2
+char g_adminSalt[33] = {0}; // per-device соль для PBKDF2
 
 // Генерация per-device соли из MAC-адреса (детерминированная, не требует NVS)
 static void initAdminSalt(void) {
@@ -358,7 +359,7 @@ static esp_err_t setHostnameCallback(const char* hostname)
     return ESP_OK;
 }
 
-static int netInternetStatusCallback(char* buf, size_t bufSize)
+int netInternetStatusCallback(char* buf, size_t bufSize)
 {
     // Проверяем интернет-соединение через STA интерфейс
     esp_netif_t* sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
@@ -391,7 +392,7 @@ static esp_err_t netInternetCheckCallback(void)
     return ESP_OK;
 }
 
-static int configExportCallback(char* buf, size_t bufSize)
+int configExportCallback(char* buf, size_t bufSize)
 {
     // Экспортируем конфигурацию как JSON
     int len = snprintf(buf, bufSize,
@@ -450,7 +451,7 @@ static esp_err_t configImportCallback(const char* json)
     return ESP_OK;
 }
 
-static int logsGetCallback(char* buf, size_t bufSize)
+int logsGetCallback(char* buf, size_t bufSize)
 {
     // Простой лог-буфер: возвращаем системную информацию
     int len = snprintf(buf, bufSize,
@@ -463,7 +464,7 @@ static int logsGetCallback(char* buf, size_t bufSize)
     return len;
 }
 
-static int diagnosticsGetCallback(char* buf, size_t bufSize)
+int diagnosticsGetCallback(char* buf, size_t bufSize)
 {
     // Диагностика системы
     uint32_t freeHeap = esp_get_free_heap_size();
@@ -490,7 +491,7 @@ static int diagnosticsGetCallback(char* buf, size_t bufSize)
 }
 
 // Агент: простая проверка живости (без CSRF)
-static int agentHealthCallback(char* buf, size_t bufSize)
+int agentHealthCallback(char* buf, size_t bufSize)
 {
     uint32_t freeHeap = esp_get_free_heap_size();
     uint32_t minHeap = esp_get_minimum_free_heap_size();
@@ -518,7 +519,7 @@ static int agentHealthCallback(char* buf, size_t bufSize)
 }
 
 // Агент: детальная диагностика (требует CSRF)
-static int agentDiagnosticsCallback(char* buf, size_t bufSize)
+int agentDiagnosticsCallback(char* buf, size_t bufSize)
 {
     uint32_t freeHeap = esp_get_free_heap_size();
     uint32_t minHeap = esp_get_minimum_free_heap_size();
@@ -564,7 +565,7 @@ static int agentDiagnosticsCallback(char* buf, size_t bufSize)
 }
 
 // Агент: эхо-проверка связности (без CSRF)
-static int agentPingCallback(char* buf, size_t bufSize)
+int agentPingCallback(char* buf, size_t bufSize)
 {
     int len = snprintf(buf, bufSize, "{\"pong\":true,\"uptimeMs\":%" PRIu32 "}",
                        (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS));
@@ -583,10 +584,10 @@ struct Session {
     bool active;
 };
 
-static Session g_sessions[kMaxSessions];
-static char g_adminUsername[32] = "admin";
-static char g_adminPasswordHash[65] = {0}; // PBKDF2 hash string or SHA-256 hex
-static bool g_adminSetupDone = false;
+Session g_sessions[kMaxSessions];
+char g_adminUsername[32] = "admin";
+char g_adminPasswordHash[65] = {0}; // PBKDF2 hash string or SHA-256 hex
+bool g_adminSetupDone = false;
 
 static void sha256Hex(const char* input, char* outputHex)
 {
@@ -613,7 +614,7 @@ static void cleanupExpiredSessions(uint32_t nowMs)
     }
 }
 
-static int loginCallback(const char* username, const char* password, char* tokenOut, size_t tokenOutSize)
+int loginCallback(const char* username, const char* password, char* tokenOut, size_t tokenOutSize)
 {
     if (!g_adminSetupDone) {
         // Админ не настроен — разрешаем вход с дефолтными учётными данными (предупреждение)
@@ -695,7 +696,7 @@ static esp_err_t setCrossoverHzCallback(int hz)
     return ESP_OK;
 }
 
-static int getCrossoverHzCallback(void)
+int getCrossoverHzCallback(void)
 {
     return g_crossoverHz;
 }
@@ -822,7 +823,7 @@ static esp_err_t otaUpdateFileCallback(const uint8_t* data, size_t size, const c
     return ESP_OK;
 }
 
-static int getWifiConfigCallback(char* buf, size_t bufSize)
+int getWifiConfigCallback(char* buf, size_t bufSize)
 {
     const char* modeStr = "ap";
     if (g_cfg.wifiMode == WifiMode::Sta) modeStr = "sta";
@@ -846,7 +847,7 @@ static const char* getCsrfTokenCallback(void)
     return web_server_get_csrf_token();
 }
 
-static bool validateCsrfTokenCallback(const char* token)
+bool validateCsrfTokenCallback(const char* token)
 {
     // Проверяем токен против значения из веб-сервера
     return web_server_validate_csrf_token(token);
@@ -995,7 +996,7 @@ public:
     }
 };
 
-static UdpAudioHandler g_udpHandler;
+UdpAudioHandler g_udpHandler;
 
 // Коллбек приёма ESP-NOW на мастере — обрабатывает heartbeat (discovery-response)
 // от сателлитов и помечает их онлайн.
@@ -1483,158 +1484,6 @@ static esp_err_t wifi_reconfigure(void)
              g_cfg.wifiApSsid);
     g_wifi_reconfiguring.store(false);
     return ESP_OK;
-}
-
-// ========================================================================
-// UART консоль (команды: status, wifi, setsat, net, erase, tone, mute,
-// pair, save, reboot)
-// ========================================================================
-static char g_consoleLine[64];
-static int g_consolePos = 0;
-
-static void consolePrint(const char* s) {
-    uart_write_bytes(UART_NUM_0, s, strlen(s));
-}
-
-static void consoleProcessLine(char* line) {
-    // Trim
-    char* end = line + strlen(line) - 1;
-    while (end >= line && (*end == '\n' || *end == '\r' || *end == ' ')) *end-- = '\0';
-    char* start = line;
-    while (*start == ' ') start++;
-    if (start[0] == '\0') return;
-
-    // Парсим команду и аргументы
-    char* cmd = start;
-    char* arg1 = nullptr;
-    char* arg2 = nullptr;
-    char* sp = strchr(start, ' ');
-    if (sp) { *sp = '\0'; arg1 = sp + 1; char* sp2 = strchr(arg1, ' '); if (sp2) { *sp2 = '\0'; arg2 = sp2 + 1; } }
-
-    if (strcmp(cmd, "status") == 0) {
-        char buf[256];
-        int len = getStatusCallback(buf, sizeof(buf));
-        consolePrint("status: ");
-        consolePrint(buf);
-        consolePrint("\n");
-    } else if (strcmp(cmd, "wifi") == 0) {
-        consolePrint("Wi-Fi mode: ");
-        consolePrint(g_wifi_inited ? (g_staIpAddr[0] ? "sta" : "ap") : "off");
-        consolePrint(", IP: ");
-        consolePrint(g_staIpAddr[0] ? g_staIpAddr : "—");
-        consolePrint(", AP SSID: ");
-        consolePrint(g_cfg.wifiApSsid);
-        consolePrint("\n");
-    } else if (strcmp(cmd, "setsat") == 0) {
-        if (!arg1 || !arg2) {
-            consolePrint("usage: setsat <left|right|sub> <delay_ms>\n");
-            return;
-        }
-        int ms = atoi(arg2);
-        if (setDelayCallback(arg1, ms) == ESP_OK) {
-            consolePrint("delay set\n");
-        } else {
-            consolePrint("error\n");
-        }
-    } else if (strcmp(cmd, "net") == 0) {
-        consolePrint("IP: ");
-        consolePrint(g_staIpAddr[0] ? g_staIpAddr : "—");
-        consolePrint(", satellites: L=");
-        consolePrint(g_leftOnline ? "online" : "offline");
-        consolePrint(", R=");
-        consolePrint(g_rightOnline ? "online" : "offline");
-        consolePrint("\n");
-    } else if (strcmp(cmd, "erase") == 0) {
-        esp_err_t ret = g_nvsConfig->erase();
-        consolePrint(ret == ESP_OK ? "NVS erased\n" : "erase failed\n");
-    } else if (strcmp(cmd, "tone") == 0) {
-        if (!arg1 || !arg2) {
-            consolePrint("usage: tone <bass_db> <treble_db>\n");
-            return;
-        }
-        float bass = atof(arg1);
-        float treble = atof(arg2);
-        g_pipeline.setTone(bass, treble);
-        consolePrint("tone set\n");
-    } else if (strcmp(cmd, "mute") == 0) {
-        if (!arg1) {
-            consolePrint(g_cfg.mute ? "mute: on\n" : "mute: off\n");
-            return;
-        }
-        bool mute = atoi(arg1) != 0;
-        setMuteCallback(mute);
-        consolePrint(mute ? "mute: on\n" : "mute: off\n");
-    } else if (strcmp(cmd, "volume") == 0) {
-        if (!arg1) {
-            consolePrint("volume: ");
-            char buf[16];
-            snprintf(buf, sizeof(buf), "%d\n", g_volumePercent);
-            consolePrint(buf);
-            return;
-        }
-        int vol = atoi(arg1);
-        if (setVolumeCallback(vol) == ESP_OK) {
-            char buf[32];
-            snprintf(buf, sizeof(buf), "volume: %d%%\n", g_volumePercent);
-            consolePrint(buf);
-        } else {
-            consolePrint("error\n");
-        }
-    } else if (strcmp(cmd, "pair") == 0) {
-        // Отправить discovery-запрос для поиска сателлитов
-        uint8_t buf[16];
-        AudioPacketHeader hdr = {};
-        hdr.magic = kMagicDiscovery;
-        hdr.sequence = 0;
-        hdr.timestampMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
-        memcpy(buf, &hdr, sizeof(hdr));
-        g_espnow->sendBroadcast(buf, sizeof(AudioPacketHeader));
-        consolePrint("discovery sent\n");
-    } else if (strcmp(cmd, "save") == 0) {
-        g_nvsDirty = true; g_nvsLastChangeMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
-        consolePrint("save queued (debounced)\n");
-    } else if (strcmp(cmd, "reboot") == 0) {
-        consolePrint("rebooting...\n");
-        vTaskDelay(pdMS_TO_TICKS(100));
-        esp_restart();
-    } else {
-        consolePrint("unknown command\n");
-    }
-}
-
-static void consoleTick(void) {
-    static std::atomic<bool> uart_installed{false};
-    if (!uart_installed.load()) {
-        uart_config_t uartCfg = {
-            .baud_rate = 115200,
-            .data_bits = UART_DATA_8_BITS,
-            .parity = UART_PARITY_DISABLE,
-            .stop_bits = UART_STOP_BITS_1,
-            .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-        };
-        uart_param_config(UART_NUM_0, &uartCfg);
-        uart_set_pin(UART_NUM_0, GPIO_NUM_1, GPIO_NUM_3, GPIO_NUM_NC, GPIO_NUM_NC);
-        uart_driver_install(UART_NUM_0, 256, 0, 0, nullptr, 0);
-        uart_write_bytes(UART_NUM_0, "\nWireless Audio 2.1 Console\n", 27);
-        uart_installed.store(true);
-    }
-
-    uint8_t c;
-    int len = uart_read_bytes(UART_NUM_0, &c, 1, 0);
-    if (len <= 0) return;
-
-    if (c == '\r' || c == '\n') {
-        g_consoleLine[g_consolePos] = '\0';
-        consoleProcessLine(g_consoleLine);
-        g_consolePos = 0;
-        consolePrint("> ");
-    } else if (c >= 32 && c < 127 && g_consolePos < (int)sizeof(g_consoleLine) - 1) {
-        g_consoleLine[g_consolePos++] = (char)c;
-        uart_write_bytes(UART_NUM_0, &c, 1);
-    } else if ((c == 0x7F || c == 0x08) && g_consolePos > 0) {
-        g_consolePos--;
-        uart_write_bytes(UART_NUM_0, "\b \b", 3);
-    }
 }
 
 extern "C" void app_main(void)
